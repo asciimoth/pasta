@@ -57,7 +57,8 @@ layout because the repo root is not itself a Go module.
 - Before/after node inactive hooks for class recall, library unregister, and
   workspace close.
 - Before/after node delete hooks.
-- Node close hooks when the workspace closes.
+- Node close hooks for node deletion, class recall, library unregister, and
+  workspace close.
 - Link type compatibility validation.
 - Input port multiplicity validation.
 - Non-mutating validation query for proposed node port replacement.
@@ -111,6 +112,7 @@ layout because the repo root is not itself a Go module.
   - library unregister/register recovery and rollback
   - explicit lifecycle hook order for node deletion and workspace close with
     attached links
+  - runtime close/shutdown on delete, inactive transitions, and workspace close
   - runtime private state export/import, defensive copy behavior, and rollback
     on hook failures
   - concurrent read/write smoke coverage under the race detector
@@ -131,7 +133,6 @@ go vet ./pasta/...
 
 - Complete node lifecycle hooks:
   - richer link deleted/inactivated notifications if needed by link contracts
-- Add explicit worker shutdown/close semantics for nodes with goroutines.
 - Replace or wrap the current JSON-like `any` persistence shape with a concrete
   `github.com/asciimoth/configer` integration.
 - Expand controller/query APIs:

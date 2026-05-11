@@ -181,6 +181,10 @@ type NodeDeleteHook interface {
 }
 
 // NodeCloseHook releases resources owned by a node runtime.
+//
+// Close runs outside the workspace lock when a runtime is deleted, becomes
+// inactive, or the workspace closes. If the node is later reactivated, the
+// workspace initializes a new runtime for it.
 type NodeCloseHook interface {
 	Close() error
 }

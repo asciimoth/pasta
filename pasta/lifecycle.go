@@ -185,6 +185,16 @@ func (w *Workspace) callLinkInactiveEvents(events []linkInactiveEvent, reason In
 	}
 }
 
+func (w *Workspace) callCloseEvents(events []nodeInactiveEvent) error {
+	var first error
+	for _, event := range events {
+		if err := w.callNodeClose(event.runtime); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 func (w *Workspace) callAfterDelete(runtime NodeRuntime) {
 	hook, ok := runtime.(NodeDeleteHook)
 	if !ok {

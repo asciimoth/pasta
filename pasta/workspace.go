@@ -97,12 +97,9 @@ func (w *Workspace) Close() error {
 		return nil
 	}
 	w.closed = true
-	runtimes := make([]NodeRuntime, 0, len(w.nodes))
 	for _, n := range w.nodes {
 		n.state = StateInactive
-		if n.runtime != nil {
-			runtimes = append(runtimes, n.runtime)
-		}
+		n.runtime = nil
 	}
 	for _, l := range w.links {
 		l.state = StateInactive
@@ -110,13 +107,10 @@ func (w *Workspace) Close() error {
 	w.mu.Unlock()
 	w.callAfterInactiveEvents(nodeEvents, InactiveWorkspaceClose)
 	w.callLinkInactiveEvents(linkEvents, InactiveWorkspaceClose)
-	var first error
-	for _, runtime := range runtimes {
-		if err := w.callNodeClose(runtime); err != nil && first == nil {
-			first = err
-		}
+	if err := w.callCloseEvents(nodeEvents); err != nil {
+		return opErr("close workspace", "hook", err)
 	}
-	return first
+	return nil
 }
 
 // RegisterLibrary registers a library and asks it to define its classes.
@@ -204,9 +198,13 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 		}
 	}
 	w.refreshActivityLocked()
+	w.clearInactiveRuntimesLocked()
 	w.mu.Unlock()
 	w.callAfterInactiveEvents(nodeEvents, InactiveLibraryUnregister)
 	w.callLinkInactiveEvents(linkEvents, InactiveLibraryUnregister)
+	if err := w.callCloseEvents(nodeEvents); err != nil {
+		return opErr("unregister library", "hook", err)
+	}
 	return nil
 }
 
@@ -324,9 +322,13 @@ func (w *Workspace) RecallClass(library, className string) error {
 	}
 	rec.active = false
 	w.refreshActivityLocked()
+	w.clearInactiveRuntimesLocked()
 	w.mu.Unlock()
 	w.callAfterInactiveEvents(nodeEvents, InactiveClassRecall)
 	w.callLinkInactiveEvents(linkEvents, InactiveClassRecall)
+	if err := w.callCloseEvents(nodeEvents); err != nil {
+		return opErr("recall class", "hook", err)
+	}
 	return nil
 }
 
@@ -412,6 +414,9 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 	}
 	w.mu.Unlock()
 	w.callAfterDelete(runtime)
+	if err := w.callNodeClose(runtime); err != nil {
+		return opErr("delete node", "hook", err)
+	}
 	return nil
 }
 
@@ -1083,6 +1088,14 @@ func (w *Workspace) refreshActivityLocked() {
 			link.state = StateActive
 		} else {
 			link.state = StateInactive
+		}
+	}
+}
+
+func (w *Workspace) clearInactiveRuntimesLocked() {
+	for _, node := range w.nodes {
+		if node.state == StateInactive {
+			node.runtime = nil
 		}
 	}
 }

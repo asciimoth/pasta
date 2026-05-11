@@ -45,6 +45,12 @@ the workspace model before class-definition hooks and restores it if the hook
 returns an error or panics, so partial class reactivation does not leak into the
 workspace.
 
+`NodeCloseHook` is the runtime shutdown hook. It runs outside the workspace lock
+after a node is deleted, after a node becomes inactive through class recall or
+library unregister, and after workspace close inactivation notifications. When a
+preserved inactive node is later recovered, the workspace initializes a fresh
+runtime instead of reusing the closed one.
+
 ## Persistence
 
 `Save` produces deterministic `SaveData`: nodes and links are sorted, IDs are

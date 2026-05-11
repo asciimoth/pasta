@@ -1791,6 +1791,7 @@ func TestDefineClassReinitializesRecalledNodes(t *testing.T) {
 		"init:new",
 		"inactive-before:1:class-recall",
 		"inactive-after:1:class-recall",
+		"close:1",
 		"init:restore",
 	}
 	if fmt.Sprint(*log) != fmt.Sprint(want) {
@@ -1858,6 +1859,8 @@ func TestRegisterLibraryReactivatesUnregisteredNodesAndLinks(t *testing.T) {
 		"inactive-after:2:library-unregister",
 		"link-inactive:input:1:library-unregister",
 		"link-inactive:output:1:library-unregister",
+		"close:1",
+		"close:2",
 		"init:restore",
 		"init:restore",
 	}
@@ -2045,6 +2048,7 @@ func TestLifecycleDeleteNodeAndCloseHooks(t *testing.T) {
 		"init:new",
 		"delete-before:1",
 		"delete-after:1",
+		"close:1",
 		"init:new",
 		"inactive-before:2:workspace-close",
 		"inactive-after:2:workspace-close",
@@ -2077,6 +2081,7 @@ func TestLifecycleDeleteNodeHookOrderWithAttachedLink(t *testing.T) {
 		"detach-after:input:1",
 		"detach-after:output:1",
 		"delete-after:2",
+		"close:2",
 	}
 	if fmt.Sprint(*log) != fmt.Sprint(want) {
 		t.Fatalf("log = %#v, want %#v", *log, want)
@@ -2212,6 +2217,8 @@ func TestLifecycleRecallClassRunsInactiveHooksAndPreservesLink(t *testing.T) {
 		"inactive-after:2:class-recall",
 		"link-inactive:input:1:class-recall",
 		"link-inactive:output:1:class-recall",
+		"close:1",
+		"close:2",
 	}
 	if fmt.Sprint(*log) != fmt.Sprint(want) {
 		t.Fatalf("log = %#v, want %#v", *log, want)
