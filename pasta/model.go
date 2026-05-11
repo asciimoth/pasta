@@ -234,6 +234,7 @@ type LibraryScope interface {
 	SetNodePrivate(NodeID, any) error
 	SetNodeMetadata(NodeID, map[string]string) error
 	CreateLink(FullPortID, FullPortID, LinkOptions) (LinkID, error)
+	SetLinkWaypoints(LinkID, []string) error
 	DeleteLink(LinkID) error
 	ReadOnly() WorkspaceRO
 }

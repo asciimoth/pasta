@@ -45,6 +45,7 @@ layout because the repo root is not itself a Go module.
 - Optional private state export/import hooks for runtime-owned state.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
+- Library-scoped link waypoint updates.
 - Link creation prepares under lock, runs node hooks outside the workspace lock,
   then revalidates before commit.
 - Optional node class/runtime lifecycle interfaces.
@@ -112,6 +113,7 @@ layout because the repo root is not itself a Go module.
   - inactive hook notifications and rollback
   - panic recovery across lifecycle hook families
   - library-scoped ownership enforcement for classes, nodes, and links
+  - library-scoped link waypoint updates
   - read-only class lookup and defensive class snapshots
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback

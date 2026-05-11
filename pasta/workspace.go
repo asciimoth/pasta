@@ -1333,20 +1333,34 @@ func (s *libraryScope) CreateLink(input, output FullPortID, opts LinkOptions) (L
 	return s.w.CreateLink(input, output, opts)
 }
 
+func (s *libraryScope) SetLinkWaypoints(id LinkID, waypoints []string) error {
+	s.w.mu.RLock()
+	owned := s.ownsLinkLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set link waypoints", "validate", ErrOwnership)
+	}
+	return s.w.SetLinkWaypoints(id, waypoints)
+}
+
 func (s *libraryScope) DeleteLink(id LinkID) error {
 	s.w.mu.RLock()
-	link, ok := s.w.links[id]
-	owned := false
-	if ok {
-		inNode := s.w.nodes[link.input.Node]
-		outNode := s.w.nodes[link.output.Node]
-		owned = inNode != nil && outNode != nil && inNode.library == s.library && outNode.library == s.library
-	}
+	owned := s.ownsLinkLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope delete link", "validate", ErrOwnership)
 	}
 	return s.w.DeleteLink(id)
+}
+
+func (s *libraryScope) ownsLinkLocked(id LinkID) bool {
+	link, ok := s.w.links[id]
+	if !ok {
+		return false
+	}
+	inNode := s.w.nodes[link.input.Node]
+	outNode := s.w.nodes[link.output.Node]
+	return inNode != nil && outNode != nil && inNode.library == s.library && outNode.library == s.library
 }
 
 func (s *libraryScope) ReadOnly() WorkspaceRO { return s.w }

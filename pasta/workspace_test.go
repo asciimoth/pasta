@@ -271,11 +271,55 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("CreateLink cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.SetLinkWaypoints(otherLink, []string{"p1"}); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetLinkWaypoints cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.DeleteLink(otherLink); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("DeleteLink cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.DeleteLink(ownLink); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLibraryScopeSetLinkWaypoints(t *testing.T) {
+	w := NewWorkspace()
+	lib := &captureScopeLibrary{name: "example.com", classes: []ClassSpec{scopedTestClass("example.com", "Source")}}
+	if err := w.RegisterLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	output, err := lib.scope.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := lib.scope.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := lib.scope.CreateLink(
+		FullPortID{Node: input, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: output, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waypoints := []string{"p1", "p2"}
+	if err := lib.scope.SetLinkWaypoints(link, waypoints); err != nil {
+		t.Fatal(err)
+	}
+	waypoints[0] = "mutated"
+	snap, ok := w.Link(link)
+	if !ok {
+		t.Fatal("link should exist")
+	}
+	if len(snap.Waypoints) != 2 || snap.Waypoints[0] != "p1" || snap.Waypoints[1] != "p2" {
+		t.Fatalf("waypoints = %#v", snap.Waypoints)
+	}
+	snap.Waypoints[0] = "mutated"
+	next, _ := w.Link(link)
+	if next.Waypoints[0] != "p1" {
+		t.Fatalf("link snapshot leaked mutable waypoints: %#v", next.Waypoints)
 	}
 }
 
