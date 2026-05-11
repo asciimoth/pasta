@@ -78,6 +78,96 @@ func TestRegisterLibraryRecoversPanic(t *testing.T) {
 	}
 }
 
+func TestClassLookupReturnsDefensiveSnapshot(t *testing.T) {
+	class := ClassSpec{
+		Name: "example.com/Source",
+		Default: NodeState{
+			Metadata: map[string]string{"default": "value"},
+			Private:  map[string]any{"nested": map[string]any{"key": "value"}},
+		},
+		Inputs: []PortSpec{{
+			ID:            PortID{Number: 1, Kind: InputPort},
+			Name:          "in",
+			Direction:     InputPort,
+			AcceptedTypes: []string{testType},
+			Metadata:      map[string]string{"side": "input"},
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+		Metadata: map[string]string{"class": "source"},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := w.Class("example.com/Source")
+	if !ok {
+		t.Fatal("class should exist")
+	}
+	if snap.Library != "example.com" || !snap.Active || snap.Spec.Metadata["class"] != "source" {
+		t.Fatalf("class snapshot = %#v", snap)
+	}
+	snap.Spec.Metadata["class"] = "mutated"
+	snap.Spec.Inputs[0].AcceptedTypes[0] = "example.com/float"
+	snap.Spec.Inputs[0].Metadata["side"] = "mutated"
+	snap.Spec.Default.Metadata["default"] = "mutated"
+	snap.Spec.Default.Private.(map[string]any)["nested"].(map[string]any)["key"] = "mutated"
+
+	next, ok := w.Class("example.com/Source")
+	if !ok {
+		t.Fatal("class should still exist")
+	}
+	if next.Spec.Metadata["class"] != "source" ||
+		next.Spec.Inputs[0].AcceptedTypes[0] != testType ||
+		next.Spec.Inputs[0].Metadata["side"] != "input" ||
+		next.Spec.Default.Metadata["default"] != "value" ||
+		next.Spec.Default.Private.(map[string]any)["nested"].(map[string]any)["key"] != "value" {
+		t.Fatalf("class lookup leaked mutable state: %#v", next)
+	}
+	if _, ok := w.Class("example.com/Missing"); ok {
+		t.Fatal("missing class lookup should report false")
+	}
+}
+
+type classLookupRuntime struct {
+	snap ClassSnapshot
+	ok   bool
+}
+
+func (r *classLookupRuntime) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	r.snap, r.ok = ctx.ReadOnly.Class(ctx.Class)
+	return struct{}{}, nil
+}
+
+func TestNodeRuntimeCanQueryClassThroughReadOnlyContext(t *testing.T) {
+	runtime := &classLookupRuntime{}
+	class := ClassSpec{
+		Name:        "example.com/Source",
+		DisplayName: "Source",
+		Runtime:     runtime,
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.ok || runtime.snap.Spec.DisplayName != "Source" || runtime.snap.Library != "example.com" {
+		t.Fatalf("runtime class lookup = %#v, ok %v", runtime.snap, runtime.ok)
+	}
+}
+
 type captureScopeLibrary struct {
 	name    string
 	classes []ClassSpec

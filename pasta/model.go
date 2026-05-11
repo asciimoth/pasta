@@ -219,6 +219,7 @@ func (l StaticLibrary) DefineClasses(scope LibraryScope) error {
 // WorkspaceRO is the concurrent-safe read-only workspace surface.
 type WorkspaceRO interface {
 	Snapshot() Snapshot
+	Class(string) (ClassSnapshot, bool)
 	Node(NodeID) (NodeSnapshot, bool)
 	Link(LinkID) (LinkSnapshot, bool)
 }

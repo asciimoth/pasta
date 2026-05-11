@@ -746,6 +746,17 @@ func (w *Workspace) Snapshot() Snapshot {
 	return w.snapshotLocked()
 }
 
+// Class returns one class snapshot.
+func (w *Workspace) Class(name string) (ClassSnapshot, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	class, ok := w.classes[name]
+	if !ok {
+		return ClassSnapshot{}, false
+	}
+	return snapshotClass(class), true
+}
+
 // Node returns one node snapshot.
 func (w *Workspace) Node(id NodeID) (NodeSnapshot, bool) {
 	w.mu.RLock()
@@ -1160,11 +1171,7 @@ func (w *Workspace) snapshotLocked() Snapshot {
 	}
 	sort.Slice(s.Libraries, func(i, j int) bool { return s.Libraries[i].Name < s.Libraries[j].Name })
 	for _, class := range w.classes {
-		s.Classes = append(s.Classes, ClassSnapshot{
-			Spec:    cloneClassSpec(class.spec),
-			Library: class.library,
-			Active:  class.active,
-		})
+		s.Classes = append(s.Classes, snapshotClass(class))
 	}
 	sort.Slice(s.Classes, func(i, j int) bool { return s.Classes[i].Spec.Name < s.Classes[j].Spec.Name })
 	for _, node := range w.nodes {
@@ -1176,6 +1183,14 @@ func (w *Workspace) snapshotLocked() Snapshot {
 	}
 	sort.Slice(s.Links, func(i, j int) bool { return s.Links[i].ID < s.Links[j].ID })
 	return s
+}
+
+func snapshotClass(class *classRecord) ClassSnapshot {
+	return ClassSnapshot{
+		Spec:    cloneClassSpec(class.spec),
+		Library: class.library,
+		Active:  class.active,
+	}
 }
 
 func snapshotNode(node *nodeRecord) NodeSnapshot {

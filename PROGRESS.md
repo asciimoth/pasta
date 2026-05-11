@@ -39,6 +39,7 @@ layout because the repo root is not itself a Go module.
 - Synchronized private node state updates through workspace and library-scoped APIs.
 - Node-scoped runtime API for a node to update its own state, private data,
   coordinates, and ports through workspace validation and locking.
+- Read-only class lookup for editor/controller and runtime inspection.
 - Optional private state export/import hooks for runtime-owned state.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
@@ -108,6 +109,7 @@ layout because the repo root is not itself a Go module.
   - inactive hook notifications and rollback
   - panic recovery across lifecycle hook families
   - library-scoped ownership enforcement for classes, nodes, and links
+  - read-only class lookup and defensive class snapshots
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback
   - class definition recovery pruning incompatible restored links
