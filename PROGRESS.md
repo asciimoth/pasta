@@ -65,6 +65,9 @@ layout because the repo root is not itself a Go module.
 - Immediate removal of broken links when nodes or ports disappear.
 - Copy/paste for selected nodes and internal links with ID remapping.
 - Deterministic `SaveData` DTOs and basic restore path.
+- Restore skips broken persisted links, but rejects invalid persisted link
+  constraints such as duplicate link IDs, type mismatches, multiplicity
+  violations, and cycles.
 - Deterministic restore runtime initialization using DAG ordering.
 - Late class definition can reactivate preserved inactive nodes and links.
 - Class recall recovery reinitializes recovered node runtimes.
@@ -83,6 +86,8 @@ layout because the repo root is not itself a Go module.
   - save/restore
   - deterministic save output
   - deterministic restore initialization order
+  - broken persisted link skipping
+  - invalid persisted link constraints and rollback
   - copy/paste ID remapping
   - private state updates in snapshots, save, and copy
   - lifecycle hook order
@@ -123,8 +128,7 @@ go vet ./pasta/...
   - metadata editing helpers
   - disable/enable APIs if needed
 - Add concurrent read/write and recursive-lock risk tests.
-- Add tests for restore edge cases, inactive recovery, and broken persisted
-  links.
+- Add tests for remaining restore edge cases and inactive recovery.
 - Expand `ARCHITECTURE.md` after lifecycle and persistence contracts are final.
 
 ## Notes

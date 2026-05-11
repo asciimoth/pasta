@@ -1,6 +1,9 @@
 package pasta
 
-import "sort"
+import (
+	"errors"
+	"sort"
+)
 
 // SaveData is the deterministic JSON-like persistence shape for a workspace.
 type SaveData struct {
@@ -120,22 +123,34 @@ func (w *Workspace) Restore(data SaveData) error {
 	}
 	oldNodes, oldLinks := w.nodes, w.links
 	oldNextNode, oldNextLink := w.nextNode, w.nextLink
+	rollback := func() {
+		w.nodes, w.links = oldNodes, oldLinks
+		w.nextNode, w.nextLink = oldNextNode, oldNextLink
+	}
 	w.nodes, w.links = nodes, links
 	for _, saved := range data.Links {
 		full, err := ParseFullLinkName(saved.Name)
 		if err != nil {
-			w.nodes, w.links = oldNodes, oldLinks
-			w.nextNode, w.nextLink = oldNextNode, oldNextLink
+			rollback()
 			return opErr("restore", "validate", err)
 		}
-		if _, err := w.validateLinkLocked(full.Input, full.Output, saved.Type, full.Link); err != nil {
-			continue
+		if _, exists := w.links[full.Link]; exists {
+			rollback()
+			return opErr("restore", "validate", ErrDuplicate)
+		}
+		typ, err := w.validateLinkLocked(full.Input, full.Output, saved.Type, 0)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidPort) {
+				continue
+			}
+			rollback()
+			return opErr("restore", "validate", err)
 		}
 		w.links[full.Link] = &linkRecord{
 			id:        full.Link,
 			input:     full.Input,
 			output:    full.Output,
-			typ:       saved.Type,
+			typ:       typ,
 			state:     StateActive,
 			waypoints: append([]string(nil), saved.Waypoints...),
 		}

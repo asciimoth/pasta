@@ -505,6 +505,91 @@ func TestSaveRestoreAndPasteRemapIDs(t *testing.T) {
 	}
 }
 
+func TestRestoreSkipsBrokenPersistedLinks(t *testing.T) {
+	w, _ := testWorkspace(t)
+	data := SaveData{
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source"},
+			{ID: "2N", Class: "example.com/Source"},
+		},
+		Links: []SaveLink{
+			{Name: "1L:2N1i:1N1o", Type: testType},
+			{Name: "2L:3N1i:1N1o", Type: testType},
+			{Name: "3L:2N9i:1N1o", Type: testType},
+		},
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := w.Snapshot()
+	if len(snapshot.Links) != 1 {
+		t.Fatalf("links = %#v, want only the valid persisted link", snapshot.Links)
+	}
+	if snapshot.Links[0].ID != 1 || snapshot.Links[0].State != StateActive {
+		t.Fatalf("link = %#v, want active 1L", snapshot.Links[0])
+	}
+}
+
+func TestRestoreRejectsInvalidPersistedLinkConstraintsAndRollsBack(t *testing.T) {
+	tests := []struct {
+		name  string
+		links []SaveLink
+		err   error
+	}{
+		{
+			name: "type mismatch",
+			links: []SaveLink{
+				{Name: "1L:2N1i:1N1o", Type: "example.com/float"},
+			},
+			err: ErrTypeMismatch,
+		},
+		{
+			name: "multiplicity",
+			links: []SaveLink{
+				{Name: "1L:2N1i:1N1o", Type: testType},
+				{Name: "2L:2N1i:3N1o", Type: testType},
+			},
+			err: ErrMultiplicity,
+		},
+		{
+			name: "cycle",
+			links: []SaveLink{
+				{Name: "1L:2N1i:1N1o", Type: testType},
+				{Name: "2L:1N1i:2N1o", Type: testType},
+			},
+			err: ErrCycle,
+		},
+		{
+			name: "duplicate link id",
+			links: []SaveLink{
+				{Name: "1L:2N1i:1N1o", Type: testType},
+				{Name: "1L:3N1i:2N1o", Type: testType},
+			},
+			err: ErrDuplicate,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, _ := testWorkspace(t)
+			data := SaveData{
+				Nodes: []SaveNode{
+					{ID: "1N", Class: "example.com/Source"},
+					{ID: "2N", Class: "example.com/Source"},
+					{ID: "3N", Class: "example.com/Source"},
+				},
+				Links: tt.links,
+			}
+			if err := w.Restore(data); !errors.Is(err, tt.err) {
+				t.Fatalf("Restore error = %v, want %v", err, tt.err)
+			}
+			snapshot := w.Snapshot()
+			if len(snapshot.Nodes) != 0 || len(snapshot.Links) != 0 {
+				t.Fatalf("restore should roll back model, got %#v", snapshot)
+			}
+		})
+	}
+}
+
 func TestSaveOutputIsDeterministic(t *testing.T) {
 	w, _ := testWorkspace(t)
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
