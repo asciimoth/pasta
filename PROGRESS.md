@@ -37,6 +37,8 @@ layout because the repo root is not itself a Go module.
 - Node creation and deletion.
 - Public node state updates and opaque node coordinate storage.
 - Synchronized private node state updates through workspace and library-scoped APIs.
+- Node-scoped runtime API for a node to update its own state, private data,
+  coordinates, and ports through workspace validation and locking.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
 - Link creation prepares under lock, runs node hooks outside the workspace lock,
@@ -86,6 +88,7 @@ layout because the repo root is not itself a Go module.
   - inactive hook notifications and rollback
   - panic recovery across lifecycle hook families
   - library-scoped ownership enforcement for classes, nodes, and links
+  - node-scoped runtime updates and deleted/closed scope errors
 
 ## Verified
 
@@ -102,7 +105,6 @@ go vet ./pasta/...
 - Complete node lifecycle hooks:
   - richer link deleted/inactivated notifications if needed by link contracts
   - export/import private state
-- Add a node-scoped API for node implementations.
 - Add explicit worker shutdown/close semantics for nodes with goroutines.
 - Expand library/class runtime behavior:
   - late class definition after registration

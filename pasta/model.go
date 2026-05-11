@@ -103,12 +103,27 @@ type NodeContext struct {
 	Class    string
 	Library  string
 	ReadOnly WorkspaceRO
+	Node     NodeScope
 }
 
 // NodeRuntime is the application-owned runtime object for a node.
 //
 // Runtime values can implement any of the optional hook interfaces below.
 type NodeRuntime interface{}
+
+// NodeScope is the mutation surface for one node implementation.
+//
+// Methods are concurrent-safe and mutate only the node named by ID. They return
+// ErrNotFound after the node has been deleted and ErrClosed after workspace close.
+type NodeScope interface {
+	ID() NodeID
+	ReadOnly() WorkspaceRO
+	Snapshot() (NodeSnapshot, bool)
+	SetState(NodeState) error
+	SetPrivate(any) error
+	SetCoordinate(string) error
+	SetPorts(inputs, outputs []PortSpec) error
+}
 
 // LinkEndpoint describes one node's view of a link.
 type LinkEndpoint struct {

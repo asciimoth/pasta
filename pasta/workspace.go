@@ -1,6 +1,7 @@
 package pasta
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -261,7 +262,7 @@ func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, erro
 	if err != nil {
 		return 0, err
 	}
-	runtime, err := w.initNodeRuntime(runtimeClass, rec, InitNew)
+	runtime, scope, err := w.initNodeRuntime(runtimeClass, rec, InitNew)
 	if err != nil {
 		w.mu.Lock()
 		w.rollbackPreparedNodeLocked(id)
@@ -270,18 +271,27 @@ func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, erro
 	}
 	w.mu.Lock()
 	if err := w.checkOpenLocked("create node"); err != nil {
+		if scope != nil {
+			scope.finishInit()
+		}
 		w.rollbackPreparedNodeLocked(id)
 		w.mu.Unlock()
 		return 0, err
 	}
 	class := w.classes[className]
 	if class == nil || !class.active {
+		if scope != nil {
+			scope.finishInit()
+		}
 		w.rollbackPreparedNodeLocked(id)
 		w.mu.Unlock()
 		return 0, opErr("create node", "validate", ErrInactive)
 	}
 	rec.runtime = runtime
 	w.nodes[id] = rec
+	if scope != nil {
+		scope.finishInit()
+	}
 	w.mu.Unlock()
 	return id, nil
 }
@@ -552,7 +562,7 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		runtime, err := w.initNodeRuntime(runtimeClass, rec, InitRestore)
+		runtime, scope, err := w.initNodeRuntime(runtimeClass, rec, InitRestore)
 		if err != nil {
 			w.mu.Lock()
 			w.rollbackPreparedNodeLocked(id)
@@ -561,18 +571,27 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		}
 		w.mu.Lock()
 		if err := w.checkOpenLocked("paste"); err != nil {
+			if scope != nil {
+				scope.finishInit()
+			}
 			w.rollbackPreparedNodeLocked(id)
 			w.mu.Unlock()
 			return nil, nil, err
 		}
 		class := w.classes[saved.Class]
 		if class == nil || !class.active {
+			if scope != nil {
+				scope.finishInit()
+			}
 			w.rollbackPreparedNodeLocked(id)
 			w.mu.Unlock()
 			return nil, nil, opErr("paste", "validate", ErrInactive)
 		}
 		rec.runtime = runtime
 		w.nodes[id] = rec
+		if scope != nil {
+			scope.finishInit()
+		}
 		node := w.nodes[id]
 		node.runtime = runtime
 		node.inputs = clonePorts(saved.Inputs)
@@ -1113,6 +1132,97 @@ func (s *libraryScope) DeleteLink(id LinkID) error {
 }
 
 func (s *libraryScope) ReadOnly() WorkspaceRO { return s.w }
+
+type nodeScope struct {
+	w        *Workspace
+	id       NodeID
+	initMu   sync.Mutex
+	initRec  *nodeRecord
+	initDone bool
+}
+
+func (s *nodeScope) ID() NodeID { return s.id }
+
+func (s *nodeScope) ReadOnly() WorkspaceRO { return s.w }
+
+func (s *nodeScope) Snapshot() (NodeSnapshot, bool) {
+	if snap, ok := s.w.Node(s.id); ok {
+		return snap, true
+	}
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	if s.initDone || s.initRec == nil {
+		return NodeSnapshot{}, false
+	}
+	return snapshotNode(s.initRec), true
+}
+
+func (s *nodeScope) SetState(state NodeState) error {
+	err := s.w.SetNodeState(s.id, state)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		rec.dynamic = cloneNodeState(state)
+		return nil
+	})
+}
+
+func (s *nodeScope) SetPrivate(private any) error {
+	err := s.w.SetNodePrivate(s.id, private)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		rec.dynamic.Private = private
+		return nil
+	})
+}
+
+func (s *nodeScope) SetCoordinate(coordinate string) error {
+	err := s.w.SetNodeCoordinate(s.id, coordinate)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		rec.dynamic.Coordinate = coordinate
+		return nil
+	})
+}
+
+func (s *nodeScope) SetPorts(inputs, outputs []PortSpec) error {
+	err := s.w.SetNodePorts(s.id, inputs, outputs)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		if err := validatePorts(inputs, InputPort); err != nil {
+			return opErr("set node ports", "validate", err)
+		}
+		if err := validatePorts(outputs, OutputPort); err != nil {
+			return opErr("set node ports", "validate", err)
+		}
+		rec.inputs = clonePorts(inputs)
+		rec.outputs = clonePorts(outputs)
+		return nil
+	})
+}
+
+func (s *nodeScope) updateInitRecord(fn func(*nodeRecord) error) error {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	if s.initDone || s.initRec == nil {
+		return opErr("node scope", "validate", ErrNotFound)
+	}
+	return fn(s.initRec)
+}
+
+func (s *nodeScope) finishInit() {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	s.initDone = true
+	s.initRec = nil
+}
 
 func cloneClassSpec(spec ClassSpec) ClassSpec {
 	spec.Default = cloneNodeState(spec.Default)

@@ -170,9 +170,15 @@ func (w *Workspace) Restore(data SaveData) error {
 	locked = false
 
 	runtimes := make(map[NodeID]NodeRuntime, len(initNodes))
+	scopes := make(map[NodeID]*nodeScope, len(initNodes))
 	for _, initNode := range initNodes {
-		runtime, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
+		runtime, scope, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
 		if err != nil {
+			for _, scope := range scopes {
+				if scope != nil {
+					scope.finishInit()
+				}
+			}
 			w.mu.Lock()
 			locked = true
 			w.nodes, w.links = oldNodes, oldLinks
@@ -182,11 +188,17 @@ func (w *Workspace) Restore(data SaveData) error {
 			return err
 		}
 		runtimes[initNode.record.id] = runtime
+		scopes[initNode.record.id] = scope
 	}
 
 	w.mu.Lock()
 	locked = true
 	if err := w.checkOpenLocked("restore"); err != nil {
+		for _, scope := range scopes {
+			if scope != nil {
+				scope.finishInit()
+			}
+		}
 		w.nodes, w.links = oldNodes, oldLinks
 		w.nextNode, w.nextLink = oldNextNode, oldNextLink
 		w.mu.Unlock()
@@ -196,6 +208,9 @@ func (w *Workspace) Restore(data SaveData) error {
 	for id, runtime := range runtimes {
 		if node := w.nodes[id]; node != nil {
 			node.runtime = runtime
+		}
+		if scope := scopes[id]; scope != nil {
+			scope.finishInit()
 		}
 	}
 	w.mu.Unlock()

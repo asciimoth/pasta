@@ -219,6 +219,149 @@ func TestSetNodePrivateUpdatesSnapshotsSaveAndCopy(t *testing.T) {
 	}
 }
 
+type nodeScopeClass struct {
+	scopes        map[NodeID]NodeScope
+	privateInInit any
+}
+
+func (c *nodeScopeClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	if c.scopes != nil {
+		c.scopes[ctx.ID] = ctx.Node
+	}
+	if c.privateInInit != nil {
+		if err := ctx.Node.SetPrivate(c.privateInInit); err != nil {
+			return nil, err
+		}
+	}
+	return struct{}{}, nil
+}
+
+func TestNodeScopeUpdatesOwnNodeState(t *testing.T) {
+	scopes := map[NodeID]NodeScope{}
+	class := ClassSpec{
+		Name:    "example.com/Scoped",
+		Runtime: &nodeScopeClass{scopes: scopes},
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := w.CreateNode("example.com/Scoped", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := scopes[node]
+	if scope == nil {
+		t.Fatal("node scope was not provided")
+	}
+	if scope.ID() != node {
+		t.Fatalf("scope ID = %d, want %d", scope.ID(), node)
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := scope.SetPrivate(map[string]string{"value": "from-node"}); err != nil {
+			t.Errorf("SetPrivate: %v", err)
+		}
+	}()
+	wg.Wait()
+	if err := scope.SetCoordinate("x:3"); err != nil {
+		t.Fatal(err)
+	}
+	nextInputs := []PortSpec{{
+		ID:        PortID{Number: 2, Kind: InputPort},
+		Name:      "next",
+		Direction: InputPort,
+		FixedType: testType,
+	}}
+	if err := scope.SetPorts(nextInputs, class.Outputs); err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := scope.Snapshot()
+	if !ok {
+		t.Fatal("node snapshot should exist")
+	}
+	if snap.Dynamic.Coordinate != "x:3" {
+		t.Fatalf("coordinate = %q, want x:3", snap.Dynamic.Coordinate)
+	}
+	private, ok := snap.Dynamic.Private.(map[string]string)
+	if !ok || private["value"] != "from-node" {
+		t.Fatalf("private = %#v", snap.Dynamic.Private)
+	}
+	if len(snap.Inputs) != 1 || snap.Inputs[0].ID.Number != 2 {
+		t.Fatalf("inputs = %#v", snap.Inputs)
+	}
+}
+
+func TestNodeScopeCanUpdatePrivateStateDuringInit(t *testing.T) {
+	class := ClassSpec{
+		Name:    "example.com/Scoped",
+		Runtime: &nodeScopeClass{privateInInit: "from-init"},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := w.CreateNode("example.com/Scoped", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := w.Node(node)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if snap.Dynamic.Private != "from-init" {
+		t.Fatalf("private = %#v, want from-init", snap.Dynamic.Private)
+	}
+}
+
+func TestNodeScopeReportsDeletedAndClosedNodes(t *testing.T) {
+	scopes := map[NodeID]NodeScope{}
+	class := ClassSpec{
+		Name:    "example.com/Scoped",
+		Runtime: &nodeScopeClass{scopes: scopes},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := w.CreateNode("example.com/Scoped", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed, err := w.CreateNode("example.com/Scoped", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedScope := scopes[deleted]
+	closedScope := scopes[closed]
+	if err := w.DeleteNode(deleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := deletedScope.SetPrivate("late"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted SetPrivate error = %v, want ErrNotFound", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := closedScope.SetPrivate("late"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed SetPrivate error = %v, want ErrClosed", err)
+	}
+}
+
 func TestIDRoundTrip(t *testing.T) {
 	full := FullLinkName{
 		Link:   234234,

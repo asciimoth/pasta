@@ -5,25 +5,32 @@ import (
 	"sort"
 )
 
-func (w *Workspace) initNodeRuntime(class NodeClass, rec *nodeRecord, mode InitMode) (runtime NodeRuntime, err error) {
+func (w *Workspace) initNodeRuntime(class NodeClass, rec *nodeRecord, mode InitMode) (runtime NodeRuntime, scope *nodeScope, err error) {
 	if class == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
+	scope = &nodeScope{w: w, id: rec.id, initRec: rec}
 	ctx := NodeContext{
 		ID:       rec.id,
 		Class:    rec.class,
 		Library:  rec.library,
 		ReadOnly: w,
+		Node:     scope,
 	}
+	defer func() {
+		if err != nil {
+			scope.finishInit()
+		}
+	}()
 	err = w.recoverHook("init node", func() error {
 		var initErr error
 		runtime, initErr = class.InitNode(ctx, cloneNodeState(rec.dynamic), mode)
 		return initErr
 	})
 	if err != nil {
-		return nil, opErr("create node", "hook", err)
+		return nil, scope, opErr("create node", "hook", err)
 	}
-	return runtime, nil
+	return runtime, scope, nil
 }
 
 func (w *Workspace) callLinkObject(runtime NodeRuntime, endpoint LinkEndpoint) (object any, err error) {

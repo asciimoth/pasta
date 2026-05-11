@@ -10,6 +10,8 @@ as a DAG.
 `Workspace` is the owner/controller API. `WorkspaceRO` exposes defensive
 snapshots for renderers and inspectors. `LibraryScope` limits a library to
 defining its own classes and mutating nodes and links owned by that same library.
+`NodeScope` is passed to node runtimes and limits them to mutating their own
+node state, private data, coordinates, and ports.
 
 Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects
@@ -30,8 +32,8 @@ is unavailable, are preserved for editor recovery.
 
 Workspace-owned state is protected by an `RWMutex`. Snapshot and lookup methods
 return copies rather than internal slices or maps. Public mutation methods are
-the intended synchronization boundary for editors, controllers, and scoped
-library access.
+the intended synchronization boundary for editors, controllers, scoped library
+access, and node-scoped runtime updates.
 
 The current implementation keeps class-definition hooks outside the initial
 registration lock and recovers panics from library registration. Node lifecycle
