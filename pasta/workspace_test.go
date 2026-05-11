@@ -2158,6 +2158,39 @@ func (c restoreOrderClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (N
 	return nil, nil
 }
 
+type closingInitClass struct {
+	log    *[]string
+	failID NodeID
+}
+
+func (c closingInitClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	*c.log = append(*c.log, fmt.Sprintf("init:%d", ctx.ID))
+	if ctx.ID == c.failID {
+		return nil, fmt.Errorf("init failed")
+	}
+	return closingInitNode{id: ctx.ID, log: c.log}, nil
+}
+
+type closingInitNode struct {
+	id  NodeID
+	log *[]string
+}
+
+func (n closingInitNode) Close() error {
+	*n.log = append(*n.log, fmt.Sprintf("close:%d", n.id))
+	return nil
+}
+
+type nonComparableRuntimeClass struct{}
+
+func (nonComparableRuntimeClass) InitNode(NodeContext, NodeState, InitMode) (NodeRuntime, error) {
+	return nonComparableRuntime{values: []int{1}}, nil
+}
+
+type nonComparableRuntime struct {
+	values []int
+}
+
 func TestRestoreInitializesNodesInDeterministicDAGOrder(t *testing.T) {
 	log := []NodeID{}
 	class := ClassSpec{
@@ -2197,6 +2230,33 @@ func TestRestoreInitializesNodesInDeterministicDAGOrder(t *testing.T) {
 	want := []NodeID{3, 2, 1}
 	if fmt.Sprint(log) != fmt.Sprint(want) {
 		t.Fatalf("restore init order = %#v, want %#v", log, want)
+	}
+}
+
+func TestRestoreClosesInitializedRuntimesOnLaterInitError(t *testing.T) {
+	log := []string{}
+	class := ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: closingInitClass{log: &log, failID: 2},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(SaveData{
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source"},
+			{ID: "2N", Class: "example.com/Source"},
+		},
+	}); err == nil {
+		t.Fatal("expected restore init error")
+	}
+	want := []string{"init:1", "init:2", "close:1"}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", log, want)
+	}
+	if snapshot := w.Snapshot(); len(snapshot.Nodes) != 0 {
+		t.Fatalf("restore should roll back model, got %#v", snapshot)
 	}
 }
 
@@ -2517,6 +2577,23 @@ func (l defineThenFailLibrary) DefineClasses(scope LibraryScope) error {
 	return fmt.Errorf("define failed")
 }
 
+type createThenFailLibrary struct {
+	name  string
+	class ClassSpec
+}
+
+func (l createThenFailLibrary) Name() string { return l.name }
+
+func (l createThenFailLibrary) DefineClasses(scope LibraryScope) error {
+	if err := scope.DefineClass(l.class); err != nil {
+		return err
+	}
+	if _, err := scope.CreateNode(l.class.Name, NodeOptions{}); err != nil {
+		return err
+	}
+	return fmt.Errorf("create failed")
+}
+
 func TestRegisterLibraryRollbackRestoresInactiveNodesOnDefineError(t *testing.T) {
 	initialRuntime := &lifecycleClass{}
 	w, _, _ := lifecycleWorkspace(t, initialRuntime)
@@ -2560,6 +2637,87 @@ func TestRegisterLibraryRollbackRestoresInactiveNodesOnDefineError(t *testing.T)
 	}
 }
 
+func TestRegisterLibraryClosesReactivatedRuntimesOnDefineError(t *testing.T) {
+	w := NewWorkspace()
+	if err := w.Restore(SaveData{
+		NextNode: 2,
+		Nodes: []SaveNode{{
+			ID:    "1N",
+			Class: "example.com/Source",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	log := []string{}
+	err := w.RegisterLibrary(defineThenFailLibrary{
+		name: "example.com",
+		class: ClassSpec{
+			Name:    "example.com/Source",
+			Runtime: closingInitClass{log: &log},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected register failure")
+	}
+	want := []string{"init:1", "close:1"}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", log, want)
+	}
+	if got, ok := w.Node(1); !ok || got.State != StateInactive {
+		t.Fatalf("node = %#v, ok %v; want inactive after rollback", got, ok)
+	}
+}
+
+func TestRegisterLibraryRollbackAllowsNonComparableExistingRuntime(t *testing.T) {
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{
+		LibraryName: "example.com",
+		Classes: []ClassSpec{{
+			Name:    "example.com/Source",
+			Runtime: nonComparableRuntimeClass{},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	err := w.RegisterLibrary(defineThenFailLibrary{
+		name: "other.com",
+		class: ClassSpec{
+			Name: "other.com/Other",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected register failure")
+	}
+	if len(w.Snapshot().Libraries) != 1 {
+		t.Fatal("failed registration should roll back without disturbing existing runtime")
+	}
+}
+
+func TestRegisterLibraryClosesScopedCreatedRuntimeOnDefineError(t *testing.T) {
+	w := NewWorkspace()
+	log := []string{}
+	err := w.RegisterLibrary(createThenFailLibrary{
+		name: "example.com",
+		class: ClassSpec{
+			Name:    "example.com/Source",
+			Runtime: closingInitClass{log: &log},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected register failure")
+	}
+	want := []string{"init:1", "close:1"}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", log, want)
+	}
+	if snapshot := w.Snapshot(); len(snapshot.Nodes) != 0 || len(snapshot.Libraries) != 0 {
+		t.Fatalf("failed registration should roll back model, got %#v", snapshot)
+	}
+}
+
 func TestDefineClassReactivationRollsBackOnInitError(t *testing.T) {
 	data := SaveData{
 		NextNode: 2,
@@ -2590,6 +2748,39 @@ func TestDefineClassReactivationRollsBackOnInitError(t *testing.T) {
 	snapshot := w.Snapshot()
 	if len(snapshot.Classes) != 0 || snapshot.Nodes[0].State != StateInactive {
 		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestDefineClassClosesInitializedRuntimesOnLaterInitError(t *testing.T) {
+	data := SaveData{
+		NextNode: 3,
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source"},
+			{ID: "2N", Class: "example.com/Source"},
+		},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	before := w.Save()
+	log := []string{}
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: closingInitClass{log: &log, failID: 2},
+	}); err == nil {
+		t.Fatal("expected define class init error")
+	}
+	want := []string{"init:1", "init:2", "close:1"}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", log, want)
+	}
+	after := w.Save()
+	if fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("define class should roll back on init error: got %#v, want %#v", after, before)
 	}
 }
 

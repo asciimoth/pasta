@@ -216,6 +216,32 @@ func (w *Workspace) callCloseEvents(events []nodeInactiveEvent) error {
 	return first
 }
 
+func (w *Workspace) cleanupInitializedRuntimes(runtimes map[NodeID]NodeRuntime, scopes map[NodeID]*nodeScope) error {
+	scopeIDs := make([]NodeID, 0, len(scopes))
+	for id := range scopes {
+		scopeIDs = append(scopeIDs, id)
+	}
+	sort.Slice(scopeIDs, func(i, j int) bool { return scopeIDs[i] < scopeIDs[j] })
+	for _, id := range scopeIDs {
+		if scope := scopes[id]; scope != nil {
+			scope.finishInit()
+		}
+	}
+
+	runtimeIDs := make([]NodeID, 0, len(runtimes))
+	for id := range runtimes {
+		runtimeIDs = append(runtimeIDs, id)
+	}
+	sort.Slice(runtimeIDs, func(i, j int) bool { return runtimeIDs[i] < runtimeIDs[j] })
+	var first error
+	for _, id := range runtimeIDs {
+		if err := w.callNodeClose(runtimes[id]); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 func (w *Workspace) callAfterDelete(runtime NodeRuntime) {
 	hook, ok := runtime.(NodeDeleteHook)
 	if !ok {

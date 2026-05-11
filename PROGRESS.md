@@ -102,6 +102,10 @@ layout because the repo root is not itself a Go module.
 - Late class definition restores library ownership for recovered nodes.
 - Library registration rolls back partial class definitions and reactivation on
   hook errors or panics.
+- Restore and class reactivation close any runtimes initialized before a later
+  initialization failure rolls the operation back.
+- Library registration closes runtimes initialized by partial class recovery or
+  scoped node creation before rolling back a failed registration.
 - Initial `ARCHITECTURE.md` and `AGENTS.md`.
 - Expanded `ARCHITECTURE.md` with domain model, lifecycle/link creation
   sequence, locking behavior, and persistence DTO details.
@@ -129,6 +133,9 @@ layout because the repo root is not itself a Go module.
   - private state updates in snapshots, save, and copy
   - lifecycle hook order
   - restore lifecycle initialization and rollback
+  - runtime close on partial restore/class-reactivation initialization rollback
+  - runtime close on partial library-registration recovery and scoped node
+    creation rollback
   - link attach rollback on hook errors and panics
   - link attach hook read-only workspace re-entry
   - link creation revalidation after concurrent interleavings

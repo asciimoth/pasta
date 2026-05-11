@@ -138,6 +138,7 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 	w.libraries[name] = lib
 	w.mu.Unlock()
 
+	cleanupRuntimes := make(map[NodeID]NodeRuntime)
 	rollback := func() {
 		w.mu.Lock()
 		w.libraries = oldLibraries
@@ -145,6 +146,7 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		w.nodes = oldNodes
 		w.links = oldLinks
 		w.mu.Unlock()
+		w.cleanupInitializedRuntimes(cleanupRuntimes, nil)
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -154,7 +156,7 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		}
 	}()
 	var detachEvents []linkDetachEvent
-	if err := lib.DefineClasses(&libraryScope{w: w, library: name, detachEvents: &detachEvents}); err != nil {
+	if err := lib.DefineClasses(&libraryScope{w: w, library: name, detachEvents: &detachEvents, cleanupRuntimes: cleanupRuntimes}); err != nil {
 		rollback()
 		return opErr("register library", "hook", err)
 	}
@@ -212,10 +214,10 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 
 // DefineClass defines or replaces an active class for a registered library.
 func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
-	return w.defineClass(library, spec, nil)
+	return w.defineClass(library, spec, nil, nil)
 }
 
-func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent) error {
+func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent, cleanupRuntimes map[NodeID]NodeRuntime) error {
 	w.mu.Lock()
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
@@ -233,11 +235,7 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 	for _, initNode := range initNodes {
 		runtime, scope, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
 		if err != nil {
-			for _, scope := range scopes {
-				if scope != nil {
-					scope.finishInit()
-				}
-			}
+			w.cleanupInitializedRuntimes(runtimes, scopes)
 			w.mu.Lock()
 			w.classes = oldClasses
 			w.nodes = oldNodes
@@ -251,34 +249,29 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 
 	w.mu.Lock()
 	if err := w.checkOpenLocked("define class"); err != nil {
-		for _, scope := range scopes {
-			if scope != nil {
-				scope.finishInit()
-			}
-		}
 		w.classes = oldClasses
 		w.nodes = oldNodes
 		w.links = oldLinks
 		w.mu.Unlock()
+		w.cleanupInitializedRuntimes(runtimes, scopes)
 		return err
 	}
 	for id, runtime := range runtimes {
 		node := w.nodes[id]
 		if node == nil || node.class != spec.Name || node.state != StateActive {
-			for _, scope := range scopes {
-				if scope != nil {
-					scope.finishInit()
-				}
-			}
 			w.classes = oldClasses
 			w.nodes = oldNodes
 			w.links = oldLinks
 			w.mu.Unlock()
+			w.cleanupInitializedRuntimes(runtimes, scopes)
 			return opErr("define class", "validate", ErrInactive)
 		}
 		node.runtime = runtime
 		if scope := scopes[id]; scope != nil {
 			scope.finishInit()
+		}
+		if cleanupRuntimes != nil {
+			cleanupRuntimes[id] = runtime
 		}
 	}
 	w.mu.Unlock()
@@ -1430,13 +1423,14 @@ func (w *Workspace) logPanic(op string, r any) {
 }
 
 type libraryScope struct {
-	w            *Workspace
-	library      string
-	detachEvents *[]linkDetachEvent
+	w               *Workspace
+	library         string
+	detachEvents    *[]linkDetachEvent
+	cleanupRuntimes map[NodeID]NodeRuntime
 }
 
 func (s *libraryScope) DefineClass(spec ClassSpec) error {
-	return s.w.defineClass(s.library, spec, s.detachEvents)
+	return s.w.defineClass(s.library, spec, s.detachEvents, s.cleanupRuntimes)
 }
 
 func (s *libraryScope) RecallClass(className string) error {
@@ -1458,7 +1452,16 @@ func (s *libraryScope) CreateNode(className string, opts NodeOptions) (NodeID, e
 	if !ValidClassName(s.library, className) {
 		return 0, opErr("scope create node", "validate", ErrOwnership)
 	}
-	return s.w.CreateNode(className, opts)
+	id, err := s.w.CreateNode(className, opts)
+	if err != nil || s.cleanupRuntimes == nil {
+		return id, err
+	}
+	s.w.mu.RLock()
+	if node := s.w.nodes[id]; node != nil && node.runtime != nil {
+		s.cleanupRuntimes[id] = node.runtime
+	}
+	s.w.mu.RUnlock()
+	return id, nil
 }
 
 func (s *libraryScope) CanDeleteNode(id NodeID) error {
