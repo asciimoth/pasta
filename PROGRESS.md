@@ -96,6 +96,8 @@ layout because the repo root is not itself a Go module.
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback
   - library unregister/register recovery and rollback
+  - explicit lifecycle hook order for node deletion and workspace close with
+    attached links
 
 ## Verified
 
@@ -120,7 +122,6 @@ go vet ./pasta/...
   - richer "can I do this?" validation queries
   - metadata editing helpers
   - disable/enable APIs if needed
-- Add lifecycle hook-order tests.
 - Add concurrent read/write and recursive-lock risk tests.
 - Add tests for restore edge cases, inactive recovery, and broken persisted
   links.

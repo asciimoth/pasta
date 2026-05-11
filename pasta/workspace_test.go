@@ -1488,6 +1488,65 @@ func TestLifecycleDeleteNodeAndCloseHooks(t *testing.T) {
 	}
 }
 
+func TestLifecycleDeleteNodeHookOrderWithAttachedLink(t *testing.T) {
+	w, _, log := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	*log = nil
+	if err := w.DeleteNode(b); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"delete-before:2",
+		"detach-before:input:1",
+		"detach-before:output:1",
+		"detach-after:input:1",
+		"detach-after:output:1",
+		"delete-after:2",
+	}
+	if fmt.Sprint(*log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", *log, want)
+	}
+}
+
+func TestLifecycleCloseInactiveHookOrderWithAttachedLink(t *testing.T) {
+	w, _, log := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	*log = nil
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := []string{
+		"inactive-before:1:workspace-close",
+		"inactive-before:2:workspace-close",
+		"inactive-after:1:workspace-close",
+		"inactive-after:2:workspace-close",
+		"link-inactive:input:1:workspace-close",
+		"link-inactive:output:1:workspace-close",
+	}
+	if len(*log) < len(wantPrefix) {
+		t.Fatalf("log = %#v, want prefix %#v", *log, wantPrefix)
+	}
+	if fmt.Sprint((*log)[:len(wantPrefix)]) != fmt.Sprint(wantPrefix) {
+		t.Fatalf("log prefix = %#v, want %#v", (*log)[:len(wantPrefix)], wantPrefix)
+	}
+}
+
 func TestLifecycleDeleteAndDetachPanicsAreRecovered(t *testing.T) {
 	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
