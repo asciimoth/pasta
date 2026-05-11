@@ -95,6 +95,8 @@ layout because the repo root is not itself a Go module.
 - Library registration rolls back partial class definitions and reactivation on
   hook errors or panics.
 - Initial `ARCHITECTURE.md` and `AGENTS.md`.
+- Expanded `ARCHITECTURE.md` with domain model, lifecycle/link creation
+  sequence, locking behavior, and persistence DTO details.
 - Tests for:
   - name validation
   - ID round trips
@@ -152,7 +154,6 @@ go vet ./pasta/...
   - richer link deleted/inactivated notifications if needed by link contracts
 - Add tests for any remaining restore edge cases and inactive recovery paths as
   lifecycle and persistence contracts evolve.
-- Expand `ARCHITECTURE.md` after lifecycle and persistence contracts are final.
 
 ## Notes
 

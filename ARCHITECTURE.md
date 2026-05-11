@@ -27,6 +27,21 @@ Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects
 without interpreting application-specific behavior.
 
+## Domain Model
+
+Libraries define classes under their own qualified-name prefix. A class provides
+default node state, default ports, metadata, and the optional runtime factory
+used to initialize each active node instance. Nodes keep a stable ID, class
+name, owning library name, active/inactive state, dynamic public/private state,
+ports, and an optional runtime value.
+
+Links connect one output `FullPortID` to one input `FullPortID`, carry one fixed
+type name, and may store opaque waypoint strings for editors. Link endpoints are
+directional: each runtime sees the link through a `LinkEndpoint` whose `Self`
+field is its own port and whose `Peer` field is the other endpoint. Link objects
+are application-owned values; the workspace only hands them from the input-side
+provider or caller to both attach hooks.
+
 ## Validation
 
 Names are centralized in `names.go`; IDs and composed link names are centralized
@@ -40,6 +55,47 @@ is unavailable, are preserved for editor recovery. Defining a missing or
 recalled class reactivates preserved nodes and links when their endpoints and
 ports are still valid, and reinitializes recovered node runtimes outside the
 workspace lock.
+
+## Lifecycle
+
+Node runtimes are initialized by `NodeClass.InitNode`. The call receives a
+`NodeContext`, an initialized `NodeState`, and an `InitMode` of `new` or
+`restore`. If the runtime implements `NodePrivateImportHook`, the workspace calls
+it immediately after initialization with the cloned private state. Runtime
+initialization happens outside the workspace lock; a node-scoped API remains
+valid during initialization and is finalized after the runtime is committed or
+rolled back.
+
+Link creation follows a transactional sequence:
+
+1. Reserve a link ID and validate endpoints, directions, type compatibility,
+   input multiplicity, and DAG safety under the workspace lock.
+2. Release the lock and obtain the link object from the input runtime when the
+   caller did not provide one.
+3. Call input then output `BeforeLinkAttach` hooks outside the lock.
+4. Reacquire the lock, revalidate the pending link, and commit it.
+5. Call input then output `AfterLinkAttach` hooks outside the lock.
+
+If link-object creation or a before-attach hook fails or panics, the reserved ID
+is rolled back and the workspace graph is unchanged. After-attach panics are
+logged but do not roll back the committed link.
+
+Link deletion calls input then output `BeforeLinkDetach` hooks outside the lock,
+removes the link, and then calls input then output `AfterLinkDetach` hooks.
+Deleting a node first calls `BeforeDelete`, detaches its links through the same
+link deletion path, removes the node, then calls `AfterDelete` and `Close`.
+
+Class recall, library unregister, and workspace close gather affected active
+node and link events under the lock, call `BeforeInactive` hooks outside the
+lock, commit inactive state, then call `AfterInactive`,
+`AfterLinkInactive`, and `Close` outside the lock. Preserved inactive nodes have
+their runtimes cleared. If those nodes later recover because their class or
+library becomes active again, the workspace initializes fresh runtimes in
+deterministic DAG order.
+
+All external lifecycle calls are panic-recovered. Panics are logged through the
+configured `Logger`; before-hook panics become operation errors, while
+after-hook panics are logged after the state change has committed.
 
 ## Locking
 
@@ -76,4 +132,20 @@ explicit import callback can implement `NodePrivateImportHook`, which runs after
 node initialization with the default or restored private value.
 
 `Restore` validates IDs, ports, endpoint references, type compatibility, and DAG
-safety. Missing classes restore nodes as inactive. Broken links are skipped.
+safety before active links are accepted. Missing classes restore nodes as
+inactive. Persisted links whose endpoint nodes or ports are missing are skipped
+as broken. Persisted links that reference existing endpoints but violate type,
+multiplicity, duplicate-ID, or DAG constraints reject the restore and roll the
+workspace back to its previous state.
+
+The persistence DTO is intentionally small:
+
+- `SaveData.NextNode` and `SaveData.NextLink` preserve generator progress.
+- `SaveNode` stores the canonical node ID, class name, dynamic state, and port
+  specs.
+- `SaveLink` stores the canonical full link name, fixed link type, and
+  waypoint strings.
+
+The DTO stores only model state, not Go runtime values or link objects. Runtime
+state that should survive save/copy must be exported through
+`NodePrivateExportHook` into the node private state field.
