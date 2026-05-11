@@ -201,16 +201,18 @@ func (w *Workspace) Restore(data SaveData) error {
 		w.nextNode, w.nextLink = oldNextNode, oldNextLink
 	}
 	w.nodes, w.links = nodes, links
+	seenLinkIDs := map[LinkID]bool{}
 	for _, saved := range data.Links {
 		full, err := ParseFullLinkName(saved.Name)
 		if err != nil {
 			rollback()
 			return opErr("restore", "validate", err)
 		}
-		if _, exists := w.links[full.Link]; exists {
+		if seenLinkIDs[full.Link] {
 			rollback()
 			return opErr("restore", "validate", ErrDuplicate)
 		}
+		seenLinkIDs[full.Link] = true
 		typ, err := w.validateLinkLocked(full.Input, full.Output, saved.Type, 0)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidPort) {

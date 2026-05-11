@@ -91,6 +91,8 @@ layout because the repo root is not itself a Go module.
 - Restore skips broken persisted links, but rejects invalid persisted link
   constraints such as duplicate link IDs, type mismatches, multiplicity
   violations, and cycles.
+- Restore rejects duplicate persisted link IDs even when an earlier duplicate
+  link would otherwise be skipped as broken.
 - Error-returning save path that exports current private state from live
   runtimes while preserving the stable snapshot-only `Save` API.
 - Deterministic restore runtime initialization using DAG ordering.
@@ -120,6 +122,7 @@ layout because the repo root is not itself a Go module.
   - invalid persisted node IDs, duplicate node IDs, invalid persisted class
     names, invalid saved ports, and rollback
   - invalid persisted link constraints and rollback
+  - duplicate persisted link IDs across skipped broken links
   - copy/paste ID remapping
   - invalid clipboard ports and paste rollback
   - node metadata update helpers, single-key edits, and defensive metadata snapshots

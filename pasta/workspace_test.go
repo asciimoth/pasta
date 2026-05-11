@@ -1169,6 +1169,14 @@ func TestRestoreRejectsInvalidPersistedLinkConstraintsAndRollsBack(t *testing.T)
 			},
 			err: ErrDuplicate,
 		},
+		{
+			name: "duplicate skipped broken link id",
+			links: []SaveLink{
+				{Name: "1L:9N1i:1N1o", Type: testType},
+				{Name: "1L:2N1i:1N1o", Type: testType},
+			},
+			err: ErrDuplicate,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
