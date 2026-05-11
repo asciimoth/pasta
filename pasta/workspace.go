@@ -360,6 +360,21 @@ func (w *Workspace) SetNodeState(id NodeID, state NodeState) error {
 	return nil
 }
 
+// SetNodePrivate replaces the application-owned private state for a node.
+func (w *Workspace) SetNodePrivate(id NodeID, private any) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.checkOpenLocked("set node private"); err != nil {
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		return opErr("set node private", "validate", ErrNotFound)
+	}
+	node.dynamic.Private = private
+	return nil
+}
+
 // SetNodePorts replaces a node's public ports if every existing link remains valid.
 func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 	w.mu.Lock()
@@ -1056,6 +1071,17 @@ func (s *libraryScope) DeleteNode(id NodeID) error {
 		return opErr("scope delete node", "validate", ErrOwnership)
 	}
 	return s.w.DeleteNode(id)
+}
+
+func (s *libraryScope) SetNodePrivate(id NodeID, private any) error {
+	s.w.mu.RLock()
+	node, ok := s.w.nodes[id]
+	owned := ok && node.library == s.library
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node private", "validate", ErrOwnership)
+	}
+	return s.w.SetNodePrivate(id, private)
 }
 
 func (s *libraryScope) CreateLink(input, output FullPortID, opts LinkOptions) (LinkID, error) {

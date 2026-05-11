@@ -143,6 +143,9 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	if err := own.scope.DeleteNode(otherA); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("DeleteNode cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.SetNodePrivate(otherA, "private"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetNodePrivate cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.RecallClass("other.com/Source"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("RecallClass cross-library error = %v, want ownership", err)
 	}
@@ -177,6 +180,41 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	}
 	if err := own.scope.DeleteLink(ownLink); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSetNodePrivateUpdatesSnapshotsSaveAndCopy(t *testing.T) {
+	w, _ := testWorkspace(t)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetNodePrivate(node, map[string]string{"value": "from-runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := w.Node(node)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	private, ok := snapshot.Dynamic.Private.(map[string]string)
+	if !ok || private["value"] != "from-runtime" {
+		t.Fatalf("snapshot private = %#v", snapshot.Dynamic.Private)
+	}
+	saved := w.Save()
+	if len(saved.Nodes) != 1 {
+		t.Fatalf("saved %d nodes, want 1", len(saved.Nodes))
+	}
+	private, ok = saved.Nodes[0].State.Private.(map[string]string)
+	if !ok || private["value"] != "from-runtime" {
+		t.Fatalf("saved private = %#v", saved.Nodes[0].State.Private)
+	}
+	clip, err := w.Copy([]NodeID{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, ok = clip.Nodes[0].State.Private.(map[string]string)
+	if !ok || private["value"] != "from-runtime" {
+		t.Fatalf("clipboard private = %#v", clip.Nodes[0].State.Private)
 	}
 }
 

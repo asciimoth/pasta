@@ -200,6 +200,7 @@ type LibraryScope interface {
 	RecallClass(string) error
 	CreateNode(string, NodeOptions) (NodeID, error)
 	DeleteNode(NodeID) error
+	SetNodePrivate(NodeID, any) error
 	CreateLink(FullPortID, FullPortID, LinkOptions) (LinkID, error)
 	DeleteLink(LinkID) error
 	ReadOnly() WorkspaceRO
