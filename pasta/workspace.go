@@ -468,22 +468,14 @@ func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 	if err := w.checkOpenLocked("set node ports"); err != nil {
 		return err
 	}
-	if err := validatePorts(inputs, InputPort); err != nil {
-		return opErr("set node ports", "validate", err)
-	}
-	if err := validatePorts(outputs, OutputPort); err != nil {
+	if err := w.canSetNodePortsLocked(id, inputs, outputs); err != nil {
 		return opErr("set node ports", "validate", err)
 	}
 	node, ok := w.nodes[id]
 	if !ok {
 		return opErr("set node ports", "validate", ErrNotFound)
 	}
-	oldInputs, oldOutputs := node.inputs, node.outputs
 	node.inputs, node.outputs = clonePorts(inputs), clonePorts(outputs)
-	if err := w.validateAttachedLinksLocked(id); err != nil {
-		node.inputs, node.outputs = oldInputs, oldOutputs
-		return opErr("set node ports", "validate", err)
-	}
 	return nil
 }
 
@@ -728,6 +720,16 @@ func (w *Workspace) CanCreateLink(input, output FullPortID, typ string) error {
 	_, err := w.validateLinkLocked(input, output, typ, 0)
 	if err != nil {
 		return opErr("can create link", "validate", err)
+	}
+	return nil
+}
+
+// CanSetNodePorts validates a proposed port replacement without mutating the workspace.
+func (w *Workspace) CanSetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.canSetNodePortsLocked(id, inputs, outputs); err != nil {
+		return opErr("can set node ports", "validate", err)
 	}
 	return nil
 }
@@ -986,6 +988,24 @@ func (w *Workspace) validateAttachedLinksLocked(nodeID NodeID) error {
 		}
 	}
 	return nil
+}
+
+func (w *Workspace) canSetNodePortsLocked(id NodeID, inputs, outputs []PortSpec) error {
+	if err := validatePorts(inputs, InputPort); err != nil {
+		return err
+	}
+	if err := validatePorts(outputs, OutputPort); err != nil {
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		return ErrNotFound
+	}
+	oldInputs, oldOutputs := node.inputs, node.outputs
+	node.inputs, node.outputs = clonePorts(inputs), clonePorts(outputs)
+	err := w.validateAttachedLinksLocked(id)
+	node.inputs, node.outputs = oldInputs, oldOutputs
+	return err
 }
 
 func chooseLinkType(input, output PortSpec, requested string) (string, error) {

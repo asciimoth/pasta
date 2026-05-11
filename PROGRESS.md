@@ -60,6 +60,7 @@ layout because the repo root is not itself a Go module.
 - Node close hooks when the workspace closes.
 - Link type compatibility validation.
 - Input port multiplicity validation.
+- Non-mutating validation query for proposed node port replacement.
 - DAG enforcement for links.
 - Opaque link waypoint storage.
 - Active and inactive state propagation for class recall and library unregister.
@@ -88,6 +89,7 @@ layout because the repo root is not itself a Go module.
   - inactive link preservation
   - broken link removal
   - linked port update validation
+  - non-mutating port update validation queries
   - save/restore
   - deterministic save output
   - deterministic restore initialization order

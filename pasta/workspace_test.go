@@ -469,6 +469,49 @@ func TestSetNodePortsRejectsInvalidLinkedType(t *testing.T) {
 	}
 }
 
+func TestCanSetNodePortsValidatesWithoutMutation(t *testing.T) {
+	w, class := testWorkspace(t)
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	badInputs := append([]PortSpec(nil), class.Inputs...)
+	badInputs[0].FixedType = "example.com/float"
+	if err := w.CanSetNodePorts(b, badInputs, class.Outputs); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("CanSetNodePorts error = %v, want type mismatch", err)
+	}
+	snap, ok := w.Node(b)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if snap.Inputs[0].FixedType != testType {
+		t.Fatalf("CanSetNodePorts mutated inputs: %#v", snap.Inputs)
+	}
+
+	nextInputs := []PortSpec{{
+		ID:            PortID{Number: 1, Kind: InputPort},
+		Name:          "in",
+		Direction:     InputPort,
+		AcceptedTypes: []string{testType, "example.com/float"},
+	}}
+	if err := w.CanSetNodePorts(b, nextInputs, class.Outputs); err != nil {
+		t.Fatalf("CanSetNodePorts compatible update: %v", err)
+	}
+	snap, ok = w.Node(b)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if snap.Inputs[0].FixedType != testType || len(snap.Inputs[0].AcceptedTypes) != 0 {
+		t.Fatalf("successful CanSetNodePorts should not mutate inputs: %#v", snap.Inputs)
+	}
+}
+
 func TestSaveRestoreAndPasteRemapIDs(t *testing.T) {
 	w, _ := testWorkspace(t)
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{Coordinate: "x:1"}})
