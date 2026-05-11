@@ -123,6 +123,8 @@ type NodeScope interface {
 	SetPrivate(any) error
 	SetCoordinate(string) error
 	SetMetadata(map[string]string) error
+	SetMetadataValue(string, string) error
+	DeleteMetadataValue(string) error
 	SetPorts(inputs, outputs []PortSpec) error
 }
 
@@ -221,6 +223,8 @@ func (l StaticLibrary) DefineClasses(scope LibraryScope) error {
 type WorkspaceRO interface {
 	Snapshot() Snapshot
 	Class(string) (ClassSnapshot, bool)
+	Classes() []ClassSnapshot
+	ClassesByLibrary(string) []ClassSnapshot
 	Node(NodeID) (NodeSnapshot, bool)
 	Link(LinkID) (LinkSnapshot, bool)
 }
@@ -229,12 +233,20 @@ type WorkspaceRO interface {
 type LibraryScope interface {
 	DefineClass(ClassSpec) error
 	RecallClass(string) error
+	Classes() []ClassSnapshot
+	CanCreateNode(string) error
 	CreateNode(string, NodeOptions) (NodeID, error)
+	CanDeleteNode(NodeID) error
 	DeleteNode(NodeID) error
 	SetNodePrivate(NodeID, any) error
 	SetNodeMetadata(NodeID, map[string]string) error
+	SetNodeMetadataValue(NodeID, string, string) error
+	DeleteNodeMetadataValue(NodeID, string) error
+	CanCreateLink(FullPortID, FullPortID, string) error
 	CreateLink(FullPortID, FullPortID, LinkOptions) (LinkID, error)
+	CanSetLinkWaypoints(LinkID) error
 	SetLinkWaypoints(LinkID, []string) error
+	CanDeleteLink(LinkID) error
 	DeleteLink(LinkID) error
 	ReadOnly() WorkspaceRO
 }

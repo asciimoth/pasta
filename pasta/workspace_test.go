@@ -133,6 +133,49 @@ func TestClassLookupReturnsDefensiveSnapshot(t *testing.T) {
 	}
 }
 
+func TestClassQueriesReturnDeterministicDefensiveSnapshots(t *testing.T) {
+	classes := []ClassSpec{
+		{
+			Name:     "example.com/Zed",
+			Metadata: map[string]string{"order": "last"},
+		},
+		{
+			Name:     "example.com/Alpha",
+			Metadata: map[string]string{"order": "first"},
+		},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: classes}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "other.com", Classes: []ClassSpec{{
+		Name:     "other.com/Middle",
+		Metadata: map[string]string{"library": "other"},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	all := w.Classes()
+	if len(all) != 3 {
+		t.Fatalf("classes = %#v, want 3", all)
+	}
+	if all[0].Spec.Name != "example.com/Alpha" || all[1].Spec.Name != "example.com/Zed" || all[2].Spec.Name != "other.com/Middle" {
+		t.Fatalf("classes not sorted by class name: %#v", all)
+	}
+	own := w.ClassesByLibrary("example.com")
+	if len(own) != 2 || own[0].Spec.Name != "example.com/Alpha" || own[1].Spec.Name != "example.com/Zed" {
+		t.Fatalf("classes by library = %#v", own)
+	}
+	if got := w.ClassesByLibrary("missing.com"); len(got) != 0 {
+		t.Fatalf("missing library classes = %#v, want empty", got)
+	}
+	own[0].Spec.Metadata["order"] = "mutated"
+	next := w.ClassesByLibrary("example.com")
+	if next[0].Spec.Metadata["order"] != "first" {
+		t.Fatalf("class query leaked mutable metadata: %#v", next[0].Spec.Metadata)
+	}
+}
+
 type classLookupRuntime struct {
 	snap ClassSnapshot
 	ok   bool
@@ -230,17 +273,37 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ownClasses := own.scope.Classes()
+	if len(ownClasses) != 1 || ownClasses[0].Library != "example.com" || ownClasses[0].Spec.Name != "example.com/Source" {
+		t.Fatalf("scoped classes = %#v, want only owned class", ownClasses)
+	}
+	ownClasses[0].Spec.Metadata = map[string]string{"mutated": "true"}
+	if next := own.scope.Classes(); len(next) != 1 || len(next[0].Spec.Metadata) != 0 {
+		t.Fatalf("scoped classes leaked mutable state: %#v", next)
+	}
 	if _, err := own.scope.CreateNode("other.com/Source", NodeOptions{}); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("CreateNode cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.CanCreateNode("other.com/Source"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CanCreateNode cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.DeleteNode(otherA); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("DeleteNode cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.CanDeleteNode(otherA); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CanDeleteNode cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.SetNodePrivate(otherA, "private"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("SetNodePrivate cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.SetNodeMetadata(otherA, map[string]string{"key": "value"}); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("SetNodeMetadata cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.SetNodeMetadataValue(otherA, "key", "value"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetNodeMetadataValue cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.DeleteNodeMetadataValue(otherA, "key"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("DeleteNodeMetadataValue cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.RecallClass("other.com/Source"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("RecallClass cross-library error = %v, want ownership", err)
@@ -271,11 +334,24 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("CreateLink cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.CanCreateLink(
+		FullPortID{Node: otherA, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: ownA, Port: PortID{Number: 1, Kind: OutputPort}},
+		testType,
+	); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CanCreateLink cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.SetLinkWaypoints(otherLink, []string{"p1"}); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("SetLinkWaypoints cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.CanSetLinkWaypoints(otherLink); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CanSetLinkWaypoints cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.DeleteLink(otherLink); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("DeleteLink cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.CanDeleteLink(otherLink); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CanDeleteLink cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.DeleteLink(ownLink); err != nil {
 		t.Fatal(err)
@@ -375,6 +451,32 @@ func TestSetNodeMetadataUpdatesSnapshotsSaveAndCopy(t *testing.T) {
 	if cleared.Dynamic.Metadata != nil {
 		t.Fatalf("metadata = %#v, want nil", cleared.Dynamic.Metadata)
 	}
+	if err := w.SetNodeMetadataValue(node, "one", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetNodeMetadataValue(node, "two", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.DeleteNodeMetadataValue(node, "one"); err != nil {
+		t.Fatal(err)
+	}
+	edited, _ := w.Node(node)
+	if len(edited.Dynamic.Metadata) != 1 || edited.Dynamic.Metadata["two"] != "2" {
+		t.Fatalf("metadata after single-key edits = %#v", edited.Dynamic.Metadata)
+	}
+	if err := w.DeleteNodeMetadataValue(node, "two"); err != nil {
+		t.Fatal(err)
+	}
+	edited, _ = w.Node(node)
+	if edited.Dynamic.Metadata != nil {
+		t.Fatalf("metadata after deleting last key = %#v, want nil", edited.Dynamic.Metadata)
+	}
+	if err := w.SetNodeMetadataValue(999, "key", "value"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetNodeMetadataValue missing node error = %v, want not found", err)
+	}
+	if err := w.DeleteNodeMetadataValue(999, "key"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteNodeMetadataValue missing node error = %v, want not found", err)
+	}
 }
 
 func TestSetNodePrivateUpdatesSnapshotsSaveAndCopy(t *testing.T) {
@@ -413,8 +515,10 @@ func TestSetNodePrivateUpdatesSnapshotsSaveAndCopy(t *testing.T) {
 }
 
 type nodeScopeClass struct {
-	scopes        map[NodeID]NodeScope
-	privateInInit any
+	scopes              map[NodeID]NodeScope
+	privateInInit       any
+	metadataKeyInInit   string
+	metadataValueInInit string
 }
 
 func (c *nodeScopeClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
@@ -423,6 +527,11 @@ func (c *nodeScopeClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (Nod
 	}
 	if c.privateInInit != nil {
 		if err := ctx.Node.SetPrivate(c.privateInInit); err != nil {
+			return nil, err
+		}
+	}
+	if c.metadataKeyInInit != "" {
+		if err := ctx.Node.SetMetadataValue(c.metadataKeyInInit, c.metadataValueInInit); err != nil {
 			return nil, err
 		}
 	}
@@ -477,6 +586,12 @@ func TestNodeScopeUpdatesOwnNodeState(t *testing.T) {
 	if err := scope.SetMetadata(map[string]string{"from": "node"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := scope.SetMetadataValue("single", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.DeleteMetadataValue("from"); err != nil {
+		t.Fatal(err)
+	}
 	nextInputs := []PortSpec{{
 		ID:        PortID{Number: 2, Kind: InputPort},
 		Name:      "next",
@@ -497,7 +612,7 @@ func TestNodeScopeUpdatesOwnNodeState(t *testing.T) {
 	if !ok || private["value"] != "from-node" {
 		t.Fatalf("private = %#v", snap.Dynamic.Private)
 	}
-	if snap.Dynamic.Metadata["from"] != "node" {
+	if len(snap.Dynamic.Metadata) != 1 || snap.Dynamic.Metadata["single"] != "value" {
 		t.Fatalf("metadata = %#v", snap.Dynamic.Metadata)
 	}
 	if len(snap.Inputs) != 1 || snap.Inputs[0].ID.Number != 2 {
@@ -507,8 +622,12 @@ func TestNodeScopeUpdatesOwnNodeState(t *testing.T) {
 
 func TestNodeScopeCanUpdatePrivateStateDuringInit(t *testing.T) {
 	class := ClassSpec{
-		Name:    "example.com/Scoped",
-		Runtime: &nodeScopeClass{privateInInit: "from-init"},
+		Name: "example.com/Scoped",
+		Runtime: &nodeScopeClass{
+			privateInInit:       "from-init",
+			metadataKeyInInit:   "init",
+			metadataValueInInit: "metadata",
+		},
 	}
 	w := NewWorkspace()
 	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
@@ -524,6 +643,9 @@ func TestNodeScopeCanUpdatePrivateStateDuringInit(t *testing.T) {
 	}
 	if snap.Dynamic.Private != "from-init" {
 		t.Fatalf("private = %#v, want from-init", snap.Dynamic.Private)
+	}
+	if snap.Dynamic.Metadata["init"] != "metadata" {
+		t.Fatalf("metadata = %#v, want init metadata", snap.Dynamic.Metadata)
 	}
 }
 
@@ -556,6 +678,12 @@ func TestNodeScopeReportsDeletedAndClosedNodes(t *testing.T) {
 	if err := deletedScope.SetMetadata(map[string]string{"late": "true"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted SetMetadata error = %v, want ErrNotFound", err)
 	}
+	if err := deletedScope.SetMetadataValue("late", "true"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted SetMetadataValue error = %v, want ErrNotFound", err)
+	}
+	if err := deletedScope.DeleteMetadataValue("late"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted DeleteMetadataValue error = %v, want ErrNotFound", err)
+	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -564,6 +692,12 @@ func TestNodeScopeReportsDeletedAndClosedNodes(t *testing.T) {
 	}
 	if err := closedScope.SetMetadata(map[string]string{"late": "true"}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed SetMetadata error = %v, want ErrClosed", err)
+	}
+	if err := closedScope.SetMetadataValue("late", "true"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed SetMetadataValue error = %v, want ErrClosed", err)
+	}
+	if err := closedScope.DeleteMetadataValue("late"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed DeleteMetadataValue error = %v, want ErrClosed", err)
 	}
 }
 
@@ -714,6 +848,106 @@ func TestCanSetNodePortsValidatesWithoutMutation(t *testing.T) {
 	}
 	if snap.Inputs[0].FixedType != testType || len(snap.Inputs[0].AcceptedTypes) != 0 {
 		t.Fatalf("successful CanSetNodePorts should not mutate inputs: %#v", snap.Inputs)
+	}
+}
+
+func TestControllerValidationQueriesDoNotMutate(t *testing.T) {
+	w, _ := testWorkspace(t)
+	if err := w.CanCreateNode("example.com/Source"); err != nil {
+		t.Fatalf("CanCreateNode active class: %v", err)
+	}
+	if err := w.CanCreateNode("example.com/Missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CanCreateNode missing class error = %v, want not found", err)
+	}
+	beforeCreate := w.Snapshot()
+	if len(beforeCreate.Nodes) != 0 {
+		t.Fatalf("CanCreateNode mutated nodes: %#v", beforeCreate.Nodes)
+	}
+
+	a, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}}
+	output := FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}
+	if err := w.CanCreateLink(input, output, testType); err != nil {
+		t.Fatalf("CanCreateLink valid link: %v", err)
+	}
+	beforeLink := w.Snapshot()
+	if len(beforeLink.Links) != 0 {
+		t.Fatalf("CanCreateLink mutated links: %#v", beforeLink.Links)
+	}
+	link, err := w.CreateLink(input, output, LinkOptions{Waypoints: []string{"p1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CanCreateLink(input, FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}, testType); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("CanCreateLink duplicate input error = %v, want multiplicity", err)
+	}
+	if err := w.CanSetLinkWaypoints(link); err != nil {
+		t.Fatalf("CanSetLinkWaypoints existing link: %v", err)
+	}
+	if err := w.CanSetLinkWaypoints(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CanSetLinkWaypoints missing link error = %v, want not found", err)
+	}
+	snap, ok := w.Link(link)
+	if !ok {
+		t.Fatal("link should exist")
+	}
+	if len(snap.Waypoints) != 1 || snap.Waypoints[0] != "p1" {
+		t.Fatalf("CanSetLinkWaypoints mutated waypoints: %#v", snap.Waypoints)
+	}
+	if err := w.CanDeleteLink(link); err != nil {
+		t.Fatalf("CanDeleteLink existing link: %v", err)
+	}
+	if _, ok := w.Link(link); !ok {
+		t.Fatal("CanDeleteLink removed link")
+	}
+	if err := w.CanDeleteNode(a); err != nil {
+		t.Fatalf("CanDeleteNode existing node: %v", err)
+	}
+	if _, ok := w.Node(a); !ok {
+		t.Fatal("CanDeleteNode removed node")
+	}
+	if err := w.CanDeleteNode(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CanDeleteNode missing node error = %v, want not found", err)
+	}
+}
+
+func TestValidationQueriesReportClosedWorkspace(t *testing.T) {
+	w, _ := testWorkspace(t)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CanCreateNode("example.com/Source"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CanCreateNode closed error = %v, want closed", err)
+	}
+	if err := w.CanDeleteNode(node); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CanDeleteNode closed error = %v, want closed", err)
+	}
+	if err := w.CanCreateLink(
+		FullPortID{Node: node, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: node, Port: PortID{Number: 1, Kind: OutputPort}},
+		testType,
+	); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CanCreateLink closed error = %v, want closed", err)
+	}
+	if err := w.CanSetNodePorts(node, nil, nil); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CanSetNodePorts closed error = %v, want closed", err)
+	}
+	if err := w.CanSetLinkWaypoints(1); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CanSetLinkWaypoints closed error = %v, want closed", err)
+	}
+	if err := w.CanDeleteLink(1); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CanDeleteLink closed error = %v, want closed", err)
 	}
 }
 

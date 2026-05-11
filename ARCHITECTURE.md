@@ -8,10 +8,20 @@ as a DAG.
 ## Boundaries
 
 `Workspace` is the owner/controller API. `WorkspaceRO` exposes defensive
-snapshots for renderers and inspectors. `LibraryScope` limits a library to
-defining its own classes and mutating nodes and links owned by that same library.
-`NodeScope` is passed to node runtimes and limits them to mutating their own
-node state, private data, coordinates, and ports.
+snapshots and targeted class queries for renderers and inspectors.
+`LibraryScope` limits a library to defining its own classes, querying its own
+classes, and mutating nodes and links owned by that same library. `NodeScope` is
+passed to node runtimes and limits them to mutating their own node state,
+private data, coordinates, and ports.
+
+Controller-facing `Can...` methods validate common edits without changing the
+model. They cover node creation/deletion, link creation/deletion, link waypoint
+updates, and linked port replacement. Library-scoped query methods apply the
+same ownership checks as their corresponding scoped mutations.
+
+Node metadata can be replaced as a whole map or edited one key at a time through
+the workspace, library-scoped, and node-scoped mutation APIs. Snapshots and
+persistence always receive defensive metadata copies.
 
 Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects

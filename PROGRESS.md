@@ -38,10 +38,14 @@ layout because the repo root is not itself a Go module.
 - Public node state updates and opaque node coordinate storage.
 - Public node metadata updates through workspace, library-scoped, and
   node-scoped APIs.
+- Single-key public node metadata editing helpers through workspace,
+  library-scoped, and node-scoped APIs.
 - Synchronized private node state updates through workspace and library-scoped APIs.
 - Node-scoped runtime API for a node to update its own state, private data,
   coordinates, and ports through workspace validation and locking.
 - Read-only class lookup for editor/controller and runtime inspection.
+- Deterministic read-only class list queries for all classes and
+  library-filtered classes.
 - Optional private state export/import hooks for runtime-owned state.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
@@ -66,6 +70,10 @@ layout because the repo root is not itself a Go module.
 - Link type compatibility validation.
 - Input port multiplicity validation.
 - Non-mutating validation query for proposed node port replacement.
+- Non-mutating validation queries for node creation, node deletion, link
+  creation, link waypoint updates, and link deletion.
+- Library-scoped validation queries with the same ownership boundaries as
+  scoped mutations.
 - DAG enforcement for links.
 - Opaque link waypoint storage.
 - Active and inactive state propagation for class recall and library unregister.
@@ -95,7 +103,7 @@ layout because the repo root is not itself a Go module.
   - inactive link preservation
   - broken link removal
   - linked port update validation
-  - non-mutating port update validation queries
+  - non-mutating controller validation queries
   - save/restore
   - configer-backed save/restore round trip
   - deterministic save output
@@ -103,7 +111,7 @@ layout because the repo root is not itself a Go module.
   - broken persisted link skipping
   - invalid persisted link constraints and rollback
   - copy/paste ID remapping
-  - node metadata update helpers and defensive metadata snapshots
+  - node metadata update helpers, single-key edits, and defensive metadata snapshots
   - private state updates in snapshots, save, and copy
   - lifecycle hook order
   - restore lifecycle initialization and rollback
@@ -114,7 +122,7 @@ layout because the repo root is not itself a Go module.
   - panic recovery across lifecycle hook families
   - library-scoped ownership enforcement for classes, nodes, and links
   - library-scoped link waypoint updates
-  - read-only class lookup and defensive class snapshots
+  - read-only class lookup/list queries and defensive class snapshots
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback
   - class definition recovery pruning incompatible restored links
@@ -142,11 +150,6 @@ go vet ./pasta/...
 
 - Complete node lifecycle hooks:
   - richer link deleted/inactivated notifications if needed by link contracts
-- Expand controller/query APIs:
-  - possible class queries
-  - richer "can I do this?" validation queries
-  - metadata editing helpers
-  - disable/enable APIs if needed
 - Add tests for any remaining restore edge cases and inactive recovery paths as
   lifecycle and persistence contracts evolve.
 - Expand `ARCHITECTURE.md` after lifecycle and persistence contracts are final.

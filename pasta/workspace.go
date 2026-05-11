@@ -450,6 +450,42 @@ func (w *Workspace) SetNodeMetadata(id NodeID, metadata map[string]string) error
 	return nil
 }
 
+// SetNodeMetadataValue sets one editable public metadata value on a node.
+func (w *Workspace) SetNodeMetadataValue(id NodeID, key, value string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.checkOpenLocked("set node metadata value"); err != nil {
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		return opErr("set node metadata value", "validate", ErrNotFound)
+	}
+	if node.dynamic.Metadata == nil {
+		node.dynamic.Metadata = make(map[string]string, 1)
+	}
+	node.dynamic.Metadata[key] = value
+	return nil
+}
+
+// DeleteNodeMetadataValue removes one editable public metadata value from a node.
+func (w *Workspace) DeleteNodeMetadataValue(id NodeID, key string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.checkOpenLocked("delete node metadata value"); err != nil {
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		return opErr("delete node metadata value", "validate", ErrNotFound)
+	}
+	delete(node.dynamic.Metadata, key)
+	if len(node.dynamic.Metadata) == 0 {
+		node.dynamic.Metadata = nil
+	}
+	return nil
+}
+
 // SetNodeState replaces editable public/private node state while preserving class and ports.
 func (w *Workspace) SetNodeState(id NodeID, state NodeState) error {
 	w.mu.Lock()
@@ -733,10 +769,43 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 	return newNodes, newLinks, nil
 }
 
+// CanCreateNode validates node creation without mutating the workspace.
+func (w *Workspace) CanCreateNode(className string) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err := w.checkOpenLocked("can create node"); err != nil {
+		return err
+	}
+	class, ok := w.classes[className]
+	if !ok {
+		return opErr("can create node", "validate", ErrNotFound)
+	}
+	if !class.active {
+		return opErr("can create node", "validate", ErrInactive)
+	}
+	return nil
+}
+
+// CanDeleteNode validates node deletion without mutating the workspace.
+func (w *Workspace) CanDeleteNode(id NodeID) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err := w.checkOpenLocked("can delete node"); err != nil {
+		return err
+	}
+	if _, ok := w.nodes[id]; !ok {
+		return opErr("can delete node", "validate", ErrNotFound)
+	}
+	return nil
+}
+
 // CanCreateLink validates a proposed link without mutating the workspace.
 func (w *Workspace) CanCreateLink(input, output FullPortID, typ string) error {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	if err := w.checkOpenLocked("can create link"); err != nil {
+		return err
+	}
 	_, err := w.validateLinkLocked(input, output, typ, 0)
 	if err != nil {
 		return opErr("can create link", "validate", err)
@@ -748,8 +817,37 @@ func (w *Workspace) CanCreateLink(input, output FullPortID, typ string) error {
 func (w *Workspace) CanSetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if err := w.checkOpenLocked("can set node ports"); err != nil {
+		return err
+	}
 	if err := w.canSetNodePortsLocked(id, inputs, outputs); err != nil {
 		return opErr("can set node ports", "validate", err)
+	}
+	return nil
+}
+
+// CanSetLinkWaypoints validates link waypoint replacement without mutating the workspace.
+func (w *Workspace) CanSetLinkWaypoints(id LinkID) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err := w.checkOpenLocked("can set link waypoints"); err != nil {
+		return err
+	}
+	if _, ok := w.links[id]; !ok {
+		return opErr("can set link waypoints", "validate", ErrNotFound)
+	}
+	return nil
+}
+
+// CanDeleteLink validates link deletion without mutating the workspace.
+func (w *Workspace) CanDeleteLink(id LinkID) error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err := w.checkOpenLocked("can delete link"); err != nil {
+		return err
+	}
+	if _, ok := w.links[id]; !ok {
+		return opErr("can delete link", "validate", ErrNotFound)
 	}
 	return nil
 }
@@ -770,6 +868,20 @@ func (w *Workspace) Class(name string) (ClassSnapshot, bool) {
 		return ClassSnapshot{}, false
 	}
 	return snapshotClass(class), true
+}
+
+// Classes returns deterministic defensive class snapshots.
+func (w *Workspace) Classes() []ClassSnapshot {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.classesByLibraryLocked("")
+}
+
+// ClassesByLibrary returns deterministic defensive class snapshots for one library.
+func (w *Workspace) ClassesByLibrary(library string) []ClassSnapshot {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.classesByLibraryLocked(library)
 }
 
 // Node returns one node snapshot.
@@ -1185,10 +1297,7 @@ func (w *Workspace) snapshotLocked() Snapshot {
 		s.Libraries = append(s.Libraries, LibrarySnapshot{Name: name, Active: true})
 	}
 	sort.Slice(s.Libraries, func(i, j int) bool { return s.Libraries[i].Name < s.Libraries[j].Name })
-	for _, class := range w.classes {
-		s.Classes = append(s.Classes, snapshotClass(class))
-	}
-	sort.Slice(s.Classes, func(i, j int) bool { return s.Classes[i].Spec.Name < s.Classes[j].Spec.Name })
+	s.Classes = w.classesByLibraryLocked("")
 	for _, node := range w.nodes {
 		s.Nodes = append(s.Nodes, snapshotNode(node))
 	}
@@ -1198,6 +1307,18 @@ func (w *Workspace) snapshotLocked() Snapshot {
 	}
 	sort.Slice(s.Links, func(i, j int) bool { return s.Links[i].ID < s.Links[j].ID })
 	return s
+}
+
+func (w *Workspace) classesByLibraryLocked(library string) []ClassSnapshot {
+	classes := make([]ClassSnapshot, 0, len(w.classes))
+	for _, class := range w.classes {
+		if library != "" && class.library != library {
+			continue
+		}
+		classes = append(classes, snapshotClass(class))
+	}
+	sort.Slice(classes, func(i, j int) bool { return classes[i].Spec.Name < classes[j].Spec.Name })
+	return classes
 }
 
 func snapshotClass(class *classRecord) ClassSnapshot {
@@ -1281,11 +1402,33 @@ func (s *libraryScope) RecallClass(className string) error {
 	return s.w.RecallClass(s.library, className)
 }
 
+func (s *libraryScope) Classes() []ClassSnapshot {
+	return s.w.ClassesByLibrary(s.library)
+}
+
+func (s *libraryScope) CanCreateNode(className string) error {
+	if !ValidClassName(s.library, className) {
+		return opErr("scope can create node", "validate", ErrOwnership)
+	}
+	return s.w.CanCreateNode(className)
+}
+
 func (s *libraryScope) CreateNode(className string, opts NodeOptions) (NodeID, error) {
 	if !ValidClassName(s.library, className) {
 		return 0, opErr("scope create node", "validate", ErrOwnership)
 	}
 	return s.w.CreateNode(className, opts)
+}
+
+func (s *libraryScope) CanDeleteNode(id NodeID) error {
+	s.w.mu.RLock()
+	node, ok := s.w.nodes[id]
+	owned := ok && node.library == s.library
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope can delete node", "validate", ErrOwnership)
+	}
+	return s.w.CanDeleteNode(id)
 }
 
 func (s *libraryScope) DeleteNode(id NodeID) error {
@@ -1321,6 +1464,40 @@ func (s *libraryScope) SetNodeMetadata(id NodeID, metadata map[string]string) er
 	return s.w.SetNodeMetadata(id, metadata)
 }
 
+func (s *libraryScope) SetNodeMetadataValue(id NodeID, key, value string) error {
+	s.w.mu.RLock()
+	node, ok := s.w.nodes[id]
+	owned := ok && node.library == s.library
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node metadata value", "validate", ErrOwnership)
+	}
+	return s.w.SetNodeMetadataValue(id, key, value)
+}
+
+func (s *libraryScope) DeleteNodeMetadataValue(id NodeID, key string) error {
+	s.w.mu.RLock()
+	node, ok := s.w.nodes[id]
+	owned := ok && node.library == s.library
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope delete node metadata value", "validate", ErrOwnership)
+	}
+	return s.w.DeleteNodeMetadataValue(id, key)
+}
+
+func (s *libraryScope) CanCreateLink(input, output FullPortID, typ string) error {
+	s.w.mu.RLock()
+	inNode, inOK := s.w.nodes[input.Node]
+	outNode, outOK := s.w.nodes[output.Node]
+	owned := inOK && outOK && inNode.library == s.library && outNode.library == s.library
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope can create link", "validate", ErrOwnership)
+	}
+	return s.w.CanCreateLink(input, output, typ)
+}
+
 func (s *libraryScope) CreateLink(input, output FullPortID, opts LinkOptions) (LinkID, error) {
 	s.w.mu.RLock()
 	inNode, inOK := s.w.nodes[input.Node]
@@ -1333,6 +1510,16 @@ func (s *libraryScope) CreateLink(input, output FullPortID, opts LinkOptions) (L
 	return s.w.CreateLink(input, output, opts)
 }
 
+func (s *libraryScope) CanSetLinkWaypoints(id LinkID) error {
+	s.w.mu.RLock()
+	owned := s.ownsLinkLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope can set link waypoints", "validate", ErrOwnership)
+	}
+	return s.w.CanSetLinkWaypoints(id)
+}
+
 func (s *libraryScope) SetLinkWaypoints(id LinkID, waypoints []string) error {
 	s.w.mu.RLock()
 	owned := s.ownsLinkLocked(id)
@@ -1341,6 +1528,16 @@ func (s *libraryScope) SetLinkWaypoints(id LinkID, waypoints []string) error {
 		return opErr("scope set link waypoints", "validate", ErrOwnership)
 	}
 	return s.w.SetLinkWaypoints(id, waypoints)
+}
+
+func (s *libraryScope) CanDeleteLink(id LinkID) error {
+	s.w.mu.RLock()
+	owned := s.ownsLinkLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope can delete link", "validate", ErrOwnership)
+	}
+	return s.w.CanDeleteLink(id)
 }
 
 func (s *libraryScope) DeleteLink(id LinkID) error {
@@ -1429,6 +1626,34 @@ func (s *nodeScope) SetMetadata(metadata map[string]string) error {
 	}
 	return s.updateInitRecord(func(rec *nodeRecord) error {
 		rec.dynamic.Metadata = cloneStringMap(metadata)
+		return nil
+	})
+}
+
+func (s *nodeScope) SetMetadataValue(key, value string) error {
+	err := s.w.SetNodeMetadataValue(s.id, key, value)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		if rec.dynamic.Metadata == nil {
+			rec.dynamic.Metadata = make(map[string]string, 1)
+		}
+		rec.dynamic.Metadata[key] = value
+		return nil
+	})
+}
+
+func (s *nodeScope) DeleteMetadataValue(key string) error {
+	err := s.w.DeleteNodeMetadataValue(s.id, key)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		delete(rec.dynamic.Metadata, key)
+		if len(rec.dynamic.Metadata) == 0 {
+			rec.dynamic.Metadata = nil
+		}
 		return nil
 	})
 }
