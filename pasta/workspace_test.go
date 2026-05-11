@@ -293,8 +293,14 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	if err := own.scope.CanDeleteNode(otherA); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("CanDeleteNode cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.SetNodeState(otherA, NodeState{DisplayName: "owned"}); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetNodeState cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.SetNodePrivate(otherA, "private"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("SetNodePrivate cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.SetNodeCoordinate(otherA, "x:1"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetNodeCoordinate cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.SetNodeMetadata(otherA, map[string]string{"key": "value"}); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("SetNodeMetadata cross-library error = %v, want ownership", err)
@@ -304,6 +310,12 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	}
 	if err := own.scope.DeleteNodeMetadataValue(otherA, "key"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("DeleteNodeMetadataValue cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.CanSetNodePorts(otherA, nil, nil); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CanSetNodePorts cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.SetNodePorts(otherA, nil, nil); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetNodePorts cross-library error = %v, want ownership", err)
 	}
 	if err := own.scope.RecallClass("other.com/Source"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("RecallClass cross-library error = %v, want ownership", err)
@@ -352,6 +364,34 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	}
 	if err := own.scope.CanDeleteLink(otherLink); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("CanDeleteLink cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.SetNodeState(ownA, NodeState{DisplayName: "owned node"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := own.scope.SetNodeCoordinate(ownA, "x:1"); err != nil {
+		t.Fatal(err)
+	}
+	nextInputs := []PortSpec{{
+		ID:        PortID{Number: 1, Kind: InputPort},
+		Name:      "in",
+		Direction: InputPort,
+		FixedType: testType,
+		Multiple:  true,
+	}}
+	nextOutputs := []PortSpec{{
+		ID:        PortID{Number: 1, Kind: OutputPort},
+		Name:      "out",
+		Direction: OutputPort,
+		FixedType: testType,
+	}}
+	if err := own.scope.CanSetNodePorts(ownA, nextInputs, nextOutputs); err != nil {
+		t.Fatal(err)
+	}
+	if err := own.scope.SetNodePorts(ownA, nextInputs, nextOutputs); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := w.Node(ownA); !ok || got.Dynamic.DisplayName != "owned node" || got.Dynamic.Coordinate != "x:1" || len(got.Inputs) != 1 || !got.Inputs[0].Multiple {
+		t.Fatalf("owned node after scoped updates = %#v, ok %v", got, ok)
 	}
 	if err := own.scope.DeleteLink(ownLink); err != nil {
 		t.Fatal(err)
@@ -987,6 +1027,28 @@ func TestSaveRestoreAndPasteRemapIDs(t *testing.T) {
 	}
 }
 
+func TestPasteRejectsInvalidSavedPortsAndPreservesWorkspace(t *testing.T) {
+	w, _ := testWorkspace(t)
+	before := w.Save()
+	clip := Clipboard{Nodes: []SaveNode{{
+		ID:    "1N",
+		Class: "example.com/Source",
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "wrong",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+	}}}
+	if _, _, err := w.Paste(clip); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("Paste error = %v, want invalid port", err)
+	}
+	after := w.Save()
+	if fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("paste should preserve workspace, got %#v want %#v", after, before)
+	}
+}
+
 func TestSaveConfigRestoreConfigRoundTrip(t *testing.T) {
 	w, _ := testWorkspace(t)
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
@@ -1156,6 +1218,13 @@ func TestRestoreRejectsInvalidPersistedNodesAndPreservesWorkspace(t *testing.T) 
 				{ID: "1N", Class: "example.com/Source"},
 			},
 			err: ErrDuplicate,
+		},
+		{
+			name: "invalid missing class name",
+			nodes: []SaveNode{
+				{ID: "1N", Class: "example.com/source"},
+			},
+			err: ErrInvalidName,
 		},
 		{
 			name: "invalid saved port",
@@ -2154,7 +2223,8 @@ func TestDefineClassReactivatesRestoredNodesAndLinks(t *testing.T) {
 	}
 	runtime := &lifecycleClass{}
 	w := NewWorkspace()
-	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+	lib := &captureScopeLibrary{name: "example.com"}
+	if err := w.RegisterLibrary(lib); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Restore(data); err != nil {
@@ -2178,6 +2248,12 @@ func TestDefineClassReactivatesRestoredNodesAndLinks(t *testing.T) {
 	after := w.Snapshot()
 	if after.Nodes[0].State != StateActive || after.Nodes[1].State != StateActive || after.Links[0].State != StateActive {
 		t.Fatalf("after define = %#v", after)
+	}
+	if after.Nodes[0].Library != "example.com" || after.Nodes[1].Library != "example.com" {
+		t.Fatalf("recovered node libraries = %#v, want example.com ownership", after.Nodes)
+	}
+	if err := lib.scope.SetNodeMetadata(after.Nodes[0].ID, map[string]string{"owner": "library"}); err != nil {
+		t.Fatalf("library scope should own recovered node: %v", err)
 	}
 	want := []string{"init:restore", "init:restore"}
 	if fmt.Sprint(log) != fmt.Sprint(want) {
@@ -2821,6 +2897,74 @@ func TestLifecycleDefineClassPrunedLinkSendsDetachNotification(t *testing.T) {
 	}
 	if fmt.Sprint(*log) != fmt.Sprint(want) {
 		t.Fatalf("log = %#v, want %#v", *log, want)
+	}
+}
+
+func TestLifecycleRegisterLibraryPrunedRecoveredLinkSendsDetachNotification(t *testing.T) {
+	data := SaveData{
+		NextNode: 3,
+		NextLink: 2,
+		Nodes: []SaveNode{
+			{
+				ID:    "1N",
+				Class: "example.com/Source",
+				Outputs: []PortSpec{{
+					ID:        PortID{Number: 1, Kind: OutputPort},
+					Name:      "out",
+					Direction: OutputPort,
+					FixedType: testType,
+				}},
+			},
+			{
+				ID:    "2N",
+				Class: "example.com/Source",
+				Inputs: []PortSpec{{
+					ID:        PortID{Number: 1, Kind: InputPort},
+					Name:      "in",
+					Direction: InputPort,
+					FixedType: testType,
+				}},
+			},
+		},
+		Links: []SaveLink{{
+			Name: "1L:2N1i:1N1o",
+			Type: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	log := []string{}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Source",
+		Runtime: &lifecycleClass{log: &log, nodes: map[NodeID]*lifecycleNode{}},
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: "example.com/float",
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Link(1); ok {
+		t.Fatal("incompatible recovered link should be pruned")
+	}
+	want := []string{
+		"init:restore",
+		"init:restore",
+		"detach-after:input:1",
+		"detach-after:output:1",
+	}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", log, want)
 	}
 }
 

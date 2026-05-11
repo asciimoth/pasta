@@ -32,8 +32,8 @@ layout because the repo root is not itself a Go module.
 - `Workspace` storage protected by `sync.RWMutex`.
 - Defensive read-only snapshots for workspace, nodes, and links.
 - Library registration and unregister.
-- Library-scoped class definition, class recall, node mutation, and link
-  mutation.
+- Library-scoped class definition, class recall, node state/coordinate/port
+  mutation, and link mutation.
 - Node creation and deletion.
 - Public node state updates and opaque node coordinate storage.
 - Public node metadata updates through workspace, library-scoped, and
@@ -63,6 +63,8 @@ layout because the repo root is not itself a Go module.
 - Before/after link detach hooks for direct link deletion and node deletion.
 - Committed after-detach notifications for links pruned as broken during class
   redefinition.
+- Committed after-detach notifications for recovered inactive links pruned
+  during library registration.
 - Link inactive notifications when preserved links become inactive.
 - Before/after node inactive hooks for class recall, library unregister, and
   workspace close.
@@ -83,6 +85,7 @@ layout because the repo root is not itself a Go module.
 - Deterministic removal of preserved links that become invalid during inactive
   recovery because of port type or multiplicity changes.
 - Copy/paste for selected nodes and internal links with ID remapping.
+- Paste validates clipboard node ports before initialization and commit.
 - Deterministic `SaveData` DTOs and basic restore path.
 - `github.com/asciimoth/configer/configer` save/restore adapter helpers.
 - Restore skips broken persisted links, but rejects invalid persisted link
@@ -94,6 +97,7 @@ layout because the repo root is not itself a Go module.
 - Late class definition can reactivate preserved inactive nodes and links.
 - Class recall recovery reinitializes recovered node runtimes.
 - Library unregister/register recovery reinitializes recovered node runtimes.
+- Late class definition restores library ownership for recovered nodes.
 - Library registration rolls back partial class definitions and reactivation on
   hook errors or panics.
 - Initial `ARCHITECTURE.md` and `AGENTS.md`.
@@ -113,10 +117,11 @@ layout because the repo root is not itself a Go module.
   - deterministic save output
   - deterministic restore initialization order
   - broken persisted link skipping
-  - invalid persisted node IDs, duplicate node IDs, invalid saved ports, and
-    rollback
+  - invalid persisted node IDs, duplicate node IDs, invalid persisted class
+    names, invalid saved ports, and rollback
   - invalid persisted link constraints and rollback
   - copy/paste ID remapping
+  - invalid clipboard ports and paste rollback
   - node metadata update helpers, single-key edits, and defensive metadata snapshots
   - private state updates in snapshots, save, and copy
   - lifecycle hook order
@@ -126,16 +131,19 @@ layout because the repo root is not itself a Go module.
   - link creation revalidation after concurrent interleavings
   - inactive hook notifications and rollback
   - panic recovery across lifecycle hook families
-  - library-scoped ownership enforcement for classes, nodes, and links
+  - library-scoped ownership enforcement for classes, node state/coordinate/port
+    edits, and links
   - library-scoped link waypoint updates
   - read-only class lookup/list queries and defensive class snapshots
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback
+  - library ownership restoration for recovered nodes
   - class definition recovery pruning incompatible restored links
   - library unregister/register recovery and rollback
   - explicit lifecycle hook order for node deletion and workspace close with
     attached links
   - detach notifications for links pruned as broken during class redefinition
+    and library registration recovery
   - runtime close/shutdown on delete, inactive transitions, and workspace close
   - runtime private state export/import, defensive copy behavior, and rollback
     on hook failures

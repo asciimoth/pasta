@@ -153,10 +153,12 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 			err = opErr("register library", "hook", fmt.Errorf("panic: %v", r))
 		}
 	}()
-	if err := lib.DefineClasses(&libraryScope{w: w, library: name}); err != nil {
+	var detachEvents []linkDetachEvent
+	if err := lib.DefineClasses(&libraryScope{w: w, library: name, detachEvents: &detachEvents}); err != nil {
 		rollback()
 		return opErr("register library", "hook", err)
 	}
+	w.callAfterLinkDetachEvents(detachEvents)
 	return nil
 }
 
@@ -210,6 +212,10 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 
 // DefineClass defines or replaces an active class for a registered library.
 func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
+	return w.defineClass(library, spec, nil)
+}
+
+func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent) error {
 	w.mu.Lock()
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
@@ -276,7 +282,11 @@ func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
 		}
 	}
 	w.mu.Unlock()
-	w.callAfterLinkDetachEvents(detachEvents)
+	if deferDetachEvents != nil {
+		*deferDetachEvents = append(*deferDetachEvents, detachEvents...)
+	} else {
+		w.callAfterLinkDetachEvents(detachEvents)
+	}
 	return nil
 }
 
@@ -703,6 +713,13 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		}
 		w.mu.Lock()
 		id, rec, runtimeClass, err := w.prepareCreateNodeLocked(saved.Class, NodeOptions{State: saved.State, UseState: true}, InitRestore)
+		if err == nil {
+			err = w.applySavedNodePortsLocked(rec, saved.Inputs, saved.Outputs)
+			if err != nil {
+				w.rollbackPreparedNodeLocked(id)
+				err = opErr("paste", "validate", err)
+			}
+		}
 		w.mu.Unlock()
 		if err != nil {
 			return nil, nil, err
@@ -739,8 +756,6 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		}
 		node := w.nodes[id]
 		node.runtime = runtime
-		node.inputs = clonePorts(saved.Inputs)
-		node.outputs = clonePorts(saved.Outputs)
 		w.mu.Unlock()
 		nodeMap[oldID] = id
 		newNodes = append(newNodes, id)
@@ -926,6 +941,7 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDet
 	w.classes[spec.Name] = &classRecord{spec: cloneClassSpec(spec), library: library, active: true}
 	for _, node := range w.nodes {
 		if node.class == spec.Name {
+			node.library = library
 			node.inputs = clonePorts(spec.Inputs)
 			node.outputs = clonePorts(spec.Outputs)
 		}
@@ -982,6 +998,22 @@ func (w *Workspace) prepareCreateNodeLocked(className string, opts NodeOptions, 
 		outputs: clonePorts(class.spec.Outputs),
 	}
 	return id, rec, class.spec.Runtime, nil
+}
+
+func (w *Workspace) applySavedNodePortsLocked(rec *nodeRecord, inputs, outputs []PortSpec) error {
+	if len(inputs) > 0 {
+		if err := validatePorts(inputs, InputPort); err != nil {
+			return err
+		}
+		rec.inputs = clonePorts(inputs)
+	}
+	if len(outputs) > 0 {
+		if err := validatePorts(outputs, OutputPort); err != nil {
+			return err
+		}
+		rec.outputs = clonePorts(outputs)
+	}
+	return nil
 }
 
 func (w *Workspace) rollbackPreparedNodeLocked(id NodeID) {
@@ -1398,12 +1430,13 @@ func (w *Workspace) logPanic(op string, r any) {
 }
 
 type libraryScope struct {
-	w       *Workspace
-	library string
+	w            *Workspace
+	library      string
+	detachEvents *[]linkDetachEvent
 }
 
 func (s *libraryScope) DefineClass(spec ClassSpec) error {
-	return s.w.DefineClass(s.library, spec)
+	return s.w.defineClass(s.library, spec, s.detachEvents)
 }
 
 func (s *libraryScope) RecallClass(className string) error {
@@ -1430,8 +1463,7 @@ func (s *libraryScope) CreateNode(className string, opts NodeOptions) (NodeID, e
 
 func (s *libraryScope) CanDeleteNode(id NodeID) error {
 	s.w.mu.RLock()
-	node, ok := s.w.nodes[id]
-	owned := ok && node.library == s.library
+	owned := s.ownsNodeLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope can delete node", "validate", ErrOwnership)
@@ -1441,8 +1473,7 @@ func (s *libraryScope) CanDeleteNode(id NodeID) error {
 
 func (s *libraryScope) DeleteNode(id NodeID) error {
 	s.w.mu.RLock()
-	node, ok := s.w.nodes[id]
-	owned := ok && node.library == s.library
+	owned := s.ownsNodeLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope delete node", "validate", ErrOwnership)
@@ -1450,10 +1481,19 @@ func (s *libraryScope) DeleteNode(id NodeID) error {
 	return s.w.DeleteNode(id)
 }
 
+func (s *libraryScope) SetNodeState(id NodeID, state NodeState) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node state", "validate", ErrOwnership)
+	}
+	return s.w.SetNodeState(id, state)
+}
+
 func (s *libraryScope) SetNodePrivate(id NodeID, private any) error {
 	s.w.mu.RLock()
-	node, ok := s.w.nodes[id]
-	owned := ok && node.library == s.library
+	owned := s.ownsNodeLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope set node private", "validate", ErrOwnership)
@@ -1461,10 +1501,19 @@ func (s *libraryScope) SetNodePrivate(id NodeID, private any) error {
 	return s.w.SetNodePrivate(id, private)
 }
 
+func (s *libraryScope) SetNodeCoordinate(id NodeID, coordinate string) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node coordinate", "validate", ErrOwnership)
+	}
+	return s.w.SetNodeCoordinate(id, coordinate)
+}
+
 func (s *libraryScope) SetNodeMetadata(id NodeID, metadata map[string]string) error {
 	s.w.mu.RLock()
-	node, ok := s.w.nodes[id]
-	owned := ok && node.library == s.library
+	owned := s.ownsNodeLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope set node metadata", "validate", ErrOwnership)
@@ -1474,8 +1523,7 @@ func (s *libraryScope) SetNodeMetadata(id NodeID, metadata map[string]string) er
 
 func (s *libraryScope) SetNodeMetadataValue(id NodeID, key, value string) error {
 	s.w.mu.RLock()
-	node, ok := s.w.nodes[id]
-	owned := ok && node.library == s.library
+	owned := s.ownsNodeLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope set node metadata value", "validate", ErrOwnership)
@@ -1485,13 +1533,32 @@ func (s *libraryScope) SetNodeMetadataValue(id NodeID, key, value string) error 
 
 func (s *libraryScope) DeleteNodeMetadataValue(id NodeID, key string) error {
 	s.w.mu.RLock()
-	node, ok := s.w.nodes[id]
-	owned := ok && node.library == s.library
+	owned := s.ownsNodeLocked(id)
 	s.w.mu.RUnlock()
 	if !owned {
 		return opErr("scope delete node metadata value", "validate", ErrOwnership)
 	}
 	return s.w.DeleteNodeMetadataValue(id, key)
+}
+
+func (s *libraryScope) CanSetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope can set node ports", "validate", ErrOwnership)
+	}
+	return s.w.CanSetNodePorts(id, inputs, outputs)
+}
+
+func (s *libraryScope) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node ports", "validate", ErrOwnership)
+	}
+	return s.w.SetNodePorts(id, inputs, outputs)
 }
 
 func (s *libraryScope) CanCreateLink(input, output FullPortID, typ string) error {
@@ -1556,6 +1623,11 @@ func (s *libraryScope) DeleteLink(id LinkID) error {
 		return opErr("scope delete link", "validate", ErrOwnership)
 	}
 	return s.w.DeleteLink(id)
+}
+
+func (s *libraryScope) ownsNodeLocked(id NodeID) bool {
+	node, ok := s.w.nodes[id]
+	return ok && node.library == s.library
 }
 
 func (s *libraryScope) ownsLinkLocked(id LinkID) bool {

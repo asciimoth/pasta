@@ -242,10 +242,14 @@ type LibraryScope interface {
 	CreateNode(string, NodeOptions) (NodeID, error)
 	CanDeleteNode(NodeID) error
 	DeleteNode(NodeID) error
+	SetNodeState(NodeID, NodeState) error
 	SetNodePrivate(NodeID, any) error
+	SetNodeCoordinate(NodeID, string) error
 	SetNodeMetadata(NodeID, map[string]string) error
 	SetNodeMetadataValue(NodeID, string, string) error
 	DeleteNodeMetadataValue(NodeID, string) error
+	CanSetNodePorts(NodeID, []PortSpec, []PortSpec) error
+	SetNodePorts(NodeID, []PortSpec, []PortSpec) error
 	CanCreateLink(FullPortID, FullPortID, string) error
 	CreateLink(FullPortID, FullPortID, LinkOptions) (LinkID, error)
 	CanSetLinkWaypoints(LinkID) error

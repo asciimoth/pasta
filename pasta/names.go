@@ -41,6 +41,11 @@ func ValidClassName(libraryName, className string) bool {
 	return ok && local != "" && isASCIIUpper(local[0])
 }
 
+func validPersistedClassName(className string) bool {
+	library, local, ok := strings.Cut(className, "/")
+	return ok && local != "" && ValidClassName(library, className)
+}
+
 // ValidTypeName reports whether typeName is a valid namespaced type name.
 func ValidTypeName(typeName string) bool {
 	if !ValidQualifiedName(typeName) {

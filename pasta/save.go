@@ -155,6 +155,9 @@ func (w *Workspace) Restore(data SaveData) error {
 		if _, exists := nodes[id]; exists {
 			return opErr("restore", "validate", ErrDuplicate)
 		}
+		if !validPersistedClassName(saved.Class) {
+			return opErr("restore", "validate", ErrInvalidName)
+		}
 		class := w.classes[saved.Class]
 		library := ""
 		state := StateInactive

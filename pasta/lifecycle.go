@@ -187,6 +187,20 @@ func (w *Workspace) callLinkInactiveEvents(events []linkInactiveEvent, reason In
 
 func (w *Workspace) callAfterLinkDetachEvents(events []linkDetachEvent) {
 	for _, event := range events {
+		if event.inputRuntime == nil || event.outputRuntime == nil {
+			w.mu.RLock()
+			if event.inputRuntime == nil {
+				if node := w.nodes[event.inputEndpoint.Self.Node]; node != nil {
+					event.inputRuntime = node.runtime
+				}
+			}
+			if event.outputRuntime == nil {
+				if node := w.nodes[event.outputEndpoint.Self.Node]; node != nil {
+					event.outputRuntime = node.runtime
+				}
+			}
+			w.mu.RUnlock()
+		}
 		w.callAfterLinkDetach(event.inputRuntime, event.inputEndpoint)
 		w.callAfterLinkDetach(event.outputRuntime, event.outputEndpoint)
 	}
