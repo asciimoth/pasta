@@ -201,8 +201,72 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 // DefineClass defines or replaces an active class for a registered library.
 func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.defineClassLocked(library, spec)
+	oldClasses := cloneClassRecords(w.classes)
+	oldNodes := cloneNodeRecords(w.nodes)
+	oldLinks := cloneLinkRecords(w.links)
+	err := w.defineClassLocked(library, spec)
+	if err != nil {
+		w.mu.Unlock()
+		return err
+	}
+	initNodes := w.reactivatedInitNodesLocked(spec.Name, oldNodes)
+	w.mu.Unlock()
+
+	runtimes := make(map[NodeID]NodeRuntime, len(initNodes))
+	scopes := make(map[NodeID]*nodeScope, len(initNodes))
+	for _, initNode := range initNodes {
+		runtime, scope, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
+		if err != nil {
+			for _, scope := range scopes {
+				if scope != nil {
+					scope.finishInit()
+				}
+			}
+			w.mu.Lock()
+			w.classes = oldClasses
+			w.nodes = oldNodes
+			w.links = oldLinks
+			w.mu.Unlock()
+			return err
+		}
+		runtimes[initNode.record.id] = runtime
+		scopes[initNode.record.id] = scope
+	}
+
+	w.mu.Lock()
+	if err := w.checkOpenLocked("define class"); err != nil {
+		for _, scope := range scopes {
+			if scope != nil {
+				scope.finishInit()
+			}
+		}
+		w.classes = oldClasses
+		w.nodes = oldNodes
+		w.links = oldLinks
+		w.mu.Unlock()
+		return err
+	}
+	for id, runtime := range runtimes {
+		node := w.nodes[id]
+		if node == nil || node.class != spec.Name || node.state != StateActive {
+			for _, scope := range scopes {
+				if scope != nil {
+					scope.finishInit()
+				}
+			}
+			w.classes = oldClasses
+			w.nodes = oldNodes
+			w.links = oldLinks
+			w.mu.Unlock()
+			return opErr("define class", "validate", ErrInactive)
+		}
+		node.runtime = runtime
+		if scope := scopes[id]; scope != nil {
+			scope.finishInit()
+		}
+	}
+	w.mu.Unlock()
+	return nil
 }
 
 // RecallClass marks a class inactive and inactivates dependent nodes and links.
@@ -691,6 +755,26 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) error {
 	w.removeBrokenLinksLocked()
 	w.refreshActivityLocked()
 	return nil
+}
+
+func (w *Workspace) reactivatedInitNodesLocked(className string, oldNodes map[NodeID]*nodeRecord) []restoreInitNode {
+	class := w.classes[className]
+	if class == nil || class.spec.Runtime == nil {
+		return nil
+	}
+	var initNodes []restoreInitNode
+	for id, node := range w.nodes {
+		if node.class != className || node.state != StateActive {
+			continue
+		}
+		oldNode := oldNodes[id]
+		if oldNode != nil && oldNode.state == StateActive {
+			continue
+		}
+		initNodes = append(initNodes, restoreInitNode{record: node, class: class.spec.Runtime})
+	}
+	w.sortRestoreInitNodesLocked(initNodes)
+	return initNodes
 }
 
 func (w *Workspace) prepareCreateNodeLocked(className string, opts NodeOptions, _ InitMode) (NodeID, *nodeRecord, NodeClass, error) {
@@ -1230,6 +1314,47 @@ func cloneClassSpec(spec ClassSpec) ClassSpec {
 	spec.Outputs = clonePorts(spec.Outputs)
 	spec.Metadata = cloneStringMap(spec.Metadata)
 	return spec
+}
+
+func cloneClassRecords(records map[string]*classRecord) map[string]*classRecord {
+	out := make(map[string]*classRecord, len(records))
+	for name, rec := range records {
+		if rec == nil {
+			continue
+		}
+		copy := *rec
+		copy.spec = cloneClassSpec(rec.spec)
+		out[name] = &copy
+	}
+	return out
+}
+
+func cloneNodeRecords(records map[NodeID]*nodeRecord) map[NodeID]*nodeRecord {
+	out := make(map[NodeID]*nodeRecord, len(records))
+	for id, rec := range records {
+		if rec == nil {
+			continue
+		}
+		copy := *rec
+		copy.dynamic = cloneNodeState(rec.dynamic)
+		copy.inputs = clonePorts(rec.inputs)
+		copy.outputs = clonePorts(rec.outputs)
+		out[id] = &copy
+	}
+	return out
+}
+
+func cloneLinkRecords(records map[LinkID]*linkRecord) map[LinkID]*linkRecord {
+	out := make(map[LinkID]*linkRecord, len(records))
+	for id, rec := range records {
+		if rec == nil {
+			continue
+		}
+		copy := *rec
+		copy.waypoints = append([]string(nil), rec.waypoints...)
+		out[id] = &copy
+	}
+	return out
 }
 
 func cloneNodeState(state NodeState) NodeState {

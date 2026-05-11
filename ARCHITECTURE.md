@@ -26,7 +26,10 @@ before committing state.
 
 Broken links, where an endpoint or port no longer exists, are removed
 immediately. Inactive links, where endpoints still exist but a class or library
-is unavailable, are preserved for editor recovery.
+is unavailable, are preserved for editor recovery. Defining a missing or
+recalled class reactivates preserved nodes and links when their endpoints and
+ports are still valid, and reinitializes recovered node runtimes outside the
+workspace lock.
 
 ## Locking
 
@@ -35,10 +38,9 @@ return copies rather than internal slices or maps. Public mutation methods are
 the intended synchronization boundary for editors, controllers, scoped library
 access, and node-scoped runtime updates.
 
-The current implementation keeps class-definition hooks outside the initial
-registration lock and recovers panics from library registration. Node lifecycle
-hooks are intentionally not wired yet; when added, hook contracts must document
-lock and re-entry behavior.
+Node initialization and link lifecycle hooks run outside the workspace lock, then
+mutations revalidate before commit. The implementation recovers panics from
+library registration and node lifecycle hooks.
 
 ## Persistence
 

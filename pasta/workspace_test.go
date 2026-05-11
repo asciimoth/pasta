@@ -1124,6 +1124,146 @@ func TestRestoreInitializesNodesInDeterministicDAGOrder(t *testing.T) {
 	}
 }
 
+func TestDefineClassReactivatesRestoredNodesAndLinks(t *testing.T) {
+	input := PortSpec{
+		ID:        PortID{Number: 1, Kind: InputPort},
+		Name:      "in",
+		Direction: InputPort,
+		FixedType: testType,
+	}
+	output := PortSpec{
+		ID:        PortID{Number: 1, Kind: OutputPort},
+		Name:      "out",
+		Direction: OutputPort,
+		FixedType: testType,
+	}
+	data := SaveData{
+		NextNode: 3,
+		NextLink: 2,
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+			{ID: "2N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+		},
+		Links: []SaveLink{{
+			Name: FullLinkName{
+				Link:   1,
+				Input:  FullPortID{Node: 2, Port: input.ID},
+				Output: FullPortID{Node: 1, Port: output.ID},
+			}.String(),
+			Type: testType,
+		}},
+	}
+	runtime := &lifecycleClass{}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	before := w.Snapshot()
+	if before.Nodes[0].State != StateInactive || before.Links[0].State != StateInactive {
+		t.Fatalf("before define = %#v", before)
+	}
+	log := []string{}
+	runtime.log = &log
+	runtime.nodes = map[NodeID]*lifecycleNode{}
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: runtime,
+		Inputs:  []PortSpec{input},
+		Outputs: []PortSpec{output},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after := w.Snapshot()
+	if after.Nodes[0].State != StateActive || after.Nodes[1].State != StateActive || after.Links[0].State != StateActive {
+		t.Fatalf("after define = %#v", after)
+	}
+	want := []string{"init:restore", "init:restore"}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", log, want)
+	}
+}
+
+func TestDefineClassReinitializesRecalledNodes(t *testing.T) {
+	runtime := &lifecycleClass{}
+	w, _, log := lifecycleWorkspace(t, runtime)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RecallClass("example.com", "example.com/Source"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := w.Node(node); !ok || got.State != StateInactive {
+		t.Fatalf("node = %#v, ok %v; want inactive", got, ok)
+	}
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: runtime,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := w.Node(node); !ok || got.State != StateActive {
+		t.Fatalf("node = %#v, ok %v; want active", got, ok)
+	}
+	want := []string{
+		"init:new",
+		"inactive-before:1:class-recall",
+		"inactive-after:1:class-recall",
+		"init:restore",
+	}
+	if fmt.Sprint(*log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", *log, want)
+	}
+}
+
+func TestDefineClassReactivationRollsBackOnInitError(t *testing.T) {
+	data := SaveData{
+		NextNode: 2,
+		Nodes: []SaveNode{{
+			ID:    "1N",
+			Class: "example.com/Source",
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	before := w.Save()
+	log := []string{}
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: &lifecycleClass{log: &log, fail: true},
+	}); err == nil {
+		t.Fatal("expected define class init error")
+	}
+	after := w.Save()
+	if fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("define class should roll back on init error: got %#v, want %#v", after, before)
+	}
+	snapshot := w.Snapshot()
+	if len(snapshot.Classes) != 0 || snapshot.Nodes[0].State != StateInactive {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
 func TestLifecycleRestoreRollsBackOnInitError(t *testing.T) {
 	source, _, _ := lifecycleWorkspace(t, &lifecycleClass{})
 	if _, err := source.CreateNode("example.com/Source", NodeOptions{}); err != nil {
