@@ -64,6 +64,8 @@ layout because the repo root is not itself a Go module.
 - Opaque link waypoint storage.
 - Active and inactive state propagation for class recall and library unregister.
 - Immediate removal of broken links when nodes or ports disappear.
+- Deterministic removal of preserved links that become invalid during inactive
+  recovery because of port type or multiplicity changes.
 - Copy/paste for selected nodes and internal links with ID remapping.
 - Deterministic `SaveData` DTOs and basic restore path.
 - Restore skips broken persisted links, but rejects invalid persisted link
@@ -103,6 +105,7 @@ layout because the repo root is not itself a Go module.
   - library-scoped ownership enforcement for classes, nodes, and links
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback
+  - class definition recovery pruning incompatible restored links
   - library unregister/register recovery and rollback
   - explicit lifecycle hook order for node deletion and workspace close with
     attached links
@@ -134,7 +137,8 @@ go vet ./pasta/...
   - richer "can I do this?" validation queries
   - metadata editing helpers
   - disable/enable APIs if needed
-- Add tests for remaining restore edge cases and inactive recovery.
+- Add tests for any remaining restore edge cases and inactive recovery paths as
+  lifecycle and persistence contracts evolve.
 - Expand `ARCHITECTURE.md` after lifecycle and persistence contracts are final.
 
 ## Notes

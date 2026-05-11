@@ -1055,7 +1055,7 @@ func (w *Workspace) refreshActivityLocked() {
 			node.state = StateInactive
 		}
 	}
-	w.removeBrokenLinksLocked()
+	w.removeInvalidLinksLocked()
 	for _, link := range w.links {
 		inNode := w.nodes[link.input.Node]
 		outNode := w.nodes[link.output.Node]
@@ -1068,20 +1068,48 @@ func (w *Workspace) refreshActivityLocked() {
 }
 
 func (w *Workspace) removeBrokenLinksLocked() {
+	w.removeInvalidLinksLocked()
+}
+
+func (w *Workspace) removeInvalidLinksLocked() {
+	ids := make([]LinkID, 0, len(w.links))
 	for id, link := range w.links {
+		if link != nil {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	inputCounts := map[FullPortID]int{}
+	for _, id := range ids {
+		link := w.links[id]
+		if link == nil {
+			continue
+		}
 		inNode := w.nodes[link.input.Node]
 		outNode := w.nodes[link.output.Node]
 		if inNode == nil || outNode == nil {
 			delete(w.links, id)
 			continue
 		}
-		if _, ok := findPort(inNode.inputs, link.input.Port); !ok {
+		inPort, ok := findPort(inNode.inputs, link.input.Port)
+		if !ok {
 			delete(w.links, id)
 			continue
 		}
-		if _, ok := findPort(outNode.outputs, link.output.Port); !ok {
+		outPort, ok := findPort(outNode.outputs, link.output.Port)
+		if !ok {
 			delete(w.links, id)
+			continue
 		}
+		if !portAccepts(*inPort, link.typ) || !portAccepts(*outPort, link.typ) {
+			delete(w.links, id)
+			continue
+		}
+		if !inPort.Multiple && inputCounts[link.input] > 0 {
+			delete(w.links, id)
+			continue
+		}
+		inputCounts[link.input]++
 	}
 }
 

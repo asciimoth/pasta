@@ -1592,6 +1592,124 @@ func TestDefineClassReactivatesRestoredNodesAndLinks(t *testing.T) {
 	}
 }
 
+func TestDefineClassDoesNotReactivateRestoredInvalidLink(t *testing.T) {
+	input := PortSpec{
+		ID:        PortID{Number: 1, Kind: InputPort},
+		Name:      "in",
+		Direction: InputPort,
+		FixedType: testType,
+	}
+	output := PortSpec{
+		ID:        PortID{Number: 1, Kind: OutputPort},
+		Name:      "out",
+		Direction: OutputPort,
+		FixedType: testType,
+	}
+	data := SaveData{
+		NextNode: 3,
+		NextLink: 2,
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+			{ID: "2N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+		},
+		Links: []SaveLink{{
+			Name: FullLinkName{
+				Link:   1,
+				Input:  FullPortID{Node: 2, Port: input.ID},
+				Output: FullPortID{Node: 1, Port: output.ID},
+			}.String(),
+			Type: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+
+	floatInput := input
+	floatInput.FixedType = "example.com/float"
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Inputs:  []PortSpec{floatInput},
+		Outputs: []PortSpec{output},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := w.Snapshot()
+	if len(snapshot.Links) != 0 {
+		t.Fatalf("restored incompatible link should be removed during recovery, got %#v", snapshot.Links)
+	}
+	if snapshot.Nodes[0].State != StateActive || snapshot.Nodes[1].State != StateActive {
+		t.Fatalf("nodes should recover even when incompatible link is removed: %#v", snapshot.Nodes)
+	}
+}
+
+func TestDefineClassPrunesRestoredLinksThatViolateMultiplicity(t *testing.T) {
+	input := PortSpec{
+		ID:        PortID{Number: 1, Kind: InputPort},
+		Name:      "in",
+		Direction: InputPort,
+		FixedType: testType,
+		Multiple:  true,
+	}
+	singleInput := input
+	singleInput.Multiple = false
+	output := PortSpec{
+		ID:        PortID{Number: 1, Kind: OutputPort},
+		Name:      "out",
+		Direction: OutputPort,
+		FixedType: testType,
+	}
+	data := SaveData{
+		NextNode: 4,
+		NextLink: 3,
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+			{ID: "2N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+			{ID: "3N", Class: "example.com/Source", Inputs: []PortSpec{input}, Outputs: []PortSpec{output}},
+		},
+		Links: []SaveLink{
+			{
+				Name: FullLinkName{
+					Link:   2,
+					Input:  FullPortID{Node: 3, Port: input.ID},
+					Output: FullPortID{Node: 2, Port: output.ID},
+				}.String(),
+				Type: testType,
+			},
+			{
+				Name: FullLinkName{
+					Link:   1,
+					Input:  FullPortID{Node: 3, Port: input.ID},
+					Output: FullPortID{Node: 1, Port: output.ID},
+				}.String(),
+				Type: testType,
+			},
+		},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Inputs:  []PortSpec{singleInput},
+		Outputs: []PortSpec{output},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := w.Snapshot()
+	if len(snapshot.Links) != 1 || snapshot.Links[0].ID != 1 {
+		t.Fatalf("links = %#v, want only lowest-ID restored link to remain", snapshot.Links)
+	}
+}
+
 func TestDefineClassReinitializesRecalledNodes(t *testing.T) {
 	runtime := &lifecycleClass{}
 	w, _, log := lifecycleWorkspace(t, runtime)
