@@ -38,10 +38,14 @@ layout because the repo root is not itself a Go module.
 - Public node state updates and opaque node coordinate storage.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
+- Link creation prepares under lock, runs node hooks outside the workspace lock,
+  then revalidates before commit.
 - Optional node class/runtime lifecycle interfaces.
 - Node runtime initialization for new nodes and pasted nodes.
 - Node runtime initialization for restored workspace nodes.
 - Panic-safe lifecycle hook execution.
+- Panic recovery coverage for library registration, node initialization, link
+  attach/detach hooks, inactive hooks, delete hooks, and close hooks.
 - Link-object handoff from the input node when no object is supplied by the caller.
 - Before/after link attach hooks.
 - Before/after link detach hooks for direct link deletion and node deletion.
@@ -72,7 +76,11 @@ layout because the repo root is not itself a Go module.
   - lifecycle hook order
   - restore lifecycle initialization and rollback
   - link attach rollback on hook errors and panics
+  - link attach hook read-only workspace re-entry
+  - link creation revalidation after concurrent interleavings
   - inactive hook notifications and rollback
+  - panic recovery across lifecycle hook families
+  - library-scoped ownership enforcement for classes, nodes, and links
 
 ## Verified
 
@@ -89,10 +97,6 @@ go vet ./pasta/...
 - Complete node lifecycle hooks:
   - richer link deleted/inactivated notifications if needed by link contracts
   - export/import private state
-- Make link creation fully transactional across concurrent interleavings; hook
-  errors and panics currently roll back the uncommitted link.
-- Add panic recovery around any remaining external callbacks beyond
-  registration and node runtime hooks.
 - Add a node-scoped API for node implementations.
 - Add synchronized private-state update APIs usable from background goroutines.
 - Add explicit worker shutdown/close semantics for nodes with goroutines.
@@ -111,8 +115,6 @@ go vet ./pasta/...
   - disable/enable APIs if needed
 - Add golden tests for deterministic save output.
 - Add lifecycle hook-order tests.
-- Add panic recovery tests.
-- Add more ownership tests for library-scoped access.
 - Add concurrent read/write and recursive-lock risk tests.
 - Add tests for restore edge cases, inactive recovery, and broken persisted
   links.

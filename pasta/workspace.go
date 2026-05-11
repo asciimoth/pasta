@@ -389,8 +389,46 @@ func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 // CreateLink creates a directed link from output to input.
 func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (LinkID, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.createLinkLocked(input, output, opts)
+	pending, err := w.prepareCreateLinkLocked(input, output, opts)
+	w.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	object := opts.Object
+	if object == nil {
+		object, err = w.callLinkObject(pending.inputRuntime, pending.inputEndpoint)
+		if err != nil {
+			w.mu.Lock()
+			w.rollbackPreparedLinkLocked(pending.link.id)
+			w.mu.Unlock()
+			return 0, opErr("create link", "hook", err)
+		}
+		pending.link.object = object
+	}
+	if err := w.callBeforeLinkAttach(pending.inputRuntime, pending.inputEndpoint, object); err != nil {
+		w.mu.Lock()
+		w.rollbackPreparedLinkLocked(pending.link.id)
+		w.mu.Unlock()
+		return 0, opErr("create link", "hook", err)
+	}
+	if err := w.callBeforeLinkAttach(pending.outputRuntime, pending.outputEndpoint, object); err != nil {
+		w.mu.Lock()
+		w.rollbackPreparedLinkLocked(pending.link.id)
+		w.mu.Unlock()
+		return 0, opErr("create link", "hook", err)
+	}
+	w.mu.Lock()
+	err = w.commitPreparedLinkLocked(pending)
+	w.mu.Unlock()
+	if err != nil {
+		w.mu.Lock()
+		w.rollbackPreparedLinkLocked(pending.link.id)
+		w.mu.Unlock()
+		return 0, err
+	}
+	w.callAfterLinkAttach(pending.inputRuntime, pending.inputEndpoint, object)
+	w.callAfterLinkAttach(pending.outputRuntime, pending.outputEndpoint, object)
+	return pending.link.id, nil
 }
 
 // DeleteLink deletes one link.
@@ -541,14 +579,7 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		}
 		input := FullPortID{Node: newInputNode, Port: full.Input.Port}
 		output := FullPortID{Node: newOutputNode, Port: full.Output.Port}
-		w.mu.Lock()
-		typ, err := w.validateLinkLocked(input, output, saved.Type, 0)
-		if err != nil {
-			w.mu.Unlock()
-			return nil, nil, opErr("paste", "validate", err)
-		}
-		id, err := w.createLinkLocked(input, output, LinkOptions{Type: typ, Waypoints: saved.Waypoints})
-		w.mu.Unlock()
+		id, err := w.CreateLink(input, output, LinkOptions{Type: saved.Type, Waypoints: saved.Waypoints})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -664,15 +695,26 @@ func (w *Workspace) rollbackPreparedNodeLocked(id NodeID) {
 	}
 }
 
-func (w *Workspace) createLinkLocked(input, output FullPortID, opts LinkOptions) (LinkID, error) {
+type pendingLinkCreate struct {
+	link           *linkRecord
+	inputRuntime   NodeRuntime
+	outputRuntime  NodeRuntime
+	inputEndpoint  LinkEndpoint
+	outputEndpoint LinkEndpoint
+}
+
+func (w *Workspace) prepareCreateLinkLocked(input, output FullPortID, opts LinkOptions) (pendingLinkCreate, error) {
 	if err := w.checkOpenLocked("create link"); err != nil {
-		return 0, err
+		return pendingLinkCreate{}, err
 	}
 	typ, err := w.validateLinkLocked(input, output, opts.Type, 0)
 	if err != nil {
-		return 0, opErr("create link", "validate", err)
+		return pendingLinkCreate{}, opErr("create link", "validate", err)
 	}
+	id := w.nextLink
+	w.nextLink++
 	link := &linkRecord{
+		id:        id,
 		input:     input,
 		output:    output,
 		typ:       typ,
@@ -682,32 +724,41 @@ func (w *Workspace) createLinkLocked(input, output FullPortID, opts LinkOptions)
 	}
 	inputRuntime, outputRuntime := w.linkRuntimesLocked(link)
 	inputEndpoint, outputEndpoint := linkEndpoints(link)
-	object := opts.Object
-	if object == nil {
-		object, err = w.callLinkObject(inputRuntime, inputEndpoint)
-		if err != nil {
-			return 0, opErr("create link", "hook", err)
-		}
-		link.object = object
+	return pendingLinkCreate{
+		link:           link,
+		inputRuntime:   inputRuntime,
+		outputRuntime:  outputRuntime,
+		inputEndpoint:  inputEndpoint,
+		outputEndpoint: outputEndpoint,
+	}, nil
+}
+
+func (w *Workspace) rollbackPreparedLinkLocked(id LinkID) {
+	if _, exists := w.links[id]; !exists && id+1 == w.nextLink {
+		w.nextLink = id
 	}
-	if err := w.callBeforeLinkAttach(inputRuntime, inputEndpoint, object); err != nil {
-		return 0, opErr("create link", "hook", err)
+}
+
+func (w *Workspace) commitPreparedLinkLocked(pending pendingLinkCreate) error {
+	if err := w.checkOpenLocked("create link"); err != nil {
+		return err
 	}
-	if err := w.callBeforeLinkAttach(outputRuntime, outputEndpoint, object); err != nil {
-		return 0, opErr("create link", "hook", err)
+	if _, exists := w.links[pending.link.id]; exists {
+		return opErr("create link", "validate", ErrDuplicate)
 	}
-	id := w.nextLink
-	w.nextLink++
-	link.id = id
-	link.input = input
-	link.output = output
-	inputEndpoint.Link = id
-	outputEndpoint.Link = id
-	w.links[id] = link
+	typ, err := w.validateLinkLocked(pending.link.input, pending.link.output, pending.link.typ, 0)
+	if err != nil {
+		return opErr("create link", "validate", err)
+	}
+	if typ != pending.link.typ {
+		return opErr("create link", "validate", ErrTypeMismatch)
+	}
+	if w.nextLink <= pending.link.id {
+		w.nextLink = pending.link.id + 1
+	}
+	w.links[pending.link.id] = pending.link
 	w.refreshActivityLocked()
-	w.callAfterLinkAttach(inputRuntime, inputEndpoint, object)
-	w.callAfterLinkAttach(outputRuntime, outputEndpoint, object)
-	return id, nil
+	return nil
 }
 
 func (w *Workspace) validateLinkLocked(input, output FullPortID, requested string, ignore LinkID) (string, error) {

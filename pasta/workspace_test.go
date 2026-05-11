@@ -3,7 +3,9 @@ package pasta
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 )
 
 const testType = "example.com/int"
@@ -52,6 +54,129 @@ func TestNameValidation(t *testing.T) {
 	}
 	if ValidTypeName("example.com/Bool") {
 		t.Fatal("expected uppercase type local name to be invalid")
+	}
+}
+
+type panicLibrary struct{}
+
+func (panicLibrary) Name() string { return "example.com" }
+
+func (panicLibrary) DefineClasses(LibraryScope) error {
+	panic("define classes panic")
+}
+
+func TestRegisterLibraryRecoversPanic(t *testing.T) {
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(panicLibrary{}); err == nil {
+		t.Fatal("expected register panic error")
+	}
+	if len(w.Snapshot().Libraries) != 0 {
+		t.Fatal("panicking library registration should be rolled back")
+	}
+}
+
+type captureScopeLibrary struct {
+	name    string
+	classes []ClassSpec
+	scope   LibraryScope
+}
+
+func (l *captureScopeLibrary) Name() string { return l.name }
+
+func (l *captureScopeLibrary) DefineClasses(scope LibraryScope) error {
+	l.scope = scope
+	for _, class := range l.classes {
+		if err := scope.DefineClass(class); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func scopedTestClass(library, local string) ClassSpec {
+	return ClassSpec{
+		Name: library + "/" + local,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+}
+
+func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
+	w := NewWorkspace()
+	own := &captureScopeLibrary{name: "example.com", classes: []ClassSpec{scopedTestClass("example.com", "Source")}}
+	other := &captureScopeLibrary{name: "other.com", classes: []ClassSpec{scopedTestClass("other.com", "Source")}}
+	if err := w.RegisterLibrary(own); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RegisterLibrary(other); err != nil {
+		t.Fatal(err)
+	}
+	ownA, err := own.scope.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownB, err := own.scope.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherA, err := other.scope.CreateNode("other.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherB, err := other.scope.CreateNode("other.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := own.scope.CreateNode("other.com/Source", NodeOptions{}); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CreateNode cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.DeleteNode(otherA); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("DeleteNode cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.RecallClass("other.com/Source"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("RecallClass cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.DefineClass(scopedTestClass("other.com", "Other")); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("DefineClass cross-library error = %v, want invalid name", err)
+	}
+	ownLink, err := own.scope.CreateLink(
+		FullPortID{Node: ownB, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: ownA, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherLink, err := other.scope.CreateLink(
+		FullPortID{Node: otherB, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: otherA, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := own.scope.CreateLink(
+		FullPortID{Node: otherA, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: ownA, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("CreateLink cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.DeleteLink(otherLink); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("DeleteLink cross-library error = %v, want ownership", err)
+	}
+	if err := own.scope.DeleteLink(ownLink); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -202,9 +327,13 @@ type lifecycleClass struct {
 	nodes map[NodeID]*lifecycleNode
 	log   *[]string
 	fail  bool
+	panic bool
 }
 
 func (c *lifecycleClass) InitNode(ctx NodeContext, _ NodeState, mode InitMode) (NodeRuntime, error) {
+	if c.panic {
+		panic("init panic")
+	}
 	if c.fail {
 		return nil, fmt.Errorf("init failed")
 	}
@@ -217,14 +346,23 @@ func (c *lifecycleClass) InitNode(ctx NodeContext, _ NodeState, mode InitMode) (
 }
 
 type lifecycleNode struct {
-	id              NodeID
-	log             *[]string
-	object          any
-	failAttach      bool
-	failDetach      bool
-	failInactive    bool
-	panicOnAttach   bool
-	panicOnProvider bool
+	id                 NodeID
+	log                *[]string
+	object             any
+	failAttach         bool
+	failDetach         bool
+	failInactive       bool
+	panicOnAttach      bool
+	panicOnProvider    bool
+	panicAfterAttach   bool
+	panicOnDetach      bool
+	panicAfterDetach   bool
+	panicOnInactive    bool
+	panicAfterInactive bool
+	panicOnDelete      bool
+	panicAfterDelete   bool
+	panicOnClose       bool
+	inspectOnAttach    WorkspaceRO
 }
 
 func (n *lifecycleNode) LinkObject(endpoint LinkEndpoint) (any, error) {
@@ -240,6 +378,10 @@ func (n *lifecycleNode) BeforeLinkAttach(endpoint LinkEndpoint, object any) erro
 	if n.panicOnAttach {
 		panic("attach panic")
 	}
+	if n.inspectOnAttach != nil {
+		_ = n.inspectOnAttach.Snapshot()
+		*n.log = append(*n.log, "inspect")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("before:%s:%v", endpoint.Direction, object))
 	if n.failAttach {
 		return fmt.Errorf("attach failed")
@@ -248,10 +390,16 @@ func (n *lifecycleNode) BeforeLinkAttach(endpoint LinkEndpoint, object any) erro
 }
 
 func (n *lifecycleNode) AfterLinkAttach(endpoint LinkEndpoint, object any) {
+	if n.panicAfterAttach {
+		panic("after attach panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("after:%s:%d:%v", endpoint.Direction, endpoint.Link, object))
 }
 
 func (n *lifecycleNode) BeforeLinkDetach(endpoint LinkEndpoint) error {
+	if n.panicOnDetach {
+		panic("detach panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("detach-before:%s:%d", endpoint.Direction, endpoint.Link))
 	if n.failDetach {
 		return fmt.Errorf("detach failed")
@@ -260,6 +408,9 @@ func (n *lifecycleNode) BeforeLinkDetach(endpoint LinkEndpoint) error {
 }
 
 func (n *lifecycleNode) AfterLinkDetach(endpoint LinkEndpoint) {
+	if n.panicAfterDetach {
+		panic("after detach panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("detach-after:%s:%d", endpoint.Direction, endpoint.Link))
 }
 
@@ -268,6 +419,9 @@ func (n *lifecycleNode) AfterLinkInactive(endpoint LinkEndpoint, reason Inactive
 }
 
 func (n *lifecycleNode) BeforeInactive(reason InactiveReason) error {
+	if n.panicOnInactive {
+		panic("inactive panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("inactive-before:%d:%s", n.id, reason))
 	if n.failInactive {
 		return fmt.Errorf("inactive failed")
@@ -276,19 +430,31 @@ func (n *lifecycleNode) BeforeInactive(reason InactiveReason) error {
 }
 
 func (n *lifecycleNode) AfterInactive(reason InactiveReason) {
+	if n.panicAfterInactive {
+		panic("after inactive panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("inactive-after:%d:%s", n.id, reason))
 }
 
 func (n *lifecycleNode) BeforeDelete() error {
+	if n.panicOnDelete {
+		panic("delete panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("delete-before:%d", n.id))
 	return nil
 }
 
 func (n *lifecycleNode) AfterDelete() {
+	if n.panicAfterDelete {
+		panic("after delete panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("delete-after:%d", n.id))
 }
 
 func (n *lifecycleNode) Close() error {
+	if n.panicOnClose {
+		panic("close panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("close:%d", n.id))
 	return nil
 }
@@ -389,6 +555,169 @@ func TestLifecycleCreateLinkRollsBackOnHookErrorOrPanic(t *testing.T) {
 	}
 }
 
+func TestLifecycleAfterAttachPanicDoesNotRollbackLink(t *testing.T) {
+	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	nodes[b].panicAfterAttach = true
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Link(link); !ok {
+		t.Fatal("after attach panic should be recovered after link commit")
+	}
+}
+
+func TestLifecycleCreateLinkHooksMayReadWorkspace(t *testing.T) {
+	w, nodes, log := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	nodes[a].inspectOnAttach = w
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.CreateLink(
+			FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+			FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+			LinkOptions{},
+		)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CreateLink hook could not read workspace; likely recursive lock deadlock")
+	}
+	if fmt.Sprint(*log) != fmt.Sprint([]string{
+		"init:new", "init:new",
+		"object",
+		"before:input:object:example.com/int",
+		"inspect",
+		"before:output:object:example.com/int",
+		"after:input:1:object:example.com/int",
+		"after:output:1:object:example.com/int",
+	}) {
+		t.Fatalf("log = %#v", *log)
+	}
+}
+
+type blockingAttachClass struct {
+	mu    sync.Mutex
+	nodes map[NodeID]*blockingAttachNode
+}
+
+func (c *blockingAttachClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	node := &blockingAttachNode{}
+	c.mu.Lock()
+	if c.nodes == nil {
+		c.nodes = make(map[NodeID]*blockingAttachNode)
+	}
+	c.nodes[ctx.ID] = node
+	c.mu.Unlock()
+	return node, nil
+}
+
+func (c *blockingAttachClass) node(id NodeID) *blockingAttachNode {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.nodes[id]
+}
+
+type blockingAttachNode struct {
+	ready   chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (n *blockingAttachNode) BeforeLinkAttach(LinkEndpoint, any) error {
+	if n.ready != nil {
+		n.once.Do(func() { close(n.ready) })
+		<-n.release
+	}
+	return nil
+}
+
+func (n *blockingAttachNode) AfterLinkAttach(LinkEndpoint, any) {}
+
+func TestCreateLinkRevalidatesAfterConcurrentInterleaving(t *testing.T) {
+	runtime := &blockingAttachClass{}
+	w, _ := lifecycleFreeWorkspace(t, runtime)
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	c, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	runtime.node(a).ready = ready
+	runtime.node(a).release = release
+	first := make(chan error, 1)
+	go func() {
+		_, err := w.CreateLink(
+			FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+			FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+			LinkOptions{},
+		)
+		first <- err
+	}()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first link did not reach attach hook")
+	}
+	second, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: c, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case err := <-first:
+		if !errors.Is(err, ErrMultiplicity) {
+			t.Fatalf("first link error = %v, want multiplicity", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first link did not finish")
+	}
+	snapshot := w.Snapshot()
+	if len(snapshot.Links) != 1 || snapshot.Links[0].ID != second {
+		t.Fatalf("links = %#v, want only second link %s", snapshot.Links, second)
+	}
+}
+
+func lifecycleFreeWorkspace(t *testing.T, classRuntime NodeClass) (*Workspace, ClassSpec) {
+	t.Helper()
+	class := ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: classRuntime,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	return w, class
+}
+
 func TestLifecyclePasteInitializesNodesAsRestore(t *testing.T) {
 	w, _, log := lifecycleWorkspace(t, &lifecycleClass{})
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
@@ -468,6 +797,42 @@ func TestLifecycleRestoreRollsBackOnInitError(t *testing.T) {
 	}
 }
 
+func TestLifecycleRestoreRollsBackOnInitPanic(t *testing.T) {
+	source, _, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	if _, err := source.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	saved := source.Save()
+
+	restored, _, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	original := restored.Save()
+	if err := restored.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: &lifecycleClass{panic: true},
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.Restore(saved); err == nil {
+		t.Fatal("expected restore init panic error")
+	}
+	after := restored.Save()
+	if fmt.Sprint(after) != fmt.Sprint(original) {
+		t.Fatalf("restore should roll back on init panic: got %#v, want %#v", after, original)
+	}
+}
+
 func TestLifecycleDeleteNodeAndCloseHooks(t *testing.T) {
 	w, _, log := lifecycleWorkspace(t, &lifecycleClass{})
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
@@ -491,6 +856,81 @@ func TestLifecycleDeleteNodeAndCloseHooks(t *testing.T) {
 	}
 	if fmt.Sprint(*log) != fmt.Sprint(want) {
 		t.Fatalf("log after delete = %#v, want %#v", *log, want)
+	}
+}
+
+func TestLifecycleDeleteAndDetachPanicsAreRecovered(t *testing.T) {
+	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes[b].panicOnDetach = true
+	if err := w.DeleteLink(link); err == nil {
+		t.Fatal("expected before detach panic error")
+	}
+	if _, ok := w.Link(link); !ok {
+		t.Fatal("before detach panic should leave link intact")
+	}
+	nodes[b].panicOnDetach = false
+	nodes[b].panicAfterDetach = true
+	if err := w.DeleteLink(link); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Link(link); ok {
+		t.Fatal("after detach panic should not preserve deleted link")
+	}
+
+	nodes[a].panicOnDelete = true
+	if err := w.DeleteNode(a); err == nil {
+		t.Fatal("expected before delete panic error")
+	}
+	if _, ok := w.Node(a); !ok {
+		t.Fatal("before delete panic should leave node intact")
+	}
+	nodes[a].panicOnDelete = false
+	nodes[a].panicAfterDelete = true
+	if err := w.DeleteNode(a); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Node(a); ok {
+		t.Fatal("after delete panic should not preserve deleted node")
+	}
+}
+
+func TestLifecycleInactiveAndClosePanicsAreRecovered(t *testing.T) {
+	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	nodes[a].panicOnInactive = true
+	if err := w.RecallClass("example.com", "example.com/Source"); err == nil {
+		t.Fatal("expected before inactive panic error")
+	}
+	if got, ok := w.Node(a); !ok || got.State != StateActive {
+		t.Fatalf("node = %#v, ok %v; want active after before inactive panic", got, ok)
+	}
+	nodes[a].panicOnInactive = false
+	nodes[a].panicAfterInactive = true
+	if err := w.RecallClass("example.com", "example.com/Source"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := w.Node(a); !ok || got.State != StateInactive {
+		t.Fatalf("node = %#v, ok %v; want inactive after after-inactive panic", got, ok)
+	}
+
+	w2, nodes2, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	b, _ := w2.CreateNode("example.com/Source", NodeOptions{})
+	nodes2[b].panicOnClose = true
+	if err := w2.Close(); err == nil {
+		t.Fatal("expected close panic error")
+	}
+	if got, ok := w2.Node(b); !ok || got.State != StateInactive {
+		t.Fatalf("node = %#v, ok %v; want inactive after close panic", got, ok)
 	}
 }
 
