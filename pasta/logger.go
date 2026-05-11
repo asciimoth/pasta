@@ -1,6 +1,6 @@
 package pasta
 
-// Implementations must be safe for concurrent use.
+// Logger receives workspace diagnostics. Implementations must be safe for concurrent use.
 type Logger interface {
 	Debug(args ...any)
 	Debugf(format string, args ...any)

@@ -1,0 +1,123 @@
+# Pasta Progress
+
+This file records what has been implemented from `plan.md` and what remains.
+
+## Current Layout
+
+The repo is a Go workspace with the framework module in `./pasta`.
+
+Run tests from the repo root with:
+
+```sh
+go test ./pasta/...
+go test -race ./pasta/...
+```
+
+Or from inside `./pasta`:
+
+```sh
+go test ./...
+go test -race ./...
+```
+
+`go test ./...` from the repo root is not the right command for this workspace
+layout because the repo root is not itself a Go module.
+
+## Implemented
+
+- Centralized library, class, and type name validation in `pasta/names.go`.
+- Canonical ID and full-link-name parsers/formatters in `pasta/ids.go`.
+- Public model structs and interfaces in `pasta/model.go`.
+- Structured sentinel errors in `pasta/errors.go`.
+- `Workspace` storage protected by `sync.RWMutex`.
+- Defensive read-only snapshots for workspace, nodes, and links.
+- Library registration and unregister.
+- Library-scoped class definition, class recall, node mutation, and link
+  mutation.
+- Node creation and deletion.
+- Public node state updates and opaque node coordinate storage.
+- Dynamic node port replacement with validation that existing links remain valid.
+- Link creation and deletion.
+- Link type compatibility validation.
+- Input port multiplicity validation.
+- DAG enforcement for links.
+- Opaque link waypoint storage.
+- Active and inactive state propagation for class recall and library unregister.
+- Immediate removal of broken links when nodes or ports disappear.
+- Copy/paste for selected nodes and internal links with ID remapping.
+- Deterministic `SaveData` DTOs and basic restore path.
+- Initial `ARCHITECTURE.md` and `AGENTS.md`.
+- Tests for:
+  - name validation
+  - ID round trips
+  - link multiplicity
+  - DAG/cycle rejection
+  - inactive link preservation
+  - broken link removal
+  - linked port update validation
+  - save/restore
+  - copy/paste ID remapping
+
+## Verified
+
+These commands pass:
+
+```sh
+go test ./pasta/...
+go test -race ./pasta/...
+go vet ./pasta/...
+```
+
+## Still To Do
+
+- Define and implement node lifecycle hooks:
+  - initialize from defaults
+  - initialize from restored state
+  - before/after link attach
+  - before/after link detach
+  - link deleted/inactivated notifications
+  - before becoming inactive
+  - deleted notification
+  - close/shutdown
+  - export/import private state
+- Make link creation fully transactional across lifecycle hooks, including
+  rollback on hook errors or panics.
+- Implement the link-object handoff contract:
+  - input node supplies `any`
+  - workspace passes it to output node
+  - both sides can type-check and reject early
+- Add panic recovery around all external class and node hooks. Current recovery
+  only covers library registration.
+- Add a node-scoped API for node implementations.
+- Add synchronized private-state update APIs usable from background goroutines.
+- Add explicit worker shutdown/close semantics for nodes with goroutines.
+- Expand library/class runtime behavior:
+  - late class definition after registration
+  - class recall recovery
+  - library unregister/register recovery
+  - reactivation of preserved inactive nodes and links
+- Replace or wrap the current JSON-like `any` persistence shape with a concrete
+  `configer` integration or adapter.
+- Implement restore ordering using the DAG ordering described in `plan.md`.
+- Expand controller/query APIs:
+  - possible class queries
+  - richer "can I do this?" validation queries
+  - metadata editing helpers
+  - disable/enable APIs if needed
+- Add golden tests for deterministic save output.
+- Add lifecycle hook-order tests.
+- Add panic recovery tests.
+- Add more ownership tests for library-scoped access.
+- Add concurrent read/write and recursive-lock risk tests.
+- Add tests for restore edge cases, inactive recovery, and broken persisted
+  links.
+- Expand `ARCHITECTURE.md` after lifecycle and persistence contracts are final.
+
+## Notes
+
+- Inactive links are preserved when both endpoints still exist but cannot
+  operate.
+- Broken links are removed immediately when an endpoint node or port no longer
+  exists.
+- The current save/restore implementation stores private state as `any`; callers
+  should treat that as provisional until the persistence adapter is finalized.
