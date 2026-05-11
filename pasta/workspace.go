@@ -435,6 +435,21 @@ func (w *Workspace) SetNodeCoordinate(id NodeID, coordinate string) error {
 	return nil
 }
 
+// SetNodeMetadata replaces editable public metadata on a node.
+func (w *Workspace) SetNodeMetadata(id NodeID, metadata map[string]string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.checkOpenLocked("set node metadata"); err != nil {
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		return opErr("set node metadata", "validate", ErrNotFound)
+	}
+	node.dynamic.Metadata = cloneStringMap(metadata)
+	return nil
+}
+
 // SetNodeState replaces editable public/private node state while preserving class and ports.
 func (w *Workspace) SetNodeState(id NodeID, state NodeState) error {
 	w.mu.Lock()
@@ -1295,6 +1310,17 @@ func (s *libraryScope) SetNodePrivate(id NodeID, private any) error {
 	return s.w.SetNodePrivate(id, private)
 }
 
+func (s *libraryScope) SetNodeMetadata(id NodeID, metadata map[string]string) error {
+	s.w.mu.RLock()
+	node, ok := s.w.nodes[id]
+	owned := ok && node.library == s.library
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node metadata", "validate", ErrOwnership)
+	}
+	return s.w.SetNodeMetadata(id, metadata)
+}
+
 func (s *libraryScope) CreateLink(input, output FullPortID, opts LinkOptions) (LinkID, error) {
 	s.w.mu.RLock()
 	inNode, inOK := s.w.nodes[input.Node]
@@ -1378,6 +1404,17 @@ func (s *nodeScope) SetCoordinate(coordinate string) error {
 	}
 	return s.updateInitRecord(func(rec *nodeRecord) error {
 		rec.dynamic.Coordinate = coordinate
+		return nil
+	})
+}
+
+func (s *nodeScope) SetMetadata(metadata map[string]string) error {
+	err := s.w.SetNodeMetadata(s.id, metadata)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		rec.dynamic.Metadata = cloneStringMap(metadata)
 		return nil
 	})
 }

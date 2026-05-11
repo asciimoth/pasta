@@ -122,6 +122,7 @@ type NodeScope interface {
 	SetState(NodeState) error
 	SetPrivate(any) error
 	SetCoordinate(string) error
+	SetMetadata(map[string]string) error
 	SetPorts(inputs, outputs []PortSpec) error
 }
 
@@ -231,6 +232,7 @@ type LibraryScope interface {
 	CreateNode(string, NodeOptions) (NodeID, error)
 	DeleteNode(NodeID) error
 	SetNodePrivate(NodeID, any) error
+	SetNodeMetadata(NodeID, map[string]string) error
 	CreateLink(FullPortID, FullPortID, LinkOptions) (LinkID, error)
 	DeleteLink(LinkID) error
 	ReadOnly() WorkspaceRO

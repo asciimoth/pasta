@@ -36,6 +36,8 @@ layout because the repo root is not itself a Go module.
   mutation.
 - Node creation and deletion.
 - Public node state updates and opaque node coordinate storage.
+- Public node metadata updates through workspace, library-scoped, and
+  node-scoped APIs.
 - Synchronized private node state updates through workspace and library-scoped APIs.
 - Node-scoped runtime API for a node to update its own state, private data,
   coordinates, and ports through workspace validation and locking.
@@ -100,6 +102,7 @@ layout because the repo root is not itself a Go module.
   - broken persisted link skipping
   - invalid persisted link constraints and rollback
   - copy/paste ID remapping
+  - node metadata update helpers and defensive metadata snapshots
   - private state updates in snapshots, save, and copy
   - lifecycle hook order
   - restore lifecycle initialization and rollback

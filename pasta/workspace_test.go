@@ -239,6 +239,9 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	if err := own.scope.SetNodePrivate(otherA, "private"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("SetNodePrivate cross-library error = %v, want ownership", err)
 	}
+	if err := own.scope.SetNodeMetadata(otherA, map[string]string{"key": "value"}); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("SetNodeMetadata cross-library error = %v, want ownership", err)
+	}
 	if err := own.scope.RecallClass("other.com/Source"); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("RecallClass cross-library error = %v, want ownership", err)
 	}
@@ -273,6 +276,60 @@ func TestLibraryScopeRejectsCrossLibraryMutation(t *testing.T) {
 	}
 	if err := own.scope.DeleteLink(ownLink); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSetNodeMetadataUpdatesSnapshotsSaveAndCopy(t *testing.T) {
+	w, _ := testWorkspace(t)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{
+		State: NodeState{
+			DisplayName: "node",
+			Private:     map[string]string{"private": "preserved"},
+		},
+		UseState: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]string{"key": "value"}
+	if err := w.SetNodeMetadata(node, metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata["key"] = "mutated"
+
+	snapshot, ok := w.Node(node)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if snapshot.Dynamic.Metadata["key"] != "value" || snapshot.Dynamic.DisplayName != "node" {
+		t.Fatalf("snapshot state = %#v", snapshot.Dynamic)
+	}
+	if snapshot.Dynamic.Private.(map[string]string)["private"] != "preserved" {
+		t.Fatalf("private state was not preserved: %#v", snapshot.Dynamic.Private)
+	}
+	snapshot.Dynamic.Metadata["key"] = "mutated"
+	next, _ := w.Node(node)
+	if next.Dynamic.Metadata["key"] != "value" {
+		t.Fatalf("metadata snapshot leaked mutable state: %#v", next.Dynamic.Metadata)
+	}
+
+	saved := w.Save()
+	if len(saved.Nodes) != 1 || saved.Nodes[0].State.Metadata["key"] != "value" {
+		t.Fatalf("saved metadata = %#v", saved.Nodes)
+	}
+	clip, err := w.Copy([]NodeID{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clip.Nodes) != 1 || clip.Nodes[0].State.Metadata["key"] != "value" {
+		t.Fatalf("clipboard metadata = %#v", clip.Nodes)
+	}
+	if err := w.SetNodeMetadata(node, nil); err != nil {
+		t.Fatal(err)
+	}
+	cleared, _ := w.Node(node)
+	if cleared.Dynamic.Metadata != nil {
+		t.Fatalf("metadata = %#v, want nil", cleared.Dynamic.Metadata)
 	}
 }
 
@@ -373,6 +430,9 @@ func TestNodeScopeUpdatesOwnNodeState(t *testing.T) {
 	if err := scope.SetCoordinate("x:3"); err != nil {
 		t.Fatal(err)
 	}
+	if err := scope.SetMetadata(map[string]string{"from": "node"}); err != nil {
+		t.Fatal(err)
+	}
 	nextInputs := []PortSpec{{
 		ID:        PortID{Number: 2, Kind: InputPort},
 		Name:      "next",
@@ -392,6 +452,9 @@ func TestNodeScopeUpdatesOwnNodeState(t *testing.T) {
 	private, ok := snap.Dynamic.Private.(map[string]string)
 	if !ok || private["value"] != "from-node" {
 		t.Fatalf("private = %#v", snap.Dynamic.Private)
+	}
+	if snap.Dynamic.Metadata["from"] != "node" {
+		t.Fatalf("metadata = %#v", snap.Dynamic.Metadata)
 	}
 	if len(snap.Inputs) != 1 || snap.Inputs[0].ID.Number != 2 {
 		t.Fatalf("inputs = %#v", snap.Inputs)
@@ -446,11 +509,17 @@ func TestNodeScopeReportsDeletedAndClosedNodes(t *testing.T) {
 	if err := deletedScope.SetPrivate("late"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted SetPrivate error = %v, want ErrNotFound", err)
 	}
+	if err := deletedScope.SetMetadata(map[string]string{"late": "true"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted SetMetadata error = %v, want ErrNotFound", err)
+	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := closedScope.SetPrivate("late"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("closed SetPrivate error = %v, want ErrClosed", err)
+	}
+	if err := closedScope.SetMetadata(map[string]string{"late": "true"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed SetMetadata error = %v, want ErrClosed", err)
 	}
 }
 
