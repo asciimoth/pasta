@@ -1231,6 +1231,131 @@ func TestDefineClassReinitializesRecalledNodes(t *testing.T) {
 	}
 }
 
+func TestRegisterLibraryReactivatesUnregisteredNodesAndLinks(t *testing.T) {
+	runtime := &lifecycleClass{}
+	w, _, log := lifecycleWorkspace(t, runtime)
+	a, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.UnregisterLibrary("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := w.Link(link); !ok || got.State != StateInactive {
+		t.Fatalf("link = %#v, ok %v; want inactive", got, ok)
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Source",
+		Runtime: runtime,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := w.Link(link); !ok || got.State != StateActive {
+		t.Fatalf("link = %#v, ok %v; want active", got, ok)
+	}
+	want := []string{
+		"init:new",
+		"init:new",
+		"object",
+		"before:input:object:example.com/int",
+		"before:output:object:example.com/int",
+		"after:input:1:object:example.com/int",
+		"after:output:1:object:example.com/int",
+		"inactive-before:1:library-unregister",
+		"inactive-before:2:library-unregister",
+		"inactive-after:1:library-unregister",
+		"inactive-after:2:library-unregister",
+		"link-inactive:input:1:library-unregister",
+		"link-inactive:output:1:library-unregister",
+		"init:restore",
+		"init:restore",
+	}
+	if fmt.Sprint(*log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", *log, want)
+	}
+}
+
+type defineThenFailLibrary struct {
+	name  string
+	class ClassSpec
+}
+
+func (l defineThenFailLibrary) Name() string { return l.name }
+
+func (l defineThenFailLibrary) DefineClasses(scope LibraryScope) error {
+	if err := scope.DefineClass(l.class); err != nil {
+		return err
+	}
+	return fmt.Errorf("define failed")
+}
+
+func TestRegisterLibraryRollbackRestoresInactiveNodesOnDefineError(t *testing.T) {
+	initialRuntime := &lifecycleClass{}
+	w, _, _ := lifecycleWorkspace(t, initialRuntime)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.UnregisterLibrary("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	before := w.Snapshot()
+	retryRuntime := &lifecycleClass{log: &[]string{}, nodes: map[NodeID]*lifecycleNode{}}
+	err = w.RegisterLibrary(defineThenFailLibrary{
+		name: "example.com",
+		class: ClassSpec{
+			Name:    "example.com/Source",
+			Runtime: retryRuntime,
+			Inputs: []PortSpec{{
+				ID:        PortID{Number: 1, Kind: InputPort},
+				Name:      "in",
+				Direction: InputPort,
+				FixedType: testType,
+			}},
+			Outputs: []PortSpec{{
+				ID:        PortID{Number: 1, Kind: OutputPort},
+				Name:      "out",
+				Direction: OutputPort,
+				FixedType: testType,
+			}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected register failure")
+	}
+	after := w.Snapshot()
+	if len(after.Libraries) != 0 || len(after.Classes) != len(before.Classes) {
+		t.Fatalf("snapshot = %#v, want rolled back to %#v", after, before)
+	}
+	if got, ok := w.Node(node); !ok || got.State != StateInactive {
+		t.Fatalf("node = %#v, ok %v; want inactive", got, ok)
+	}
+}
+
 func TestDefineClassReactivationRollsBackOnInitError(t *testing.T) {
 	data := SaveData{
 		NextNode: 2,

@@ -68,6 +68,9 @@ layout because the repo root is not itself a Go module.
 - Deterministic restore runtime initialization using DAG ordering.
 - Late class definition can reactivate preserved inactive nodes and links.
 - Class recall recovery reinitializes recovered node runtimes.
+- Library unregister/register recovery reinitializes recovered node runtimes.
+- Library registration rolls back partial class definitions and reactivation on
+  hook errors or panics.
 - Initial `ARCHITECTURE.md` and `AGENTS.md`.
 - Tests for:
   - name validation
@@ -92,6 +95,7 @@ layout because the repo root is not itself a Go module.
   - library-scoped ownership enforcement for classes, nodes, and links
   - node-scoped runtime updates and deleted/closed scope errors
   - class definition reactivation and rollback
+  - library unregister/register recovery and rollback
 
 ## Verified
 
@@ -109,8 +113,6 @@ go vet ./pasta/...
   - richer link deleted/inactivated notifications if needed by link contracts
   - export/import private state
 - Add explicit worker shutdown/close semantics for nodes with goroutines.
-- Expand library/class runtime behavior:
-  - library unregister/register recovery
 - Replace or wrap the current JSON-like `any` persistence shape with a concrete
   `github.com/asciimoth/configer` integration.
 - Expand controller/query APIs:

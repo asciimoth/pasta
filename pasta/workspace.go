@@ -137,18 +137,30 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		w.mu.Unlock()
 		return opErr("register library", "validate", ErrDuplicate)
 	}
+	oldLibraries := cloneLibraries(w.libraries)
+	oldClasses := cloneClassRecords(w.classes)
+	oldNodes := cloneNodeRecords(w.nodes)
+	oldLinks := cloneLinkRecords(w.links)
 	w.libraries[name] = lib
 	w.mu.Unlock()
 
+	rollback := func() {
+		w.mu.Lock()
+		w.libraries = oldLibraries
+		w.classes = oldClasses
+		w.nodes = oldNodes
+		w.links = oldLinks
+		w.mu.Unlock()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			w.logPanic("register library", r)
-			_ = w.UnregisterLibrary(name)
+			rollback()
 			err = opErr("register library", "hook", fmt.Errorf("panic: %v", r))
 		}
 	}()
 	if err := lib.DefineClasses(&libraryScope{w: w, library: name}); err != nil {
-		_ = w.UnregisterLibrary(name)
+		rollback()
 		return opErr("register library", "hook", err)
 	}
 	return nil
@@ -1314,6 +1326,14 @@ func cloneClassSpec(spec ClassSpec) ClassSpec {
 	spec.Outputs = clonePorts(spec.Outputs)
 	spec.Metadata = cloneStringMap(spec.Metadata)
 	return spec
+}
+
+func cloneLibraries(records map[string]Library) map[string]Library {
+	out := make(map[string]Library, len(records))
+	for name, lib := range records {
+		out[name] = lib
+	}
+	return out
 }
 
 func cloneClassRecords(records map[string]*classRecord) map[string]*classRecord {

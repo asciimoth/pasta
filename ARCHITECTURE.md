@@ -40,7 +40,10 @@ access, and node-scoped runtime updates.
 
 Node initialization and link lifecycle hooks run outside the workspace lock, then
 mutations revalidate before commit. The implementation recovers panics from
-library registration and node lifecycle hooks.
+library registration and node lifecycle hooks. Library registration snapshots
+the workspace model before class-definition hooks and restores it if the hook
+returns an error or panics, so partial class reactivation does not leak into the
+workspace.
 
 ## Persistence
 
