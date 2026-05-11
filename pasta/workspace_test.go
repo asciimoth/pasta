@@ -761,6 +761,9 @@ type lifecycleNode struct {
 	panicAfterDelete   bool
 	panicOnClose       bool
 	inspectOnAttach    WorkspaceRO
+	inspectOnInactive  WorkspaceRO
+	inspectOnDelete    WorkspaceRO
+	inspectOnClose     WorkspaceRO
 }
 
 type privateHookClass struct {
@@ -862,6 +865,10 @@ func (n *lifecycleNode) BeforeInactive(reason InactiveReason) error {
 	if n.panicOnInactive {
 		panic("inactive panic")
 	}
+	if n.inspectOnInactive != nil {
+		_ = n.inspectOnInactive.Snapshot()
+		*n.log = append(*n.log, "inspect-inactive")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("inactive-before:%d:%s", n.id, reason))
 	if n.failInactive {
 		return fmt.Errorf("inactive failed")
@@ -880,6 +887,10 @@ func (n *lifecycleNode) BeforeDelete() error {
 	if n.panicOnDelete {
 		panic("delete panic")
 	}
+	if n.inspectOnDelete != nil {
+		_ = n.inspectOnDelete.Snapshot()
+		*n.log = append(*n.log, "inspect-delete")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("delete-before:%d", n.id))
 	return nil
 }
@@ -894,6 +905,10 @@ func (n *lifecycleNode) AfterDelete() {
 func (n *lifecycleNode) Close() error {
 	if n.panicOnClose {
 		panic("close panic")
+	}
+	if n.inspectOnClose != nil {
+		_ = n.inspectOnClose.Snapshot()
+		*n.log = append(*n.log, "inspect-close")
 	}
 	*n.log = append(*n.log, fmt.Sprintf("close:%d", n.id))
 	return nil
@@ -946,6 +961,15 @@ func privateHookWorkspace(t *testing.T, classRuntime *privateHookClass, defaultP
 		t.Fatal(err)
 	}
 	return w, nodes, &imports
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLifecyclePrivateStateExportAndImportHooks(t *testing.T) {
@@ -1154,6 +1178,55 @@ func TestLifecycleCreateLinkHooksMayReadWorkspace(t *testing.T) {
 	}
 }
 
+func TestLifecycleNodeHooksMayReadWorkspace(t *testing.T) {
+	w, nodes, log := lifecycleWorkspace(t, &lifecycleClass{})
+	deleted, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	recalled, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	nodes[deleted].inspectOnDelete = w
+	nodes[recalled].inspectOnInactive = w
+
+	done := make(chan error, 1)
+	go func() { done <- w.DeleteNode(deleted) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("DeleteNode hook could not read workspace; likely recursive lock deadlock")
+	}
+
+	go func() { done <- w.RecallClass("example.com", "example.com/Source") }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RecallClass hook could not read workspace; likely recursive lock deadlock")
+	}
+
+	w2, nodes2, log2 := lifecycleWorkspace(t, &lifecycleClass{})
+	closed, _ := w2.CreateNode("example.com/Source", NodeOptions{})
+	nodes2[closed].inspectOnClose = w2
+	go func() { done <- w2.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hook could not read workspace; likely recursive lock deadlock")
+	}
+
+	if !containsString(*log, "inspect-delete") || !containsString(*log, "inspect-inactive") {
+		t.Fatalf("log = %#v, want delete and inactive inspections", *log)
+	}
+	if !containsString(*log2, "inspect-close") {
+		t.Fatalf("close log = %#v, want close inspection", *log2)
+	}
+}
+
 type blockingAttachClass struct {
 	mu    sync.Mutex
 	nodes map[NodeID]*blockingAttachNode
@@ -1236,6 +1309,106 @@ func TestCreateLinkRevalidatesAfterConcurrentInterleaving(t *testing.T) {
 	snapshot := w.Snapshot()
 	if len(snapshot.Links) != 1 || snapshot.Links[0].ID != second {
 		t.Fatalf("links = %#v, want only second link %s", snapshot.Links, second)
+	}
+}
+
+func TestWorkspaceConcurrentReadWriteSmoke(t *testing.T) {
+	class := ClassSpec{
+		Name: "example.com/Source",
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+			Multiple:  true,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	nodes := make([]NodeID, 6)
+	for i := range nodes {
+		id, err := w.CreateNode("example.com/Source", NodeOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodes[i] = id
+	}
+	stableLink, err := w.CreateLink(
+		FullPortID{Node: nodes[1], Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: nodes[0], Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 64)
+	var wg sync.WaitGroup
+	for reader := 0; reader < 4; reader++ {
+		wg.Add(1)
+		go func(reader int) {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				_ = w.Snapshot()
+				_ = w.Save()
+				_, _ = w.Node(nodes[i%len(nodes)])
+				_, _ = w.Link(stableLink)
+				_ = w.CanCreateLink(
+					FullPortID{Node: nodes[3], Port: PortID{Number: 1, Kind: InputPort}},
+					FullPortID{Node: nodes[2], Port: PortID{Number: 1, Kind: OutputPort}},
+					testType,
+				)
+			}
+		}(reader)
+	}
+	for writer := 0; writer < 4; writer++ {
+		wg.Add(1)
+		go func(writer int) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				node := nodes[(writer+i)%len(nodes)]
+				if err := w.SetNodeCoordinate(node, fmt.Sprintf("w:%d:%d", writer, i)); err != nil {
+					errs <- err
+					return
+				}
+				if err := w.SetNodePrivate(node, map[string]any{"writer": writer, "i": i}); err != nil {
+					errs <- err
+					return
+				}
+				if err := w.SetLinkWaypoints(stableLink, []string{fmt.Sprintf("p:%d:%d", writer, i)}); err != nil {
+					errs <- err
+					return
+				}
+				inputNode := nodes[3+(writer%3)]
+				outputNode := nodes[2]
+				link, err := w.CreateLink(
+					FullPortID{Node: inputNode, Port: PortID{Number: 1, Kind: InputPort}},
+					FullPortID{Node: outputNode, Port: PortID{Number: 1, Kind: OutputPort}},
+					LinkOptions{},
+				)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if err := w.DeleteLink(link); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(writer)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 

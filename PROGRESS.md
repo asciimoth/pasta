@@ -108,6 +108,9 @@ layout because the repo root is not itself a Go module.
     attached links
   - runtime private state export/import, defensive copy behavior, and rollback
     on hook failures
+  - concurrent read/write smoke coverage under the race detector
+  - recursive-lock risk coverage for node lifecycle hooks that read workspace
+    snapshots
 
 ## Verified
 
@@ -131,7 +134,6 @@ go vet ./pasta/...
   - richer "can I do this?" validation queries
   - metadata editing helpers
   - disable/enable APIs if needed
-- Add concurrent read/write and recursive-lock risk tests.
 - Add tests for remaining restore edge cases and inactive recovery.
 - Expand `ARCHITECTURE.md` after lifecycle and persistence contracts are final.
 
