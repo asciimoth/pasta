@@ -35,6 +35,7 @@ type nodeRecord struct {
 	dynamic NodeState
 	inputs  []PortSpec
 	outputs []PortSpec
+	runtime NodeRuntime
 }
 
 type linkRecord struct {
@@ -74,18 +75,47 @@ func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 // Close marks the workspace closed and inactivates all live objects.
 func (w *Workspace) Close() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	inactiveNodes := make(map[NodeID]bool)
+	for id, node := range w.nodes {
+		if node.state == StateActive {
+			inactiveNodes[id] = true
+		}
+	}
+	nodeEvents, linkEvents := w.inactiveEventsForNodesLocked(inactiveNodes)
+	w.mu.Unlock()
+	if err := w.callBeforeInactiveEvents(nodeEvents, InactiveWorkspaceClose); err != nil {
+		return opErr("close workspace", "hook", err)
+	}
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
 		return nil
 	}
 	w.closed = true
+	runtimes := make([]NodeRuntime, 0, len(w.nodes))
 	for _, n := range w.nodes {
 		n.state = StateInactive
+		if n.runtime != nil {
+			runtimes = append(runtimes, n.runtime)
+		}
 	}
 	for _, l := range w.links {
 		l.state = StateInactive
 	}
-	return nil
+	w.mu.Unlock()
+	w.callAfterInactiveEvents(nodeEvents, InactiveWorkspaceClose)
+	w.callLinkInactiveEvents(linkEvents, InactiveWorkspaceClose)
+	var first error
+	for _, runtime := range runtimes {
+		if err := w.callNodeClose(runtime); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // RegisterLibrary registers a library and asks it to define its classes.
@@ -126,11 +156,32 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 // UnregisterLibrary unregisters a library and inactivates its classes, nodes, and links.
 func (w *Workspace) UnregisterLibrary(name string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return opErr("unregister library", "validate", ErrClosed)
 	}
 	if _, ok := w.libraries[name]; !ok {
+		w.mu.Unlock()
+		return opErr("unregister library", "validate", ErrNotFound)
+	}
+	inactiveNodes := make(map[NodeID]bool)
+	for id, node := range w.nodes {
+		if node.library == name && node.state == StateActive {
+			inactiveNodes[id] = true
+		}
+	}
+	nodeEvents, linkEvents := w.inactiveEventsForNodesLocked(inactiveNodes)
+	w.mu.Unlock()
+	if err := w.callBeforeInactiveEvents(nodeEvents, InactiveLibraryUnregister); err != nil {
+		return opErr("unregister library", "hook", err)
+	}
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return opErr("unregister library", "validate", ErrClosed)
+	}
+	if _, ok := w.libraries[name]; !ok {
+		w.mu.Unlock()
 		return opErr("unregister library", "validate", ErrNotFound)
 	}
 	delete(w.libraries, name)
@@ -140,6 +191,9 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 		}
 	}
 	w.refreshActivityLocked()
+	w.mu.Unlock()
+	w.callAfterInactiveEvents(nodeEvents, InactiveLibraryUnregister)
+	w.callLinkInactiveEvents(linkEvents, InactiveLibraryUnregister)
 	return nil
 }
 
@@ -153,37 +207,115 @@ func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
 // RecallClass marks a class inactive and inactivates dependent nodes and links.
 func (w *Workspace) RecallClass(library, className string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("recall class"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	rec, ok := w.classes[className]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("recall class", "validate", ErrNotFound)
 	}
 	if rec.library != library {
+		w.mu.Unlock()
+		return opErr("recall class", "validate", ErrOwnership)
+	}
+	inactiveNodes := make(map[NodeID]bool)
+	for id, node := range w.nodes {
+		if node.class == className && node.state == StateActive {
+			inactiveNodes[id] = true
+		}
+	}
+	nodeEvents, linkEvents := w.inactiveEventsForNodesLocked(inactiveNodes)
+	w.mu.Unlock()
+	if err := w.callBeforeInactiveEvents(nodeEvents, InactiveClassRecall); err != nil {
+		return opErr("recall class", "hook", err)
+	}
+	w.mu.Lock()
+	if err := w.checkOpenLocked("recall class"); err != nil {
+		w.mu.Unlock()
+		return err
+	}
+	rec, ok = w.classes[className]
+	if !ok {
+		w.mu.Unlock()
+		return opErr("recall class", "validate", ErrNotFound)
+	}
+	if rec.library != library {
+		w.mu.Unlock()
 		return opErr("recall class", "validate", ErrOwnership)
 	}
 	rec.active = false
 	w.refreshActivityLocked()
+	w.mu.Unlock()
+	w.callAfterInactiveEvents(nodeEvents, InactiveClassRecall)
+	w.callLinkInactiveEvents(linkEvents, InactiveClassRecall)
 	return nil
 }
 
 // CreateNode creates an active node from a registered active class.
 func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.createNodeLocked(className, opts)
+	id, rec, runtimeClass, err := w.prepareCreateNodeLocked(className, opts, InitNew)
+	w.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	runtime, err := w.initNodeRuntime(runtimeClass, rec, InitNew)
+	if err != nil {
+		w.mu.Lock()
+		w.rollbackPreparedNodeLocked(id)
+		w.mu.Unlock()
+		return 0, err
+	}
+	w.mu.Lock()
+	if err := w.checkOpenLocked("create node"); err != nil {
+		w.rollbackPreparedNodeLocked(id)
+		w.mu.Unlock()
+		return 0, err
+	}
+	class := w.classes[className]
+	if class == nil || !class.active {
+		w.rollbackPreparedNodeLocked(id)
+		w.mu.Unlock()
+		return 0, opErr("create node", "validate", ErrInactive)
+	}
+	rec.runtime = runtime
+	w.nodes[id] = rec
+	w.mu.Unlock()
+	return id, nil
 }
 
 // DeleteNode deletes a node and immediately removes all attached links.
 func (w *Workspace) DeleteNode(id NodeID) error {
+	w.mu.RLock()
+	node, ok := w.nodes[id]
+	var runtime NodeRuntime
+	if ok {
+		runtime = node.runtime
+	}
+	w.mu.RUnlock()
+	if !ok {
+		return opErr("delete node", "validate", ErrNotFound)
+	}
+	if err := w.callBeforeDelete(runtime); err != nil {
+		return opErr("delete node", "hook", err)
+	}
+	snapshot := w.Snapshot()
+	for _, link := range snapshot.Links {
+		if link.Input.Node == id || link.Output.Node == id {
+			if err := w.DeleteLink(link.ID); err != nil {
+				return err
+			}
+		}
+	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("delete node"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	if _, ok := w.nodes[id]; !ok {
+		w.mu.Unlock()
 		return opErr("delete node", "validate", ErrNotFound)
 	}
 	delete(w.nodes, id)
@@ -192,6 +324,8 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 			delete(w.links, linkID)
 		}
 	}
+	w.mu.Unlock()
+	w.callAfterDelete(runtime)
 	return nil
 }
 
@@ -256,39 +390,39 @@ func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (LinkID, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := w.checkOpenLocked("create link"); err != nil {
-		return 0, err
-	}
-	typ, err := w.validateLinkLocked(input, output, opts.Type, 0)
-	if err != nil {
-		return 0, opErr("create link", "validate", err)
-	}
-	id := w.nextLink
-	w.nextLink++
-	w.links[id] = &linkRecord{
-		id:        id,
-		input:     input,
-		output:    output,
-		typ:       typ,
-		state:     StateActive,
-		waypoints: append([]string(nil), opts.Waypoints...),
-		object:    opts.Object,
-	}
-	w.refreshActivityLocked()
-	return id, nil
+	return w.createLinkLocked(input, output, opts)
 }
 
 // DeleteLink deletes one link.
 func (w *Workspace) DeleteLink(id LinkID) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("delete link"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
+	link, ok := w.links[id]
+	if !ok {
+		w.mu.Unlock()
+		return opErr("delete link", "validate", ErrNotFound)
+	}
+	inputRuntime, outputRuntime := w.linkRuntimesLocked(link)
+	inputEndpoint, outputEndpoint := linkEndpoints(link)
+	w.mu.Unlock()
+	if err := w.callBeforeLinkDetach(inputRuntime, inputEndpoint); err != nil {
+		return opErr("delete link", "hook", err)
+	}
+	if err := w.callBeforeLinkDetach(outputRuntime, outputEndpoint); err != nil {
+		return opErr("delete link", "hook", err)
+	}
+	w.mu.Lock()
 	if _, ok := w.links[id]; !ok {
+		w.mu.Unlock()
 		return opErr("delete link", "validate", ErrNotFound)
 	}
 	delete(w.links, id)
+	w.mu.Unlock()
+	w.callAfterLinkDetach(inputRuntime, inputEndpoint)
+	w.callAfterLinkDetach(outputRuntime, outputEndpoint)
 	return nil
 }
 
@@ -347,10 +481,11 @@ func (w *Workspace) Copy(ids []NodeID) (Clipboard, error) {
 // Paste creates new nodes and remapped internal links from Clipboard.
 func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("paste"); err != nil {
+		w.mu.Unlock()
 		return nil, nil, err
 	}
+	w.mu.Unlock()
 	nodeMap := make(map[NodeID]NodeID, len(clip.Nodes))
 	newNodes := make([]NodeID, 0, len(clip.Nodes))
 	for _, saved := range clip.Nodes {
@@ -358,13 +493,38 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		if err != nil {
 			return nil, nil, opErr("paste", "validate", err)
 		}
-		id, err := w.createNodeLocked(saved.Class, NodeOptions{State: saved.State, UseState: true})
+		w.mu.Lock()
+		id, rec, runtimeClass, err := w.prepareCreateNodeLocked(saved.Class, NodeOptions{State: saved.State, UseState: true}, InitRestore)
+		w.mu.Unlock()
 		if err != nil {
 			return nil, nil, err
 		}
+		runtime, err := w.initNodeRuntime(runtimeClass, rec, InitRestore)
+		if err != nil {
+			w.mu.Lock()
+			w.rollbackPreparedNodeLocked(id)
+			w.mu.Unlock()
+			return nil, nil, err
+		}
+		w.mu.Lock()
+		if err := w.checkOpenLocked("paste"); err != nil {
+			w.rollbackPreparedNodeLocked(id)
+			w.mu.Unlock()
+			return nil, nil, err
+		}
+		class := w.classes[saved.Class]
+		if class == nil || !class.active {
+			w.rollbackPreparedNodeLocked(id)
+			w.mu.Unlock()
+			return nil, nil, opErr("paste", "validate", ErrInactive)
+		}
+		rec.runtime = runtime
+		w.nodes[id] = rec
 		node := w.nodes[id]
+		node.runtime = runtime
 		node.inputs = clonePorts(saved.Inputs)
 		node.outputs = clonePorts(saved.Outputs)
+		w.mu.Unlock()
 		nodeMap[oldID] = id
 		newNodes = append(newNodes, id)
 	}
@@ -381,23 +541,22 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		}
 		input := FullPortID{Node: newInputNode, Port: full.Input.Port}
 		output := FullPortID{Node: newOutputNode, Port: full.Output.Port}
+		w.mu.Lock()
 		typ, err := w.validateLinkLocked(input, output, saved.Type, 0)
 		if err != nil {
+			w.mu.Unlock()
 			return nil, nil, opErr("paste", "validate", err)
 		}
-		id := w.nextLink
-		w.nextLink++
-		w.links[id] = &linkRecord{
-			id:        id,
-			input:     input,
-			output:    output,
-			typ:       typ,
-			state:     StateActive,
-			waypoints: append([]string(nil), saved.Waypoints...),
+		id, err := w.createLinkLocked(input, output, LinkOptions{Type: typ, Waypoints: saved.Waypoints})
+		w.mu.Unlock()
+		if err != nil {
+			return nil, nil, err
 		}
 		newLinks = append(newLinks, id)
 	}
+	w.mu.Lock()
 	w.refreshActivityLocked()
+	w.mu.Unlock()
 	return newNodes, newLinks, nil
 }
 
@@ -469,16 +628,16 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) error {
 	return nil
 }
 
-func (w *Workspace) createNodeLocked(className string, opts NodeOptions) (NodeID, error) {
+func (w *Workspace) prepareCreateNodeLocked(className string, opts NodeOptions, _ InitMode) (NodeID, *nodeRecord, NodeClass, error) {
 	if err := w.checkOpenLocked("create node"); err != nil {
-		return 0, err
+		return 0, nil, nil, err
 	}
 	class, ok := w.classes[className]
 	if !ok {
-		return 0, opErr("create node", "validate", ErrNotFound)
+		return 0, nil, nil, opErr("create node", "validate", ErrNotFound)
 	}
 	if !class.active {
-		return 0, opErr("create node", "validate", ErrInactive)
+		return 0, nil, nil, opErr("create node", "validate", ErrInactive)
 	}
 	id := w.nextNode
 	w.nextNode++
@@ -486,7 +645,7 @@ func (w *Workspace) createNodeLocked(className string, opts NodeOptions) (NodeID
 	if opts.UseState || !reflect.DeepEqual(opts.State, NodeState{}) {
 		state = cloneNodeState(opts.State)
 	}
-	w.nodes[id] = &nodeRecord{
+	rec := &nodeRecord{
 		id:      id,
 		class:   className,
 		library: class.library,
@@ -495,6 +654,59 @@ func (w *Workspace) createNodeLocked(className string, opts NodeOptions) (NodeID
 		inputs:  clonePorts(class.spec.Inputs),
 		outputs: clonePorts(class.spec.Outputs),
 	}
+	return id, rec, class.spec.Runtime, nil
+}
+
+func (w *Workspace) rollbackPreparedNodeLocked(id NodeID) {
+	delete(w.nodes, id)
+	if id+1 == w.nextNode {
+		w.nextNode = id
+	}
+}
+
+func (w *Workspace) createLinkLocked(input, output FullPortID, opts LinkOptions) (LinkID, error) {
+	if err := w.checkOpenLocked("create link"); err != nil {
+		return 0, err
+	}
+	typ, err := w.validateLinkLocked(input, output, opts.Type, 0)
+	if err != nil {
+		return 0, opErr("create link", "validate", err)
+	}
+	link := &linkRecord{
+		input:     input,
+		output:    output,
+		typ:       typ,
+		state:     StateActive,
+		waypoints: append([]string(nil), opts.Waypoints...),
+		object:    opts.Object,
+	}
+	inputRuntime, outputRuntime := w.linkRuntimesLocked(link)
+	inputEndpoint, outputEndpoint := linkEndpoints(link)
+	object := opts.Object
+	if object == nil {
+		object, err = w.callLinkObject(inputRuntime, inputEndpoint)
+		if err != nil {
+			return 0, opErr("create link", "hook", err)
+		}
+		link.object = object
+	}
+	if err := w.callBeforeLinkAttach(inputRuntime, inputEndpoint, object); err != nil {
+		return 0, opErr("create link", "hook", err)
+	}
+	if err := w.callBeforeLinkAttach(outputRuntime, outputEndpoint, object); err != nil {
+		return 0, opErr("create link", "hook", err)
+	}
+	id := w.nextLink
+	w.nextLink++
+	link.id = id
+	link.input = input
+	link.output = output
+	inputEndpoint.Link = id
+	outputEndpoint.Link = id
+	w.links[id] = link
+	w.refreshActivityLocked()
+	w.callAfterLinkAttach(inputRuntime, inputEndpoint, object)
+	w.callAfterLinkAttach(outputRuntime, outputEndpoint, object)
 	return id, nil
 }
 

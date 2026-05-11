@@ -38,6 +38,18 @@ layout because the repo root is not itself a Go module.
 - Public node state updates and opaque node coordinate storage.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
+- Optional node class/runtime lifecycle interfaces.
+- Node runtime initialization for new nodes and pasted nodes.
+- Node runtime initialization for restored workspace nodes.
+- Panic-safe lifecycle hook execution.
+- Link-object handoff from the input node when no object is supplied by the caller.
+- Before/after link attach hooks.
+- Before/after link detach hooks for direct link deletion and node deletion.
+- Link inactive notifications when preserved links become inactive.
+- Before/after node inactive hooks for class recall, library unregister, and
+  workspace close.
+- Before/after node delete hooks.
+- Node close hooks when the workspace closes.
 - Link type compatibility validation.
 - Input port multiplicity validation.
 - DAG enforcement for links.
@@ -57,6 +69,10 @@ layout because the repo root is not itself a Go module.
   - linked port update validation
   - save/restore
   - copy/paste ID remapping
+  - lifecycle hook order
+  - restore lifecycle initialization and rollback
+  - link attach rollback on hook errors and panics
+  - inactive hook notifications and rollback
 
 ## Verified
 
@@ -70,24 +86,13 @@ go vet ./pasta/...
 
 ## Still To Do
 
-- Define and implement node lifecycle hooks:
-  - initialize from defaults
-  - initialize from restored state
-  - before/after link attach
-  - before/after link detach
-  - link deleted/inactivated notifications
-  - before becoming inactive
-  - deleted notification
-  - close/shutdown
+- Complete node lifecycle hooks:
+  - richer link deleted/inactivated notifications if needed by link contracts
   - export/import private state
-- Make link creation fully transactional across lifecycle hooks, including
-  rollback on hook errors or panics.
-- Implement the link-object handoff contract:
-  - input node supplies `any`
-  - workspace passes it to output node
-  - both sides can type-check and reject early
-- Add panic recovery around all external class and node hooks. Current recovery
-  only covers library registration.
+- Make link creation fully transactional across concurrent interleavings; hook
+  errors and panics currently roll back the uncommitted link.
+- Add panic recovery around any remaining external callbacks beyond
+  registration and node runtime hooks.
 - Add a node-scoped API for node implementations.
 - Add synchronized private-state update APIs usable from background goroutines.
 - Add explicit worker shutdown/close semantics for nodes with goroutines.

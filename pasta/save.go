@@ -61,7 +61,12 @@ func (w *Workspace) Save() SaveData {
 // currently active are restored as inactive. Broken links are skipped.
 func (w *Workspace) Restore(data SaveData) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			w.mu.Unlock()
+		}
+	}()
 	if err := w.checkOpenLocked("restore"); err != nil {
 		return err
 	}
@@ -114,11 +119,13 @@ func (w *Workspace) Restore(data SaveData) error {
 		}
 	}
 	oldNodes, oldLinks := w.nodes, w.links
+	oldNextNode, oldNextLink := w.nextNode, w.nextLink
 	w.nodes, w.links = nodes, links
 	for _, saved := range data.Links {
 		full, err := ParseFullLinkName(saved.Name)
 		if err != nil {
 			w.nodes, w.links = oldNodes, oldLinks
+			w.nextNode, w.nextLink = oldNextNode, oldNextLink
 			return opErr("restore", "validate", err)
 		}
 		if _, err := w.validateLinkLocked(full.Input, full.Output, saved.Type, full.Link); err != nil {
@@ -151,5 +158,51 @@ func (w *Workspace) Restore(data SaveData) error {
 		w.nextLink = 1
 	}
 	w.refreshActivityLocked()
+	initNodes := make([]restoreInitNode, 0, len(w.nodes))
+	for _, node := range w.nodes {
+		class := w.classes[node.class]
+		if node.state == StateActive && class != nil && class.spec.Runtime != nil {
+			initNodes = append(initNodes, restoreInitNode{record: node, class: class.spec.Runtime})
+		}
+	}
+	w.mu.Unlock()
+	locked = false
+
+	runtimes := make(map[NodeID]NodeRuntime, len(initNodes))
+	for _, initNode := range initNodes {
+		runtime, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
+		if err != nil {
+			w.mu.Lock()
+			locked = true
+			w.nodes, w.links = oldNodes, oldLinks
+			w.nextNode, w.nextLink = oldNextNode, oldNextLink
+			w.mu.Unlock()
+			locked = false
+			return err
+		}
+		runtimes[initNode.record.id] = runtime
+	}
+
+	w.mu.Lock()
+	locked = true
+	if err := w.checkOpenLocked("restore"); err != nil {
+		w.nodes, w.links = oldNodes, oldLinks
+		w.nextNode, w.nextLink = oldNextNode, oldNextLink
+		w.mu.Unlock()
+		locked = false
+		return err
+	}
+	for id, runtime := range runtimes {
+		if node := w.nodes[id]; node != nil {
+			node.runtime = runtime
+		}
+	}
+	w.mu.Unlock()
+	locked = false
 	return nil
+}
+
+type restoreInitNode struct {
+	record *nodeRecord
+	class  NodeClass
 }

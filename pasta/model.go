@@ -50,6 +50,7 @@ type ClassSpec struct {
 	Inputs      []PortSpec
 	Outputs     []PortSpec
 	Metadata    map[string]string
+	Runtime     NodeClass `json:"-"`
 }
 
 // NodeOptions customizes node creation.
@@ -75,6 +76,98 @@ type Clipboard struct {
 type Library interface {
 	Name() string
 	DefineClasses(LibraryScope) error
+}
+
+// NodeClass creates the runtime object for nodes of a class.
+//
+// Hooks run outside the workspace lock. Implementations may inspect the
+// workspace through the read-only API on NodeContext, but all mutations must go
+// through Workspace or LibraryScope methods.
+type NodeClass interface {
+	InitNode(NodeContext, NodeState, InitMode) (NodeRuntime, error)
+}
+
+// InitMode distinguishes normal creation from restore/paste initialization.
+type InitMode string
+
+const (
+	// InitNew is used for freshly created nodes initialized from defaults or options.
+	InitNew InitMode = "new"
+	// InitRestore is used for nodes initialized from persisted or clipboard state.
+	InitRestore InitMode = "restore"
+)
+
+// NodeContext identifies a node while lifecycle hooks are running.
+type NodeContext struct {
+	ID       NodeID
+	Class    string
+	Library  string
+	ReadOnly WorkspaceRO
+}
+
+// NodeRuntime is the application-owned runtime object for a node.
+//
+// Runtime values can implement any of the optional hook interfaces below.
+type NodeRuntime interface{}
+
+// LinkEndpoint describes one node's view of a link.
+type LinkEndpoint struct {
+	Link      LinkID
+	Self      FullPortID
+	Peer      FullPortID
+	Type      string
+	Direction PortDirection
+}
+
+// InactiveReason describes why an active object is becoming inactive.
+type InactiveReason string
+
+const (
+	// InactiveClassRecall means the node class was recalled by its library.
+	InactiveClassRecall InactiveReason = "class-recall"
+	// InactiveLibraryUnregister means the owning library was unregistered.
+	InactiveLibraryUnregister InactiveReason = "library-unregister"
+	// InactiveWorkspaceClose means the workspace is closing.
+	InactiveWorkspaceClose InactiveReason = "workspace-close"
+)
+
+// LinkObjectProvider lets the input node supply the link object passed to the output node.
+type LinkObjectProvider interface {
+	LinkObject(LinkEndpoint) (any, error)
+}
+
+// LinkAttachHook validates and observes link attachment.
+type LinkAttachHook interface {
+	BeforeLinkAttach(LinkEndpoint, any) error
+	AfterLinkAttach(LinkEndpoint, any)
+}
+
+// LinkDetachHook validates and observes link detachment.
+type LinkDetachHook interface {
+	BeforeLinkDetach(LinkEndpoint) error
+	AfterLinkDetach(LinkEndpoint)
+}
+
+// LinkInactiveHook observes a link becoming inactive while it is preserved.
+type LinkInactiveHook interface {
+	AfterLinkInactive(LinkEndpoint, InactiveReason)
+}
+
+// NodeInactiveHook validates and observes a node becoming inactive.
+type NodeInactiveHook interface {
+	BeforeInactive(InactiveReason) error
+	AfterInactive(InactiveReason)
+}
+
+// NodeDeleteHook observes node deletion.
+type NodeDeleteHook interface {
+	BeforeDelete() error
+	AfterDelete()
+}
+
+// NodeCloseHook releases resources owned by a node runtime.
+type NodeCloseHook interface {
+	Close() error
 }
 
 // StaticLibrary is a simple Library implementation backed by ClassSpec values.
