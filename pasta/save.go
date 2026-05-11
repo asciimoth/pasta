@@ -282,14 +282,14 @@ func (w *Workspace) Restore(data SaveData) error {
 	for _, initNode := range initNodes {
 		runtime, scope, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
 		if err != nil {
-			w.cleanupInitializedRuntimes(runtimes, scopes)
+			cleanupErr := w.cleanupInitializedRuntimes(runtimes, scopes)
 			w.mu.Lock()
 			locked = true
 			w.nodes, w.links = oldNodes, oldLinks
 			w.nextNode, w.nextLink = oldNextNode, oldNextLink
 			w.mu.Unlock()
 			locked = false
-			return err
+			return errors.Join(err, cleanupErr)
 		}
 		runtimes[initNode.record.id] = runtime
 		scopes[initNode.record.id] = scope
@@ -302,8 +302,7 @@ func (w *Workspace) Restore(data SaveData) error {
 		w.nextNode, w.nextLink = oldNextNode, oldNextLink
 		w.mu.Unlock()
 		locked = false
-		w.cleanupInitializedRuntimes(runtimes, scopes)
-		return err
+		return errors.Join(err, w.cleanupInitializedRuntimes(runtimes, scopes))
 	}
 	for id, runtime := range runtimes {
 		if node := w.nodes[id]; node != nil {

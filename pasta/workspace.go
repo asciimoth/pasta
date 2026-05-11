@@ -159,26 +159,24 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 	w.mu.Unlock()
 
 	cleanupRuntimes := make(map[NodeID]NodeRuntime)
-	rollback := func() {
+	rollback := func() error {
 		w.mu.Lock()
 		w.libraries = oldLibraries
 		w.classes = oldClasses
 		w.nodes = oldNodes
 		w.links = oldLinks
 		w.mu.Unlock()
-		w.cleanupInitializedRuntimes(cleanupRuntimes, nil)
+		return w.cleanupInitializedRuntimes(cleanupRuntimes, nil)
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			w.logPanic("register library", r)
-			rollback()
-			err = opErr("register library", "hook", fmt.Errorf("panic: %v", r))
+			err = errors.Join(opErr("register library", "hook", fmt.Errorf("panic: %v", r)), rollback())
 		}
 	}()
 	var detachEvents []linkDetachEvent
 	if err := lib.DefineClasses(&libraryScope{w: w, library: name, detachEvents: &detachEvents, cleanupRuntimes: cleanupRuntimes}); err != nil {
-		rollback()
-		return opErr("register library", "hook", err)
+		return errors.Join(opErr("register library", "hook", err), rollback())
 	}
 	w.callAfterLinkDetachEvents(detachEvents)
 	return nil
@@ -259,13 +257,13 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 	for _, initNode := range initNodes {
 		runtime, scope, err := w.initNodeRuntime(initNode.class, initNode.record, InitRestore)
 		if err != nil {
-			w.cleanupInitializedRuntimes(runtimes, scopes)
+			cleanupErr := w.cleanupInitializedRuntimes(runtimes, scopes)
 			w.mu.Lock()
 			w.classes = oldClasses
 			w.nodes = oldNodes
 			w.links = oldLinks
 			w.mu.Unlock()
-			return err
+			return errors.Join(err, cleanupErr)
 		}
 		runtimes[initNode.record.id] = runtime
 		scopes[initNode.record.id] = scope
@@ -277,8 +275,7 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 		w.nodes = oldNodes
 		w.links = oldLinks
 		w.mu.Unlock()
-		w.cleanupInitializedRuntimes(runtimes, scopes)
-		return err
+		return errors.Join(err, w.cleanupInitializedRuntimes(runtimes, scopes))
 	}
 	for id, runtime := range runtimes {
 		node := w.nodes[id]
@@ -287,8 +284,7 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 			w.nodes = oldNodes
 			w.links = oldLinks
 			w.mu.Unlock()
-			w.cleanupInitializedRuntimes(runtimes, scopes)
-			return opErr("define class", "validate", ErrInactive)
+			return errors.Join(opErr("define class", "validate", ErrInactive), w.cleanupInitializedRuntimes(runtimes, scopes))
 		}
 		node.runtime = runtime
 		if scope := scopes[id]; scope != nil {
