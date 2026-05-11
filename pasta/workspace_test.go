@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/asciimoth/configer/configer"
 )
 
 const testType = "example.com/int"
@@ -545,6 +547,64 @@ func TestSaveRestoreAndPasteRemapIDs(t *testing.T) {
 	}
 	if nodes[0] == a || nodes[1] == b || links[0] == link {
 		t.Fatal("paste reused original IDs")
+	}
+}
+
+func TestSaveConfigRestoreConfigRoundTrip(t *testing.T) {
+	w, _ := testWorkspace(t)
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
+		Coordinate: "x:1",
+		Private: map[string]any{
+			"value": "persisted",
+			"count": 2,
+		},
+	}})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{Coordinate: "x:2"}})
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{Waypoints: []string{"p1"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := w.SaveConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := cfg.Get(configer.Path{"nodes", "0", "state", "Private", "value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "persisted" {
+		t.Fatalf("config private value = %#v, want persisted", got)
+	}
+	if err := cfg.Set(configer.Path{"nodes", "0", "state", "Private", "value"}, "mutated-copy"); err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := w.Node(a)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if snap.Dynamic.Private.(map[string]any)["value"] != "persisted" {
+		t.Fatalf("SaveConfig exposed workspace private state: %#v", snap.Dynamic.Private)
+	}
+
+	restored, _ := testWorkspace(t)
+	if err := restored.RestoreConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	restoredNode, ok := restored.Node(a)
+	if !ok {
+		t.Fatal("restored node should exist")
+	}
+	private, ok := restoredNode.Dynamic.Private.(map[string]any)
+	if !ok || private["value"] != "mutated-copy" || private["count"] != float64(2) {
+		t.Fatalf("restored private = %#v", restoredNode.Dynamic.Private)
+	}
+	restoredLink, ok := restored.Link(link)
+	if !ok || restoredLink.Waypoints[0] != "p1" {
+		t.Fatalf("restored link = %#v, ok %v", restoredLink, ok)
 	}
 }
 

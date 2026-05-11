@@ -3,6 +3,8 @@ package pasta
 import (
 	"errors"
 	"sort"
+
+	"github.com/asciimoth/configer/configer"
 )
 
 // SaveData is the deterministic JSON-like persistence shape for a workspace.
@@ -46,6 +48,29 @@ func (w *Workspace) SaveWithRuntimeState() (SaveData, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.saveLocked(exports), nil
+}
+
+// SaveConfig returns deterministic workspace data as an in-memory configer tree.
+func (w *Workspace) SaveConfig() (configer.Config, error) {
+	return saveDataConfig(w.Save())
+}
+
+// SaveConfigWithRuntimeState returns deterministic configer data after asking
+// active node runtimes to export their current private state.
+func (w *Workspace) SaveConfigWithRuntimeState() (configer.Config, error) {
+	data, err := w.SaveWithRuntimeState()
+	if err != nil {
+		return nil, err
+	}
+	return saveDataConfig(data)
+}
+
+func saveDataConfig(data SaveData) (configer.Config, error) {
+	cfg := configer.NewMemory(nil)
+	if err := configer.Marshal(cfg, data); err != nil {
+		return nil, opErr("save config", "marshal", err)
+	}
+	return cfg, nil
 }
 
 func (w *Workspace) saveLocked(exports map[NodeID]any) SaveData {
@@ -276,6 +301,18 @@ func (w *Workspace) Restore(data SaveData) error {
 	w.mu.Unlock()
 	locked = false
 	return nil
+}
+
+// RestoreConfig replaces workspace model state from configer-backed SaveData.
+func (w *Workspace) RestoreConfig(cfg configer.Config) error {
+	if cfg == nil {
+		return opErr("restore config", "validate", ErrNotFound)
+	}
+	var data SaveData
+	if err := configer.Unmarshal(cfg, &data); err != nil {
+		return opErr("restore config", "unmarshal", err)
+	}
+	return w.Restore(data)
 }
 
 type restoreInitNode struct {

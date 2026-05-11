@@ -70,6 +70,7 @@ layout because the repo root is not itself a Go module.
   recovery because of port type or multiplicity changes.
 - Copy/paste for selected nodes and internal links with ID remapping.
 - Deterministic `SaveData` DTOs and basic restore path.
+- `github.com/asciimoth/configer/configer` save/restore adapter helpers.
 - Restore skips broken persisted links, but rejects invalid persisted link
   constraints such as duplicate link IDs, type mismatches, multiplicity
   violations, and cycles.
@@ -92,6 +93,7 @@ layout because the repo root is not itself a Go module.
   - linked port update validation
   - non-mutating port update validation queries
   - save/restore
+  - configer-backed save/restore round trip
   - deterministic save output
   - deterministic restore initialization order
   - broken persisted link skipping
@@ -133,8 +135,6 @@ go vet ./pasta/...
 
 - Complete node lifecycle hooks:
   - richer link deleted/inactivated notifications if needed by link contracts
-- Replace or wrap the current JSON-like `any` persistence shape with a concrete
-  `github.com/asciimoth/configer` integration.
 - Expand controller/query APIs:
   - possible class queries
   - richer "can I do this?" validation queries
@@ -150,5 +150,5 @@ go vet ./pasta/...
   operate.
 - Broken links are removed immediately when an endpoint node or port no longer
   exists.
-- The current save/restore implementation stores private state as `any`; callers
-  should treat that as provisional until the persistence adapter is finalized.
+- The DTO save/restore implementation stores private state as JSON-like `any`;
+  callers that need path-based config access can use the configer adapter.

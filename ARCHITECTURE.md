@@ -55,7 +55,10 @@ runtime instead of reusing the closed one.
 
 `Save` produces deterministic `SaveData`: nodes and links are sorted, IDs are
 formatted through canonical helpers, and ID generator state is included. Private
-node state is stored as `any` so callers can use a JSON-like/config tree.
+node state is stored in the DTO as JSON-like `any` values. `SaveConfig` and
+`SaveConfigWithRuntimeState` wrap that DTO in a `configer.Config` tree for
+callers that want path-based config access, and `RestoreConfig` restores from
+that config-backed shape.
 Runtimes that own volatile private state can implement `NodePrivateExportHook`;
 `SaveWithRuntimeState` and `Copy` call that hook outside the workspace lock and
 use the exported value in the saved or clipboard data. Runtimes that need an
