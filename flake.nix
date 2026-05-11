@@ -44,17 +44,16 @@
               enable = true;
               description = "Makes sure go.mod matches the source code";
               entry = let script = pkgs.writeShellScript "gotidyhook" ''
-                go -C configer mod tidy -v
-                go -C hujson mod tidy -v
+                go -C pasta mod tidy -v
                 go work sync
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };
             golangtest = {
               enable = true;
-              description = "go test ./configer/... ./hujson/... --race";
+              description = "go test --race";
               entry = let script = pkgs.writeShellScript "gotidyhook" ''
-                go test ./configer/... ./hujson/... --race
+                go test ./pasta/... --race
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };
