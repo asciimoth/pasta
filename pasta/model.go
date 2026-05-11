@@ -20,7 +20,13 @@ const (
 	StateInactive ObjectState = "inactive"
 )
 
-// PortSpec describes a node port.
+// PortSpec describes one public node port.
+//
+// A port belongs to either a node's input set or output set. ID values are
+// unique within that node and must use the same direction as Direction. A port
+// can declare one FixedType or a list of AcceptedTypes; linked ports may only
+// be replaced when every existing link still satisfies the new contract.
+// Metadata is editor/application data and is defensively copied by snapshots.
 type PortSpec struct {
 	ID            PortID
 	Name          string
@@ -31,7 +37,13 @@ type PortSpec struct {
 	Metadata      map[string]string
 }
 
-// NodeState is the public and private dynamic state of a node.
+// NodeState is the dynamic state stored for a node.
+//
+// DisplayName, Description, PrimaryType, Coordinate, and Metadata are public
+// editor-facing values. Private is application-owned runtime state; the
+// workspace stores, copies, and restores it without interpretation. Runtimes
+// that need their latest volatile private value included in SaveWithRuntimeState
+// or Copy should implement NodePrivateExportHook.
 type NodeState struct {
 	DisplayName string
 	Description string
@@ -41,7 +53,12 @@ type NodeState struct {
 	Private     any
 }
 
-// ClassSpec describes a node class.
+// ClassSpec describes a node class definition supplied by a Library.
+//
+// Name must be under the defining library's prefix. Default, Inputs, Outputs,
+// and Metadata are copied into newly created nodes. Runtime is optional; when it
+// is non-nil, the workspace calls InitNode for each active node instance and
+// stores the returned NodeRuntime for later lifecycle hooks.
 type ClassSpec struct {
 	Name        string
 	DisplayName string
@@ -54,12 +71,21 @@ type ClassSpec struct {
 }
 
 // NodeOptions customizes node creation.
+//
+// By default CreateNode starts from the class default state. Set UseState to
+// true to use State instead, for example when a controller wants to seed public
+// metadata or private state explicitly.
 type NodeOptions struct {
 	State    NodeState
 	UseState bool
 }
 
 // LinkOptions customizes link creation.
+//
+// Type is the fixed link type to create. If Type is empty, the workspace chooses
+// a fixed type from one endpoint. Object is the application-owned link contract
+// value; when it is nil, the input runtime may provide it through
+// LinkObjectProvider. Waypoints are opaque editor route coordinates.
 type LinkOptions struct {
 	Type      string
 	Object    any
@@ -67,12 +93,22 @@ type LinkOptions struct {
 }
 
 // Clipboard contains serialized nodes and their internal links for paste.
+//
+// Copy fills this value with the selected nodes and links whose endpoints are
+// both inside the selection. Paste creates fresh node and link IDs and does not
+// reconnect links to nodes outside the clipboard.
 type Clipboard struct {
 	Nodes []SaveNode
 	Links []SaveLink
 }
 
 // Library defines node classes during registration.
+//
+// Name must be a valid library name. DefineClasses receives a LibraryScope
+// restricted to that library's prefix and ownership boundary. Registration is
+// transactional: if DefineClasses returns an error or panics, the workspace
+// restores the previous model and closes any runtimes initialized during the
+// failed registration.
 type Library interface {
 	Name() string
 	DefineClasses(LibraryScope) error
@@ -80,9 +116,11 @@ type Library interface {
 
 // NodeClass creates the runtime object for nodes of a class.
 //
-// Hooks run outside the workspace lock. Implementations may inspect the
-// workspace through the read-only API on NodeContext, but all mutations must go
-// through Workspace or LibraryScope methods.
+// InitNode runs outside the workspace lock with a node-scoped mutation API that
+// remains valid during initialization. The mode is InitNew for normal creation
+// and InitRestore for restore, paste, or reactivation. If initialization fails
+// or panics, the node creation or recovery is rolled back and any initialized
+// runtimes from the same transaction are closed.
 type NodeClass interface {
 	InitNode(NodeContext, NodeState, InitMode) (NodeRuntime, error)
 }
@@ -98,6 +136,11 @@ const (
 )
 
 // NodeContext identifies a node while lifecycle hooks are running.
+//
+// ReadOnly gives a defensive snapshot/query surface for inspecting the graph.
+// Node is restricted to this node's mutable state and can be used by runtime
+// goroutines after initialization until the node is deleted or the workspace is
+// closed.
 type NodeContext struct {
 	ID       NodeID
 	Class    string
@@ -108,13 +151,17 @@ type NodeContext struct {
 
 // NodeRuntime is the application-owned runtime object for a node.
 //
-// Runtime values can implement any of the optional hook interfaces below.
+// Runtime values can implement any of the optional hook interfaces below. The
+// workspace never type-checks link contract values beyond calling those hooks;
+// nodes should validate any link object they receive before accepting it.
 type NodeRuntime interface{}
 
 // NodeScope is the mutation surface for one node implementation.
 //
-// Methods are concurrent-safe and mutate only the node named by ID. They return
-// ErrNotFound after the node has been deleted and ErrClosed after workspace close.
+// Methods are concurrent-safe and mutate only the node named by ID. They may be
+// used during InitNode to update the pending node record before it is committed.
+// After deletion they return ErrNotFound, and after workspace close they return
+// ErrClosed.
 type NodeScope interface {
 	ID() NodeID
 	ReadOnly() WorkspaceRO
@@ -128,7 +175,11 @@ type NodeScope interface {
 	SetPorts(inputs, outputs []PortSpec) error
 }
 
-// LinkEndpoint describes one node's view of a link.
+// LinkEndpoint describes one node's directional view of a link.
+//
+// Self is the port owned by the runtime receiving the hook. Peer is the other
+// endpoint. Direction is Self's direction, so input runtimes see InputPort and
+// output runtimes see OutputPort.
 type LinkEndpoint struct {
 	Link      LinkID
 	Self      FullPortID
@@ -149,12 +200,22 @@ const (
 	InactiveWorkspaceClose InactiveReason = "workspace-close"
 )
 
-// LinkObjectProvider lets the input node supply the link object passed to the output node.
+// LinkObjectProvider lets the input runtime supply a link object.
+//
+// LinkObject is called only on the input-side runtime and only when the caller
+// did not provide LinkOptions.Object. It runs outside the workspace lock before
+// attach hooks. Returning an error or panicking rejects link creation and rolls
+// back the reserved link ID.
 type LinkObjectProvider interface {
 	LinkObject(LinkEndpoint) (any, error)
 }
 
 // LinkAttachHook validates and observes link attachment.
+//
+// BeforeLinkAttach is called on the input runtime first and the output runtime
+// second, outside the workspace lock. Returning an error or panicking aborts the
+// link and leaves the graph unchanged. AfterLinkAttach runs in the same order
+// after the link has committed; its panic is logged and does not roll back.
 type LinkAttachHook interface {
 	BeforeLinkAttach(LinkEndpoint, any) error
 	AfterLinkAttach(LinkEndpoint, any)
@@ -171,17 +232,29 @@ type LinkDetachHook interface {
 }
 
 // LinkInactiveHook observes a link becoming inactive while it is preserved.
+//
+// The hook runs outside the workspace lock after the state change has committed.
+// It is a notification point for link contracts that need to unblock in-flight
+// work because a class, library, or workspace is no longer active.
 type LinkInactiveHook interface {
 	AfterLinkInactive(LinkEndpoint, InactiveReason)
 }
 
 // NodeInactiveHook validates and observes a node becoming inactive.
+//
+// BeforeInactive runs outside the workspace lock before class recall, library
+// unregister, or workspace close commits. Returning an error or panicking vetoes
+// that operation. AfterInactive runs after commit and cannot roll it back.
 type NodeInactiveHook interface {
 	BeforeInactive(InactiveReason) error
 	AfterInactive(InactiveReason)
 }
 
-// NodeDeleteHook observes node deletion.
+// NodeDeleteHook validates and observes node deletion.
+//
+// BeforeDelete runs before attached links are detached and before the node is
+// removed. AfterDelete runs after removal. Both hooks run outside the workspace
+// lock; before-hook errors or panics abort deletion.
 type NodeDeleteHook interface {
 	BeforeDelete() error
 	AfterDelete()
@@ -196,17 +269,28 @@ type NodeCloseHook interface {
 	Close() error
 }
 
-// NodePrivateExportHook lets a runtime provide its current private state for persistence.
+// NodePrivateExportHook lets a runtime provide current private state for
+// persistence and copy.
+//
+// ExportPrivateState runs outside the workspace lock for active nodes. The
+// returned value replaces NodeState.Private in SaveWithRuntimeState and Copy
+// output, but does not mutate the live node state by itself.
 type NodePrivateExportHook interface {
 	ExportPrivateState() (any, error)
 }
 
 // NodePrivateImportHook lets a runtime receive restored or default private state.
+//
+// ImportPrivateState runs immediately after InitNode with a clone of the stored
+// private value. An error or panic aborts the initialization transaction.
 type NodePrivateImportHook interface {
 	ImportPrivateState(any) error
 }
 
 // StaticLibrary is a simple Library implementation backed by ClassSpec values.
+//
+// It is useful for applications whose class set is known up front and for tests
+// that do not need custom registration behavior.
 type StaticLibrary struct {
 	LibraryName string
 	Classes     []ClassSpec
@@ -224,6 +308,9 @@ func (l StaticLibrary) DefineClasses(scope LibraryScope) error {
 }
 
 // WorkspaceRO is the concurrent-safe read-only workspace surface.
+//
+// All returned values are defensive snapshots. Callers may retain and mutate the
+// returned slices and maps without changing workspace-owned state.
 type WorkspaceRO interface {
 	Snapshot() Snapshot
 	Class(string) (ClassSnapshot, bool)
@@ -234,6 +321,11 @@ type WorkspaceRO interface {
 }
 
 // LibraryScope is the write surface available to one registered library.
+//
+// A scoped library may define and recall only its own classes, mutate only nodes
+// owned by those classes, and create or mutate links only when both endpoint
+// nodes are owned by the same library. Read methods apply the same ownership
+// boundary where relevant.
 type LibraryScope interface {
 	DefineClass(ClassSpec) error
 	RecallClass(string) error
@@ -259,7 +351,7 @@ type LibraryScope interface {
 	ReadOnly() WorkspaceRO
 }
 
-// Snapshot is an immutable copy of workspace state.
+// Snapshot is an immutable, deterministic copy of workspace state.
 type Snapshot struct {
 	Libraries []LibrarySnapshot
 	Classes   []ClassSnapshot
@@ -274,6 +366,9 @@ type LibrarySnapshot struct {
 }
 
 // ClassSnapshot is a read-only class record.
+//
+// Spec is a defensive copy of the registered class definition. Active is false
+// after the class has been recalled or its library has been unregistered.
 type ClassSnapshot struct {
 	Spec    ClassSpec
 	Library string
@@ -281,6 +376,10 @@ type ClassSnapshot struct {
 }
 
 // NodeSnapshot is a read-only node record.
+//
+// Dynamic, Inputs, and Outputs are defensive copies. Inactive snapshots are kept
+// when the node's class or library is unavailable so editors can present
+// recoverable model state.
 type NodeSnapshot struct {
 	ID      NodeID
 	Class   string
@@ -292,6 +391,10 @@ type NodeSnapshot struct {
 }
 
 // LinkSnapshot is a read-only link record.
+//
+// StateInactive means the endpoints still exist but at least one endpoint node
+// is inactive. Links with missing endpoint nodes or ports are removed rather
+// than exposed as snapshots.
 type LinkSnapshot struct {
 	ID        LinkID
 	Input     FullPortID

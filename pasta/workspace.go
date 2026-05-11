@@ -9,6 +9,11 @@ import (
 )
 
 // Workspace owns libraries, classes, nodes, links, and ID generation.
+//
+// Workspace is the controller-facing mutation API and the synchronization
+// boundary for the graph. All exported methods are safe for concurrent use.
+// Mutations validate the model under the workspace lock, call application hooks
+// outside the lock when needed, then revalidate before commit.
 type Workspace struct {
 	mu       sync.RWMutex
 	logger   Logger
@@ -53,11 +58,17 @@ type linkRecord struct {
 type WorkspaceOption func(*Workspace)
 
 // WithLogger configures panic and diagnostic logging.
+//
+// The logger is used for recovered hook panics and non-fatal lifecycle
+// diagnostics. Logger implementations must be safe for concurrent use.
 func WithLogger(logger Logger) WorkspaceOption {
 	return func(w *Workspace) { w.logger = logger }
 }
 
 // NewWorkspace creates an empty workspace.
+//
+// The returned workspace starts open with node and link ID generators beginning
+// at 1. Register one or more libraries before creating nodes.
 func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 	w := &Workspace{
 		nextNode:  1,
@@ -74,6 +85,10 @@ func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 }
 
 // Close marks the workspace closed and inactivates all live objects.
+//
+// Close calls BeforeInactive for active nodes, commits inactive state, then
+// sends AfterInactive, AfterLinkInactive, and Close notifications outside the
+// workspace lock. Once closed, mutating methods return ErrClosed.
 func (w *Workspace) Close() error {
 	w.mu.Lock()
 	if w.closed {
@@ -114,6 +129,11 @@ func (w *Workspace) Close() error {
 }
 
 // RegisterLibrary registers a library and asks it to define its classes.
+//
+// Registration is transactional. The library's DefineClasses hook runs outside
+// the workspace lock through a LibraryScope. If the hook fails or panics, all
+// classes, nodes, links, and runtimes created by the registration attempt are
+// rolled back.
 func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 	if lib == nil {
 		return opErr("register library", "validate", ErrNotFound)
@@ -213,6 +233,10 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 }
 
 // DefineClass defines or replaces an active class for a registered library.
+//
+// Replacing a class updates existing nodes of that class to the new default port
+// set, removes links whose endpoints or types are now broken, and reactivates
+// preserved inactive nodes when their endpoints remain valid.
 func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
 	return w.defineClass(library, spec, nil, nil)
 }
@@ -337,6 +361,10 @@ func (w *Workspace) RecallClass(library, className string) error {
 }
 
 // CreateNode creates an active node from a registered active class.
+//
+// Runtime initialization happens outside the workspace lock. The node becomes
+// visible only after InitNode and ImportPrivateState have completed and the
+// class is revalidated as active.
 func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, error) {
 	w.mu.Lock()
 	id, rec, runtimeClass, err := w.prepareCreateNodeLocked(className, opts, InitNew)
@@ -540,6 +568,12 @@ func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 }
 
 // CreateLink creates a directed link from output to input.
+//
+// The input and output arguments are named by endpoint role: input must identify
+// an input port and output must identify an output port. Creation reserves an ID,
+// validates direction, type compatibility, multiplicity, and DAG safety, obtains
+// or accepts the link object, calls attach hooks, revalidates, commits, then
+// sends after-attach notifications.
 func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (LinkID, error) {
 	w.mu.Lock()
 	pending, err := w.prepareCreateLinkLocked(input, output, opts)

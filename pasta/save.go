@@ -8,6 +8,10 @@ import (
 )
 
 // SaveData is the deterministic JSON-like persistence shape for a workspace.
+//
+// It contains model state only: IDs, class names, dynamic node state, ports,
+// link names, link types, waypoints, and ID generator progress. It does not
+// store Go runtime values or link objects.
 type SaveData struct {
 	NextNode int64      `json:"nextNode"`
 	NextLink int64      `json:"nextLink"`
@@ -16,6 +20,10 @@ type SaveData struct {
 }
 
 // SaveNode is a persisted node record.
+//
+// ID is the canonical node ID string. Class is the qualified class name used to
+// recover the node when that class is available. State stores public editor data
+// and private application data.
 type SaveNode struct {
 	ID      string     `json:"id"`
 	Class   string     `json:"class"`
@@ -25,6 +33,9 @@ type SaveNode struct {
 }
 
 // SaveLink is a persisted link record.
+//
+// Name is the canonical full link name containing link ID, input full port ID,
+// and output full port ID. Waypoints are opaque editor coordinate strings.
 type SaveLink struct {
 	Name      string   `json:"name"`
 	Type      string   `json:"type"`
@@ -32,6 +43,10 @@ type SaveLink struct {
 }
 
 // Save returns deterministic workspace data suitable for JSON/config storage.
+//
+// Save uses the private state already stored in NodeState. It does not call
+// runtime export hooks; use SaveWithRuntimeState when runtimes own newer
+// volatile private values.
 func (w *Workspace) Save() SaveData {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -131,7 +146,10 @@ func (w *Workspace) exportPrivateStates(selected map[NodeID]bool) (map[NodeID]an
 // Restore replaces workspace model state from SaveData.
 //
 // Registered libraries and classes are preserved. Nodes whose classes are not
-// currently active are restored as inactive. Broken links are skipped.
+// currently active are restored as inactive. Links whose endpoint nodes or
+// ports are missing are skipped as broken; links that reference existing
+// endpoints but violate type, multiplicity, duplicate-ID, or DAG constraints
+// reject the restore and roll the workspace back to its previous state.
 func (w *Workspace) Restore(data SaveData) error {
 	w.mu.Lock()
 	locked := true

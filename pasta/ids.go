@@ -31,9 +31,13 @@ type FullLinkName struct {
 	Output FullPortID
 }
 
+// String returns the canonical node ID form, such as 123N.
 func (id NodeID) String() string { return strconv.FormatInt(int64(id), 10) + "N" }
+
+// String returns the canonical link ID form, such as 123L.
 func (id LinkID) String() string { return strconv.FormatInt(int64(id), 10) + "L" }
 
+// String returns the canonical port ID form, such as 123i or 123o.
 func (id PortID) String() string {
 	suffix := "?"
 	switch id.Kind {
@@ -45,8 +49,10 @@ func (id PortID) String() string {
 	return strconv.FormatInt(id.Number, 10) + suffix
 }
 
+// String returns the canonical full port ID form, such as 123N456o.
 func (id FullPortID) String() string { return id.Node.String() + id.Port.String() }
 
+// String returns the canonical full link name used by persistence.
 func (n FullLinkName) String() string {
 	return n.Link.String() + ":" + n.Input.String() + ":" + n.Output.String()
 }
