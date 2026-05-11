@@ -1130,6 +1130,59 @@ func TestRestoreRejectsInvalidPersistedLinkConstraintsAndRollsBack(t *testing.T)
 	}
 }
 
+func TestRestoreRejectsInvalidPersistedNodesAndPreservesWorkspace(t *testing.T) {
+	badInput := PortSpec{
+		ID:        PortID{Number: 1, Kind: OutputPort},
+		Name:      "wrong",
+		Direction: InputPort,
+		FixedType: testType,
+	}
+	tests := []struct {
+		name  string
+		nodes []SaveNode
+		err   error
+	}{
+		{
+			name: "invalid node id",
+			nodes: []SaveNode{
+				{ID: "0N", Class: "example.com/Source"},
+			},
+			err: ErrInvalidID,
+		},
+		{
+			name: "duplicate node id",
+			nodes: []SaveNode{
+				{ID: "1N", Class: "example.com/Source"},
+				{ID: "1N", Class: "example.com/Source"},
+			},
+			err: ErrDuplicate,
+		},
+		{
+			name: "invalid saved port",
+			nodes: []SaveNode{
+				{ID: "1N", Class: "example.com/Source", Inputs: []PortSpec{badInput}},
+			},
+			err: ErrInvalidPort,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, _ := testWorkspace(t)
+			if _, err := w.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			before := w.Save()
+			if err := w.Restore(SaveData{Nodes: tt.nodes}); !errors.Is(err, tt.err) {
+				t.Fatalf("Restore error = %v, want %v", err, tt.err)
+			}
+			after := w.Save()
+			if fmt.Sprint(after) != fmt.Sprint(before) {
+				t.Fatalf("restore should preserve workspace, got %#v want %#v", after, before)
+			}
+		})
+	}
+}
+
 func TestSaveOutputIsDeterministic(t *testing.T) {
 	w, _ := testWorkspace(t)
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
@@ -2723,6 +2776,51 @@ func TestLifecycleRecallClassRunsInactiveHooksAndPreservesLink(t *testing.T) {
 	got, ok := w.Link(link)
 	if !ok || got.State != StateInactive {
 		t.Fatalf("link = %#v, ok %v; want inactive preserved link", got, ok)
+	}
+}
+
+func TestLifecycleDefineClassPrunedLinkSendsDetachNotification(t *testing.T) {
+	runtime := &lifecycleClass{}
+	w, _, log := lifecycleWorkspace(t, runtime)
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	*log = nil
+	if err := w.DefineClass("example.com", ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: runtime,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: "example.com/float",
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Link(link); ok {
+		t.Fatal("incompatible link should be pruned")
+	}
+	want := []string{
+		"detach-after:input:1",
+		"detach-after:output:1",
+	}
+	if fmt.Sprint(*log) != fmt.Sprint(want) {
+		t.Fatalf("log = %#v, want %#v", *log, want)
 	}
 }
 

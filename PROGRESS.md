@@ -61,6 +61,8 @@ layout because the repo root is not itself a Go module.
 - Link-object handoff from the input node when no object is supplied by the caller.
 - Before/after link attach hooks.
 - Before/after link detach hooks for direct link deletion and node deletion.
+- Committed after-detach notifications for links pruned as broken during class
+  redefinition.
 - Link inactive notifications when preserved links become inactive.
 - Before/after node inactive hooks for class recall, library unregister, and
   workspace close.
@@ -111,6 +113,8 @@ layout because the repo root is not itself a Go module.
   - deterministic save output
   - deterministic restore initialization order
   - broken persisted link skipping
+  - invalid persisted node IDs, duplicate node IDs, invalid saved ports, and
+    rollback
   - invalid persisted link constraints and rollback
   - copy/paste ID remapping
   - node metadata update helpers, single-key edits, and defensive metadata snapshots
@@ -131,6 +135,7 @@ layout because the repo root is not itself a Go module.
   - library unregister/register recovery and rollback
   - explicit lifecycle hook order for node deletion and workspace close with
     attached links
+  - detach notifications for links pruned as broken during class redefinition
   - runtime close/shutdown on delete, inactive transitions, and workspace close
   - runtime private state export/import, defensive copy behavior, and rollback
     on hook failures
@@ -150,8 +155,6 @@ go vet ./pasta/...
 
 ## Still To Do
 
-- Complete node lifecycle hooks:
-  - richer link deleted/inactivated notifications if needed by link contracts
 - Add tests for any remaining restore edge cases and inactive recovery paths as
   lifecycle and persistence contracts evolve.
 

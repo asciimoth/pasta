@@ -214,7 +214,7 @@ func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
 	oldLinks := cloneLinkRecords(w.links)
-	err := w.defineClassLocked(library, spec)
+	detachEvents, err := w.defineClassLocked(library, spec)
 	if err != nil {
 		w.mu.Unlock()
 		return err
@@ -276,6 +276,7 @@ func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
 		}
 	}
 	w.mu.Unlock()
+	w.callAfterLinkDetachEvents(detachEvents)
 	return nil
 }
 
@@ -906,21 +907,21 @@ func (w *Workspace) Link(id LinkID) (LinkSnapshot, bool) {
 	return snapshotLink(link), true
 }
 
-func (w *Workspace) defineClassLocked(library string, spec ClassSpec) error {
+func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDetachEvent, error) {
 	if err := w.checkOpenLocked("define class"); err != nil {
-		return err
+		return nil, err
 	}
 	if _, ok := w.libraries[library]; !ok {
-		return opErr("define class", "validate", ErrNotFound)
+		return nil, opErr("define class", "validate", ErrNotFound)
 	}
 	if !ValidClassName(library, spec.Name) {
-		return opErr("define class", "validate", ErrInvalidName)
+		return nil, opErr("define class", "validate", ErrInvalidName)
 	}
 	if err := validatePorts(spec.Inputs, InputPort); err != nil {
-		return opErr("define class", "validate", err)
+		return nil, opErr("define class", "validate", err)
 	}
 	if err := validatePorts(spec.Outputs, OutputPort); err != nil {
-		return opErr("define class", "validate", err)
+		return nil, opErr("define class", "validate", err)
 	}
 	w.classes[spec.Name] = &classRecord{spec: cloneClassSpec(spec), library: library, active: true}
 	for _, node := range w.nodes {
@@ -929,9 +930,9 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) error {
 			node.outputs = clonePorts(spec.Outputs)
 		}
 	}
-	w.removeBrokenLinksLocked()
+	detachEvents := w.removeBrokenLinksLocked()
 	w.refreshActivityLocked()
-	return nil
+	return detachEvents, nil
 }
 
 func (w *Workspace) reactivatedInitNodesLocked(className string, oldNodes map[NodeID]*nodeRecord) []restoreInitNode {
@@ -1238,11 +1239,11 @@ func (w *Workspace) clearInactiveRuntimesLocked() {
 	}
 }
 
-func (w *Workspace) removeBrokenLinksLocked() {
-	w.removeInvalidLinksLocked()
+func (w *Workspace) removeBrokenLinksLocked() []linkDetachEvent {
+	return w.removeInvalidLinksLocked()
 }
 
-func (w *Workspace) removeInvalidLinksLocked() {
+func (w *Workspace) removeInvalidLinksLocked() []linkDetachEvent {
 	ids := make([]LinkID, 0, len(w.links))
 	for id, link := range w.links {
 		if link != nil {
@@ -1251,6 +1252,7 @@ func (w *Workspace) removeInvalidLinksLocked() {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	inputCounts := map[FullPortID]int{}
+	var detachEvents []linkDetachEvent
 	for _, id := range ids {
 		link := w.links[id]
 		if link == nil {
@@ -1259,29 +1261,35 @@ func (w *Workspace) removeInvalidLinksLocked() {
 		inNode := w.nodes[link.input.Node]
 		outNode := w.nodes[link.output.Node]
 		if inNode == nil || outNode == nil {
+			detachEvents = append(detachEvents, w.linkDetachEventLocked(link))
 			delete(w.links, id)
 			continue
 		}
 		inPort, ok := findPort(inNode.inputs, link.input.Port)
 		if !ok {
+			detachEvents = append(detachEvents, w.linkDetachEventLocked(link))
 			delete(w.links, id)
 			continue
 		}
 		outPort, ok := findPort(outNode.outputs, link.output.Port)
 		if !ok {
+			detachEvents = append(detachEvents, w.linkDetachEventLocked(link))
 			delete(w.links, id)
 			continue
 		}
 		if !portAccepts(*inPort, link.typ) || !portAccepts(*outPort, link.typ) {
+			detachEvents = append(detachEvents, w.linkDetachEventLocked(link))
 			delete(w.links, id)
 			continue
 		}
 		if !inPort.Multiple && inputCounts[link.input] > 0 {
+			detachEvents = append(detachEvents, w.linkDetachEventLocked(link))
 			delete(w.links, id)
 			continue
 		}
 		inputCounts[link.input]++
 	}
+	return detachEvents
 }
 
 func (w *Workspace) checkOpenLocked(op string) error {

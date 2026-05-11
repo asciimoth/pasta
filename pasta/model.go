@@ -161,6 +161,10 @@ type LinkAttachHook interface {
 }
 
 // LinkDetachHook validates and observes link detachment.
+//
+// BeforeLinkDetach is used for explicit link deletion. Links that must be
+// removed to repair broken model state, such as links pruned by class
+// redefinition, still receive AfterLinkDetach after the repair commits.
 type LinkDetachHook interface {
 	BeforeLinkDetach(LinkEndpoint) error
 	AfterLinkDetach(LinkEndpoint)

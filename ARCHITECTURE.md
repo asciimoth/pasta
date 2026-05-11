@@ -84,6 +84,9 @@ Link deletion calls input then output `BeforeLinkDetach` hooks outside the lock,
 removes the link, and then calls input then output `AfterLinkDetach` hooks.
 Deleting a node first calls `BeforeDelete`, detaches its links through the same
 link deletion path, removes the node, then calls `AfterDelete` and `Close`.
+Links pruned during invariant repair, such as links made invalid by class
+redefinition, cannot veto removal; after the repair commits, the workspace calls
+their `AfterLinkDetach` hooks as deletion/broken-link notifications.
 
 Class recall, library unregister, and workspace close gather affected active
 node and link events under the lock, call `BeforeInactive` hooks outside the

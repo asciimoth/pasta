@@ -185,6 +185,13 @@ func (w *Workspace) callLinkInactiveEvents(events []linkInactiveEvent, reason In
 	}
 }
 
+func (w *Workspace) callAfterLinkDetachEvents(events []linkDetachEvent) {
+	for _, event := range events {
+		w.callAfterLinkDetach(event.inputRuntime, event.inputEndpoint)
+		w.callAfterLinkDetach(event.outputRuntime, event.outputEndpoint)
+	}
+}
+
 func (w *Workspace) callCloseEvents(events []nodeInactiveEvent) error {
 	var first error
 	for _, event := range events {
@@ -269,6 +276,14 @@ type linkInactiveEvent struct {
 	outputEndpoint LinkEndpoint
 }
 
+type linkDetachEvent struct {
+	id             LinkID
+	inputRuntime   NodeRuntime
+	outputRuntime  NodeRuntime
+	inputEndpoint  LinkEndpoint
+	outputEndpoint LinkEndpoint
+}
+
 func (w *Workspace) inactiveEventsForNodesLocked(nodes map[NodeID]bool) ([]nodeInactiveEvent, []linkInactiveEvent) {
 	nodeEvents := make([]nodeInactiveEvent, 0, len(nodes))
 	for id := range nodes {
@@ -295,4 +310,16 @@ func (w *Workspace) inactiveEventsForNodesLocked(nodes map[NodeID]bool) ([]nodeI
 	}
 	sort.Slice(linkEvents, func(i, j int) bool { return linkEvents[i].id < linkEvents[j].id })
 	return nodeEvents, linkEvents
+}
+
+func (w *Workspace) linkDetachEventLocked(link *linkRecord) linkDetachEvent {
+	inputRuntime, outputRuntime := w.linkRuntimesLocked(link)
+	inputEndpoint, outputEndpoint := linkEndpoints(link)
+	return linkDetachEvent{
+		id:             link.id,
+		inputRuntime:   inputRuntime,
+		outputRuntime:  outputRuntime,
+		inputEndpoint:  inputEndpoint,
+		outputEndpoint: outputEndpoint,
+	}
 }
