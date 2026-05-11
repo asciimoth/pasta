@@ -1427,6 +1427,7 @@ type lifecycleNode struct {
 	panicAfterDetach   bool
 	panicOnInactive    bool
 	panicAfterInactive bool
+	panicLinkInactive  bool
 	panicOnDelete      bool
 	panicAfterDelete   bool
 	panicOnClose       bool
@@ -1528,6 +1529,9 @@ func (n *lifecycleNode) AfterLinkDetach(endpoint LinkEndpoint) {
 }
 
 func (n *lifecycleNode) AfterLinkInactive(endpoint LinkEndpoint, reason InactiveReason) {
+	if n.panicLinkInactive {
+		panic("link inactive panic")
+	}
 	*n.log = append(*n.log, fmt.Sprintf("link-inactive:%s:%d:%s", endpoint.Direction, endpoint.Link, reason))
 }
 
@@ -2782,6 +2786,1421 @@ func TestDefineClassClosesInitializedRuntimesOnLaterInitError(t *testing.T) {
 	if fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("define class should roll back on init error: got %#v, want %#v", after, before)
 	}
+}
+
+type testLogger struct {
+	errs []string
+}
+
+func (l *testLogger) Debug(args ...any)                 {}
+func (l *testLogger) Debugf(format string, args ...any) {}
+func (l *testLogger) Info(args ...any)                  {}
+func (l *testLogger) Infof(format string, args ...any)  {}
+func (l *testLogger) Warn(args ...any)                  {}
+func (l *testLogger) Warnf(format string, args ...any)  {}
+func (l *testLogger) Err(args ...any)                   {}
+func (l *testLogger) Errf(format string, args ...any) {
+	l.errs = append(l.errs, fmt.Sprintf(format, args...))
+}
+func (l *testLogger) Fatal(args ...any)                 {}
+func (l *testLogger) Fatalf(format string, args ...any) {}
+
+func TestCoverageErrorsNamesAndIDs(t *testing.T) {
+	var nilErr *Error
+	if nilErr.Error() != "<nil>" || nilErr.Unwrap() != nil {
+		t.Fatalf("nil error methods = %q, %v", nilErr.Error(), nilErr.Unwrap())
+	}
+	if got := (&Error{Op: "op", Err: ErrNotFound}).Error(); got != "op: "+ErrNotFound.Error() {
+		t.Fatalf("error without phase = %q", got)
+	}
+	if got := opErr("op", "phase", nil); got != nil {
+		t.Fatalf("opErr nil = %v, want nil", got)
+	}
+	if got := (PortID{Number: 3, Kind: "sideways"}).String(); got != "3?" {
+		t.Fatalf("unknown port string = %q", got)
+	}
+
+	badPortIDs := []string{"", "1x", "0i", "xi"}
+	for _, value := range badPortIDs {
+		if _, err := ParsePortID(value); !errors.Is(err, ErrInvalidID) {
+			t.Fatalf("ParsePortID(%q) = %v, want invalid id", value, err)
+		}
+	}
+	badFullPorts := []string{"", "N1i", "1N", "0N1i", "1N0i"}
+	for _, value := range badFullPorts {
+		if _, err := ParseFullPortID(value); !errors.Is(err, ErrInvalidID) {
+			t.Fatalf("ParseFullPortID(%q) = %v, want invalid id", value, err)
+		}
+	}
+	badLinks := []string{"1L:2N1i", "0L:2N1i:1N1o", "1L:0N1i:1N1o", "1L:2N1i:1N0o", "1L:2N1o:1N1i"}
+	for _, value := range badLinks {
+		if _, err := ParseFullLinkName(value); !errors.Is(err, ErrInvalidID) {
+			t.Fatalf("ParseFullLinkName(%q) = %v, want invalid id", value, err)
+		}
+	}
+
+	if ValidLibraryName("") || ValidLibraryName("1example.com") || ValidLibraryName("example_com") {
+		t.Fatal("invalid library names accepted")
+	}
+	if ValidQualifiedName("") || ValidQualifiedName("1/example") || ValidQualifiedName("example.com/Bad_Name") {
+		t.Fatal("invalid qualified names accepted")
+	}
+	if ValidTypeName("notqualified") || ValidTypeName("example.com/") || ValidTypeName("example.com/Bool") {
+		t.Fatal("invalid type names accepted")
+	}
+}
+
+func TestCoverageBasicValidationAndClosedErrors(t *testing.T) {
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("nil library error = %v, want not found", err)
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "bad_name"}); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("bad library error = %v, want invalid name", err)
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate library error = %v, want duplicate", err)
+	}
+	if err := w.DefineClass("missing.com", ClassSpec{Name: "missing.com/Thing"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing library define error = %v, want not found", err)
+	}
+	if err := w.DefineClass("example.com", ClassSpec{Name: "example.com/thing"}); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("invalid class define error = %v, want invalid name", err)
+	}
+	invalidInput := PortSpec{ID: PortID{Number: 0, Kind: InputPort}, Direction: InputPort}
+	if err := w.DefineClass("example.com", ClassSpec{Name: "example.com/Thing", Inputs: []PortSpec{invalidInput}}); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("invalid input define error = %v, want invalid port", err)
+	}
+	invalidOutput := PortSpec{ID: PortID{Number: 1, Kind: OutputPort}, Direction: OutputPort, FixedType: "example.com/Bad"}
+	if err := w.DefineClass("example.com", ClassSpec{Name: "example.com/Thing", Outputs: []PortSpec{invalidOutput}}); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("invalid output define error = %v, want invalid name", err)
+	}
+	class := scopedTestClass("example.com", "Source")
+	if err := w.DefineClass("example.com", class); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RecallClass("example.com", "missing.com/Missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing recall error = %v, want not found", err)
+	}
+	if err := w.RecallClass("other.com", "example.com/Source"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("wrong owner recall error = %v, want ownership", err)
+	}
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetNodeCoordinate(999, "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetNodeCoordinate error = %v, want not found", err)
+	}
+	if err := w.SetNodeState(999, NodeState{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetNodeState error = %v, want not found", err)
+	}
+	if err := w.SetNodePorts(999, nil, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetNodePorts error = %v, want not found", err)
+	}
+	if err := w.SetNodePorts(node, []PortSpec{invalidInput}, nil); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("invalid SetNodePorts error = %v, want invalid port", err)
+	}
+	if _, err := w.CreateNode("missing.com/Missing", NodeOptions{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing CreateNode error = %v, want not found", err)
+	}
+	if _, err := w.CreateLink(FullPortID{Node: node, Port: PortID{Number: 1, Kind: InputPort}}, FullPortID{Node: node, Port: PortID{Number: 1, Kind: OutputPort}}, LinkOptions{}); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("self link error = %v, want invalid port", err)
+	}
+	if err := w.DeleteNode(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing DeleteNode error = %v, want not found", err)
+	}
+	if err := w.DeleteLink(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing DeleteLink error = %v, want not found", err)
+	}
+	if err := w.SetLinkWaypoints(999, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetLinkWaypoints error = %v, want not found", err)
+	}
+	if err := w.UnregisterLibrary("missing.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing unregister error = %v, want not found", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("second close = %v, want nil", err)
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "other.com"}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed register error = %v, want closed", err)
+	}
+	if err := w.UnregisterLibrary("example.com"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed unregister error = %v, want closed", err)
+	}
+	if err := w.DefineClass("example.com", class); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed define error = %v, want closed", err)
+	}
+	if err := w.RecallClass("example.com", "example.com/Source"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed recall error = %v, want closed", err)
+	}
+	if _, err := w.CreateNode("example.com/Source", NodeOptions{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed create node error = %v, want closed", err)
+	}
+	if err := w.SetNodeCoordinate(node, "x"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed coordinate error = %v, want closed", err)
+	}
+	if err := w.SetNodeState(node, NodeState{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed state error = %v, want closed", err)
+	}
+	if err := w.SetNodePorts(node, nil, nil); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed ports error = %v, want closed", err)
+	}
+	if _, err := w.Copy([]NodeID{999}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing copy error = %v, want not found", err)
+	}
+	if _, _, err := w.Paste(Clipboard{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed paste error = %v, want closed", err)
+	}
+	if err := w.Restore(SaveData{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed restore error = %v, want closed", err)
+	}
+}
+
+type initScopeExerciseClass struct {
+	scope NodeScope
+}
+
+func (c *initScopeExerciseClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	c.scope = ctx.Node
+	if ctx.Node.ReadOnly() == nil {
+		return nil, fmt.Errorf("missing read-only scope")
+	}
+	snap, ok := ctx.Node.Snapshot()
+	if !ok || snap.ID != ctx.ID {
+		return nil, fmt.Errorf("missing init snapshot")
+	}
+	if err := ctx.Node.SetState(NodeState{DisplayName: "from-init", Metadata: map[string]string{"remove": "true"}}); err != nil {
+		return nil, err
+	}
+	if err := ctx.Node.SetCoordinate("x:init"); err != nil {
+		return nil, err
+	}
+	if err := ctx.Node.SetMetadata(map[string]string{"remove": "true", "keep": "true"}); err != nil {
+		return nil, err
+	}
+	if err := ctx.Node.DeleteMetadataValue("remove"); err != nil {
+		return nil, err
+	}
+	if err := ctx.Node.SetPorts([]PortSpec{{ID: PortID{Number: 0, Kind: InputPort}, Direction: InputPort}}, nil); !errors.Is(err, ErrInvalidPort) {
+		return nil, fmt.Errorf("invalid init SetPorts = %v", err)
+	}
+	if err := ctx.Node.SetPorts([]PortSpec{{
+		ID:        PortID{Number: 2, Kind: InputPort},
+		Name:      "init-in",
+		Direction: InputPort,
+		FixedType: testType,
+	}}, []PortSpec{{
+		ID:        PortID{Number: 2, Kind: OutputPort},
+		Name:      "init-out",
+		Direction: OutputPort,
+		FixedType: testType,
+	}}); err != nil {
+		return nil, err
+	}
+	return struct{}{}, nil
+}
+
+func TestCoverageNodeScopeDuringInitAndAfterFinish(t *testing.T) {
+	runtime := &initScopeExerciseClass{}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Scoped",
+		Runtime: runtime,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := w.CreateNode("example.com/Scoped", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := w.Node(node)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if snap.Dynamic.DisplayName != "from-init" || snap.Dynamic.Coordinate != "x:init" || len(snap.Dynamic.Metadata) != 1 || snap.Dynamic.Metadata["keep"] != "true" {
+		t.Fatalf("init-mutated state = %#v", snap.Dynamic)
+	}
+	if len(snap.Inputs) != 1 || snap.Inputs[0].ID.Number != 2 || len(snap.Outputs) != 1 || snap.Outputs[0].ID.Number != 2 {
+		t.Fatalf("init-mutated ports = %#v %#v", snap.Inputs, snap.Outputs)
+	}
+	if _, ok := runtime.scope.Snapshot(); !ok {
+		t.Fatal("finished scope should still see committed node")
+	}
+	if err := w.DeleteNode(node); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := runtime.scope.Snapshot(); ok {
+		t.Fatal("deleted node scope snapshot should report false after init record is cleared")
+	}
+	if err := runtime.scope.SetState(NodeState{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted scope SetState error = %v, want not found", err)
+	}
+	if err := runtime.scope.SetCoordinate("late"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted scope SetCoordinate error = %v, want not found", err)
+	}
+	if err := runtime.scope.SetPorts(nil, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted scope SetPorts error = %v, want not found", err)
+	}
+}
+
+func TestCoverageLinkTypeSelectionAndValidation(t *testing.T) {
+	inputOnly := PortSpec{ID: PortID{Number: 1, Kind: InputPort}, Name: "in", Direction: InputPort, FixedType: testType, Multiple: true}
+	outputAny := PortSpec{ID: PortID{Number: 1, Kind: OutputPort}, Name: "out", Direction: OutputPort, AcceptedTypes: []string{testType}}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Flexible",
+		Inputs:  []PortSpec{inputOnly},
+		Outputs: []PortSpec{outputAny},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := w.CreateNode("example.com/Flexible", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Flexible", NodeOptions{})
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: inputOnly.ID},
+		FullPortID{Node: a, Port: outputAny.ID},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := w.Link(link); got.Type != testType {
+		t.Fatalf("chosen type = %q, want %q", got.Type, testType)
+	}
+	if _, err := w.CreateLink(
+		FullPortID{Node: 999, Port: inputOnly.ID},
+		FullPortID{Node: a, Port: outputAny.ID},
+		LinkOptions{},
+	); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing input node link error = %v, want not found", err)
+	}
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: inputOnly.ID},
+		FullPortID{Node: 999, Port: outputAny.ID},
+		LinkOptions{},
+	); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing output node link error = %v, want not found", err)
+	}
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 99, Kind: InputPort}},
+		FullPortID{Node: a, Port: outputAny.ID},
+		LinkOptions{},
+	); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("missing input port link error = %v, want invalid port", err)
+	}
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: inputOnly.ID},
+		FullPortID{Node: a, Port: PortID{Number: 99, Kind: OutputPort}},
+		LinkOptions{},
+	); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("missing output port link error = %v, want invalid port", err)
+	}
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: inputOnly.ID},
+		FullPortID{Node: a, Port: outputAny.ID},
+		LinkOptions{Type: "example.com/float"},
+	); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("requested mismatched type error = %v, want type mismatch", err)
+	}
+
+	noType := ClassSpec{
+		Name: "example.com/NoType",
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			Multiple:  true,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+		}},
+	}
+	if err := w.DefineClass("example.com", noType); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := w.CreateNode("example.com/NoType", NodeOptions{})
+	d, _ := w.CreateNode("example.com/NoType", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: d, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: c, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("untyped link error = %v, want type mismatch", err)
+	}
+}
+
+func TestCoverageConfigRestoreCopyPasteAndRuntimeExports(t *testing.T) {
+	w, nodes, _ := privateHookWorkspace(t, &privateHookClass{}, nil)
+	a, err := w.CreateNode("example.com/Private", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := w.CreateNode("example.com/Private", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes[a].exported = []string{"from-runtime"}
+	cfg, err := w.SaveConfigWithRuntimeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := cfg.Get(configer.Path{"nodes", "0", "state", "Private", "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "from-runtime" {
+		t.Fatalf("runtime config private = %#v", got)
+	}
+	nodes[a].failExport = true
+	if _, err := w.SaveConfigWithRuntimeState(); err == nil {
+		t.Fatal("expected SaveConfigWithRuntimeState export error")
+	}
+	nodes[a].failExport = false
+	if err := w.RestoreConfig(nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("nil RestoreConfig error = %v, want not found", err)
+	}
+	if _, err := w.Copy([]NodeID{a, a, b}); err != nil {
+		t.Fatalf("copy duplicate selection: %v", err)
+	}
+
+	restored, _, _ := privateHookWorkspace(t, &privateHookClass{}, nil)
+	data := SaveData{
+		NextNode: -10,
+		NextLink: -20,
+		Nodes:    []SaveNode{{ID: "3N", Class: "example.com/Private"}},
+	}
+	if err := restored.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	if saved := restored.Save(); saved.NextNode != 4 || saved.NextLink != 1 {
+		t.Fatalf("next IDs after restore = %#v, want node 4 link 1", saved)
+	}
+	if err := restored.Restore(SaveData{Nodes: []SaveNode{{
+		ID: "1N", Class: "example.com/Private",
+		Outputs: []PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: OutputPort}},
+	}}}); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("invalid restore output error = %v, want invalid port", err)
+	}
+	if err := restored.Restore(SaveData{Links: []SaveLink{{Name: "bad"}}}); !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("invalid restore link name error = %v, want invalid id", err)
+	}
+	if _, _, err := restored.Paste(Clipboard{Nodes: []SaveNode{{ID: "bad", Class: "example.com/Private"}}}); !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("invalid paste node id error = %v, want invalid id", err)
+	}
+	if _, _, err := restored.Paste(Clipboard{Nodes: []SaveNode{{ID: "1N", Class: "missing.com/Missing"}}}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid paste class error = %v, want not found", err)
+	}
+}
+
+func TestCoverageLoggerAndLifecycleErrorBranches(t *testing.T) {
+	logger := &testLogger{}
+	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	w.logger = logger
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes[b].panicLinkInactive = true
+	if err := w.RecallClass("example.com", "example.com/Source"); err != nil {
+		t.Fatal(err)
+	}
+	if len(logger.errs) == 0 {
+		t.Fatal("expected logged link inactive panic")
+	}
+	if got, ok := w.Link(link); !ok || got.State != StateInactive {
+		t.Fatalf("link after recall = %#v, ok %v", got, ok)
+	}
+
+	optLogger := &testLogger{}
+	withLogger := NewWorkspace(WithLogger(optLogger))
+	if withLogger.logger != optLogger {
+		t.Fatal("WithLogger did not install logger")
+	}
+}
+
+func TestCoverageLibraryScopeReadOnlyAndSuccessfulWrappers(t *testing.T) {
+	w := NewWorkspace()
+	lib := &captureScopeLibrary{name: "example.com", classes: []ClassSpec{scopedTestClass("example.com", "Source")}}
+	if err := w.RegisterLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	if lib.scope.ReadOnly() == nil {
+		t.Fatal("library scope read-only is nil")
+	}
+	if err := lib.scope.CanCreateNode("example.com/Source"); err != nil {
+		t.Fatal(err)
+	}
+	node, err := lib.scope.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.SetNodePrivate(node, "private"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.SetNodeMetadataValue(node, "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.DeleteNodeMetadataValue(node, "k"); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.CanDeleteNode(node); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.DeleteNode(node); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.CanDeleteLink(999); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("missing owned link check = %v, want ownership", err)
+	}
+}
+
+type capturedWorkspaceClass struct {
+	w           *Workspace
+	closeDuring bool
+	recallClass bool
+	deleteID    NodeID
+	wrongClass  NodeID
+}
+
+func (c capturedWorkspaceClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	if c.closeDuring {
+		return struct{}{}, c.w.Close()
+	}
+	if c.recallClass {
+		if err := c.w.RecallClass(ctx.Library, ctx.Class); err != nil {
+			return nil, err
+		}
+	}
+	if c.deleteID != 0 {
+		c.w.mu.Lock()
+		delete(c.w.nodes, c.deleteID)
+		c.w.mu.Unlock()
+	}
+	if c.wrongClass != 0 {
+		c.w.mu.Lock()
+		if node := c.w.nodes[c.wrongClass]; node != nil {
+			node.class = "example.com/Other"
+		}
+		c.w.mu.Unlock()
+	}
+	return struct{}{}, nil
+}
+
+type mutatingInactiveNode struct {
+	w           *Workspace
+	once        bool
+	close       bool
+	deleteLib   string
+	deleteClass string
+	changeOwner string
+}
+
+func (n *mutatingInactiveNode) BeforeInactive(InactiveReason) error {
+	if n.once {
+		return nil
+	}
+	n.once = true
+	if n.close {
+		n.w.mu.Lock()
+		n.w.closed = true
+		n.w.mu.Unlock()
+	}
+	if n.deleteLib != "" {
+		n.w.mu.Lock()
+		delete(n.w.libraries, n.deleteLib)
+		n.w.mu.Unlock()
+	}
+	if n.deleteClass != "" {
+		n.w.mu.Lock()
+		delete(n.w.classes, n.deleteClass)
+		n.w.mu.Unlock()
+	}
+	if n.changeOwner != "" {
+		n.w.mu.Lock()
+		if rec := n.w.classes[n.changeOwner]; rec != nil {
+			rec.library = "other.com"
+		}
+		n.w.mu.Unlock()
+	}
+	return nil
+}
+
+func (n *mutatingInactiveNode) AfterInactive(InactiveReason) {}
+
+type mutatingDeleteNode struct {
+	w      *Workspace
+	id     NodeID
+	close  bool
+	delete bool
+}
+
+func (n mutatingDeleteNode) BeforeDelete() error {
+	if n.close {
+		n.w.mu.Lock()
+		n.w.closed = true
+		n.w.mu.Unlock()
+	}
+	if n.delete {
+		n.w.mu.Lock()
+		delete(n.w.nodes, n.id)
+		n.w.mu.Unlock()
+	}
+	return nil
+}
+
+func (n mutatingDeleteNode) AfterDelete() {}
+
+type mutatingDetachNode struct {
+	w      *Workspace
+	link   LinkID
+	close  bool
+	delete bool
+	add    *linkRecord
+}
+
+func (n mutatingDetachNode) BeforeLinkDetach(LinkEndpoint) error {
+	if n.close {
+		n.w.mu.Lock()
+		n.w.closed = true
+		n.w.mu.Unlock()
+	}
+	if n.delete {
+		n.w.mu.Lock()
+		delete(n.w.links, n.link)
+		n.w.mu.Unlock()
+	}
+	if n.add != nil {
+		n.w.mu.Lock()
+		n.w.links[n.add.id] = n.add
+		n.w.mu.Unlock()
+	}
+	return nil
+}
+
+func (n mutatingDetachNode) AfterLinkDetach(LinkEndpoint) {}
+
+func TestCoverageMoreLifecycleValidationBranches(t *testing.T) {
+	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	nodes[b].failAttach = true
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err == nil {
+		t.Fatal("expected input attach failure")
+	}
+	nodes[b].failAttach = false
+	link, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes[a].failDetach = true
+	if err := w.DeleteLink(link); err == nil {
+		t.Fatal("expected output detach failure")
+	}
+	nodes[a].failDetach = false
+	nodes[a].panicOnClose = true
+	if err := w.DeleteNode(a); err == nil {
+		t.Fatal("expected close panic error from delete")
+	}
+
+	closeFail, closeNodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	closeNode, _ := closeFail.CreateNode("example.com/Source", NodeOptions{})
+	closeNodes[closeNode].failInactive = true
+	if err := closeFail.Close(); err == nil {
+		t.Fatal("expected close before-inactive error")
+	}
+
+	unregisterFail, unregisterNodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	unregisterNode, _ := unregisterFail.CreateNode("example.com/Source", NodeOptions{})
+	unregisterNodes[unregisterNode].failInactive = true
+	if err := unregisterFail.UnregisterLibrary("example.com"); err == nil {
+		t.Fatal("expected unregister before-inactive error")
+	}
+
+	closeDuring := NewWorkspace()
+	closeRuntime := capturedWorkspaceClass{w: closeDuring, closeDuring: true}
+	if err := closeDuring.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Closer",
+		Runtime: closeRuntime,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := closeDuring.CreateNode("example.com/Closer", NodeOptions{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("CreateNode closing during init error = %v, want closed", err)
+	}
+
+	inactivateDuring := NewWorkspace()
+	inactivateRuntime := capturedWorkspaceClass{w: inactivateDuring, recallClass: true}
+	if err := inactivateDuring.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Recalled",
+		Runtime: inactivateRuntime,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inactivateDuring.CreateNode("example.com/Recalled", NodeOptions{}); !errors.Is(err, ErrInactive) {
+		t.Fatalf("CreateNode inactivating during init error = %v, want inactive", err)
+	}
+}
+
+func TestCoveragePrivateHelpersAndCorruptStateBranches(t *testing.T) {
+	if got := (&Error{Op: "op", Phase: "phase", Err: ErrClosed}).Error(); got != "op phase: "+ErrClosed.Error() {
+		t.Fatalf("phased error string = %q", got)
+	}
+	if ValidTypeName("example.com/bad_name") {
+		t.Fatal("type with underscore should be invalid")
+	}
+	if err := (StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/bad"}}}).DefineClasses(&libraryScope{w: NewWorkspace(), library: "example.com"}); err == nil {
+		t.Fatal("expected static library define error")
+	}
+	if _, err := saveDataConfig(SaveData{Nodes: []SaveNode{{ID: "1N", State: NodeState{Private: func() {}}}}}); err == nil {
+		t.Fatal("expected config marshal error")
+	}
+
+	log := []string{}
+	w := NewWorkspace()
+	err := w.cleanupInitializedRuntimes(
+		map[NodeID]NodeRuntime{
+			2: &lifecycleNode{id: 2, log: &log, panicOnClose: true},
+			1: &lifecycleNode{id: 1, log: &log},
+		},
+		map[NodeID]*nodeScope{
+			2: {id: 2},
+			1: {id: 1},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected cleanup close error")
+	}
+	if !containsString(log, "close:1") {
+		t.Fatalf("cleanup log = %#v, want sorted close of node 1", log)
+	}
+
+	class := scopedTestClass("example.com", "Source")
+	w = NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	pending, err := w.prepareCreateLinkLocked(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.links[pending.link.id] = pending.link
+	if err := w.commitPreparedLinkLocked(pending); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate commit error = %v, want duplicate", err)
+	}
+	delete(w.links, pending.link.id)
+	pending.link.typ = "example.com/float"
+	if err := w.commitPreparedLinkLocked(pending); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("type-changing commit error = %v, want type mismatch", err)
+	}
+	delete(w.links, pending.link.id)
+	w.nextLink = pending.link.id
+	pending.link.typ = testType
+	if err := w.commitPreparedLinkLocked(pending); err != nil {
+		t.Fatal(err)
+	}
+	if w.nextLink != pending.link.id+1 {
+		t.Fatalf("next link = %d, want %d", w.nextLink, pending.link.id+1)
+	}
+
+	w.links[99] = nil
+	w.links[100] = &linkRecord{id: 100, input: FullPortID{Node: 999, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	w.links[101] = &linkRecord{id: 101, input: FullPortID{Node: b, Port: PortID{Number: 99, Kind: InputPort}}, output: FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	w.links[102] = &linkRecord{id: 102, input: FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: a, Port: PortID{Number: 99, Kind: OutputPort}}, typ: testType}
+	events := w.removeInvalidLinksLocked()
+	if len(events) != 3 {
+		t.Fatalf("remove invalid events = %#v, want 3", events)
+	}
+	delete(w.links, 99)
+
+	w.links[200] = &linkRecord{id: 200, input: FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	w.links[201] = &linkRecord{id: 201, input: FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	if err := w.validateAttachedLinksLocked(b); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("corrupt multiplicity validation = %v, want multiplicity", err)
+	}
+	delete(w.nodes, a)
+	if err := w.validateAttachedLinksLocked(b); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("corrupt missing node validation = %v, want not found", err)
+	}
+
+	classes := map[string]*classRecord{"nil": nil}
+	if got := cloneClassRecords(classes); len(got) != 0 {
+		t.Fatalf("clone nil classes = %#v, want empty", got)
+	}
+	nodes := map[NodeID]*nodeRecord{1: nil}
+	if got := cloneNodeRecords(nodes); len(got) != 0 {
+		t.Fatalf("clone nil nodes = %#v, want empty", got)
+	}
+	links := map[LinkID]*linkRecord{1: nil}
+	if got := cloneLinkRecords(links); len(got) != 0 {
+		t.Fatalf("clone nil links = %#v, want empty", got)
+	}
+
+	if _, err := chooseLinkType(
+		PortSpec{AcceptedTypes: []string{"example.com/float"}},
+		PortSpec{FixedType: testType},
+		"",
+	); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("output fixed mismatch = %v, want type mismatch", err)
+	}
+	if _, err := chooseLinkType(
+		PortSpec{FixedType: testType},
+		PortSpec{AcceptedTypes: []string{"example.com/float"}},
+		"",
+	); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("input fixed mismatch = %v, want type mismatch", err)
+	}
+	if portAccepts(PortSpec{AcceptedTypes: []string{"example.com/float"}}, testType) {
+		t.Fatal("portAccepts accepted missing type")
+	}
+	if err := validatePorts([]PortSpec{
+		{ID: PortID{Number: 1, Kind: InputPort}, Direction: InputPort},
+		{ID: PortID{Number: 1, Kind: InputPort}, Direction: InputPort},
+	}, InputPort); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate ports = %v, want duplicate", err)
+	}
+	if err := validatePorts([]PortSpec{{
+		ID:            PortID{Number: 1, Kind: InputPort},
+		Direction:     InputPort,
+		AcceptedTypes: []string{"example.com/Bad"},
+	}}, InputPort); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("invalid accepted type = %v, want invalid name", err)
+	}
+
+	cycleWorkspace := &Workspace{links: map[LinkID]*linkRecord{
+		1: {id: 1, output: FullPortID{Node: 1}, input: FullPortID{Node: 2}},
+		2: {id: 2, output: FullPortID{Node: 2}, input: FullPortID{Node: 1}},
+	}}
+	if !cycleWorkspace.pathExistsLocked(1, 2, 0) {
+		t.Fatal("expected path through direct link")
+	}
+	if !cycleWorkspace.pathExistsLocked(1, 1, 0) {
+		t.Fatal("expected path to self")
+	}
+	if cycleWorkspace.pathExistsLocked(3, 4, 0) {
+		t.Fatal("unexpected path for disconnected nodes")
+	}
+	if cycleWorkspace.pathExistsLocked(1, 3, 0) {
+		t.Fatal("unexpected path out of closed cycle")
+	}
+	sortNodes := []restoreInitNode{
+		{record: &nodeRecord{id: 1}},
+		{record: &nodeRecord{id: 2}},
+	}
+	cycleWorkspace.sortRestoreInitNodesLocked(sortNodes)
+	if len(sortNodes) != 2 || sortNodes[0].record.id != 1 || sortNodes[1].record.id != 2 {
+		t.Fatalf("cycle fallback order = %#v", sortNodes)
+	}
+}
+
+func TestCoverageMoreSaveRestorePasteAndScopeBranches(t *testing.T) {
+	w, nodes, _ := privateHookWorkspace(t, &privateHookClass{}, nil)
+	a, _ := w.CreateNode("example.com/Private", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Private", NodeOptions{})
+	nodes[a].exported = "selected"
+	nodes[b].exported = "not-selected"
+	clip, err := w.Copy([]NodeID{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clip.Nodes) != 1 || clip.Nodes[0].State.Private != "selected" {
+		t.Fatalf("selected copy private = %#v", clip)
+	}
+	copyLinks := NewWorkspace()
+	copyClass := ClassSpec{
+		Name: "example.com/Multi",
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Direction: InputPort,
+			FixedType: testType,
+			Multiple:  true,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+	if err := copyLinks.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{copyClass}}); err != nil {
+		t.Fatal(err)
+	}
+	cl1, _ := copyLinks.CreateNode("example.com/Multi", NodeOptions{})
+	cl2, _ := copyLinks.CreateNode("example.com/Multi", NodeOptions{})
+	cl3, _ := copyLinks.CreateNode("example.com/Multi", NodeOptions{})
+	if _, err := copyLinks.CreateLink(FullPortID{Node: cl3, Port: copyClass.Inputs[0].ID}, FullPortID{Node: cl2, Port: copyClass.Outputs[0].ID}, LinkOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := copyLinks.CreateLink(FullPortID{Node: cl3, Port: copyClass.Inputs[0].ID}, FullPortID{Node: cl1, Port: copyClass.Outputs[0].ID}, LinkOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if clip, err := copyLinks.Copy([]NodeID{cl1, cl2, cl3}); err != nil || len(clip.Links) != 2 || clip.Links[0].Name > clip.Links[1].Name {
+		t.Fatalf("copied sorted links = %#v err %v", clip.Links, err)
+	}
+	if _, _, err := w.Paste(Clipboard{Nodes: []SaveNode{{
+		ID: "1N", Class: "example.com/Private",
+		Outputs: []PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: OutputPort}},
+	}}}); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("invalid paste output error = %v, want invalid port", err)
+	}
+	if _, _, err := w.Paste(Clipboard{
+		Nodes: []SaveNode{{ID: "1N", Class: "example.com/Private"}},
+		Links: []SaveLink{{Name: "bad"}},
+	}); !errors.Is(err, ErrInvalidID) {
+		t.Fatalf("invalid paste link name error = %v, want invalid id", err)
+	}
+	if pastedNodes, pastedLinks, err := w.Paste(Clipboard{
+		Nodes: []SaveNode{{ID: "1N", Class: "example.com/Private"}},
+		Links: []SaveLink{{Name: "1L:2N1i:1N1o", Type: testType}},
+	}); err != nil || len(pastedNodes) != 1 || len(pastedLinks) != 0 {
+		t.Fatalf("external paste link = nodes %#v links %#v err %v", pastedNodes, pastedLinks, err)
+	}
+	failPaste := NewWorkspace()
+	if err := failPaste.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Fail",
+		Runtime: &lifecycleClass{log: &[]string{}, fail: true},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := failPaste.Paste(Clipboard{Nodes: []SaveNode{{ID: "1N", Class: "example.com/Fail"}}}); err == nil {
+		t.Fatal("expected paste init error")
+	}
+
+	emptyRestore := NewWorkspace()
+	if err := emptyRestore.Restore(SaveData{NextNode: -1, NextLink: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if saved := emptyRestore.Save(); saved.NextNode != 1 || saved.NextLink != 1 {
+		t.Fatalf("empty restore next IDs = %#v, want 1/1", saved)
+	}
+	badCfg := configer.NewMemory(nil)
+	if err := badCfg.Set(configer.Path{"nodes"}, "not-a-list"); err != nil {
+		t.Fatal(err)
+	}
+	if err := emptyRestore.RestoreConfig(badCfg); err == nil {
+		t.Fatal("expected restore config unmarshal error")
+	}
+	closeRestore := NewWorkspace()
+	closeRuntime := capturedWorkspaceClass{w: closeRestore, closeDuring: true}
+	if err := closeRestore.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Closer", Runtime: closeRuntime}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := closeRestore.Restore(SaveData{Nodes: []SaveNode{{ID: "1N", Class: "example.com/Closer"}}}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("restore closed during init = %v, want closed", err)
+	}
+
+	regular, _ := testWorkspace(t)
+	if err := regular.RecallClass("example.com", "example.com/Source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := regular.CanCreateNode("example.com/Source"); !errors.Is(err, ErrInactive) {
+		t.Fatalf("inactive CanCreateNode = %v, want inactive", err)
+	}
+	if err := regular.CanDeleteLink(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing CanDeleteLink = %v, want not found", err)
+	}
+	if err := regular.SetLinkWaypoints(999, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetLinkWaypoints = %v, want not found", err)
+	}
+	if err := regular.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := regular.DeleteLink(999); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed DeleteLink = %v, want closed", err)
+	}
+	if err := regular.SetLinkWaypoints(999, nil); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed SetLinkWaypoints = %v, want closed", err)
+	}
+
+	scopeWorkspace := NewWorkspace()
+	lib := &captureScopeLibrary{name: "example.com", classes: []ClassSpec{scopedTestClass("example.com", "Source")}}
+	if err := scopeWorkspace.RegisterLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	n1, _ := lib.scope.CreateNode("example.com/Source", NodeOptions{})
+	n2, _ := lib.scope.CreateNode("example.com/Source", NodeOptions{})
+	link, err := lib.scope.CreateLink(
+		FullPortID{Node: n2, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: n1, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.CanCreateLink(
+		FullPortID{Node: n2, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: n1, Port: PortID{Number: 1, Kind: OutputPort}},
+		testType,
+	); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("scope CanCreateLink duplicate = %v, want multiplicity", err)
+	}
+	if err := lib.scope.CanSetLinkWaypoints(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.scope.CanDeleteLink(link); err != nil {
+		t.Fatal(err)
+	}
+	directScope := &libraryScope{w: scopeWorkspace, library: "example.com"}
+	if _, err := directScope.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoverageConcurrentRevalidationBranches(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		mut  func(*Workspace, *mutatingInactiveNode)
+		call func(*Workspace) error
+		err  error
+	}{
+		{
+			name: "close observes concurrently closed workspace",
+			mut:  func(w *Workspace, n *mutatingInactiveNode) { n.close = true },
+			call: func(w *Workspace) error { return w.Close() },
+			err:  nil,
+		},
+		{
+			name: "unregister observes closed workspace",
+			mut:  func(w *Workspace, n *mutatingInactiveNode) { n.close = true },
+			call: func(w *Workspace) error { return w.UnregisterLibrary("example.com") },
+			err:  ErrClosed,
+		},
+		{
+			name: "unregister observes missing library",
+			mut:  func(w *Workspace, n *mutatingInactiveNode) { n.deleteLib = "example.com" },
+			call: func(w *Workspace) error { return w.UnregisterLibrary("example.com") },
+			err:  ErrNotFound,
+		},
+		{
+			name: "recall observes closed workspace",
+			mut:  func(w *Workspace, n *mutatingInactiveNode) { n.close = true },
+			call: func(w *Workspace) error { return w.RecallClass("example.com", "example.com/Source") },
+			err:  ErrClosed,
+		},
+		{
+			name: "recall observes missing class",
+			mut:  func(w *Workspace, n *mutatingInactiveNode) { n.deleteClass = "example.com/Source" },
+			call: func(w *Workspace) error { return w.RecallClass("example.com", "example.com/Source") },
+			err:  ErrNotFound,
+		},
+		{
+			name: "recall observes changed owner",
+			mut:  func(w *Workspace, n *mutatingInactiveNode) { n.changeOwner = "example.com/Source" },
+			call: func(w *Workspace) error { return w.RecallClass("example.com", "example.com/Source") },
+			err:  ErrOwnership,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWorkspace()
+			runtime := &mutatingInactiveNode{w: w}
+			tt.mut(w, runtime)
+			if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+				Name: "example.com/Source",
+				Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+					return runtime, nil
+				}),
+			}}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			err := tt.call(w)
+			if tt.err == nil {
+				if err != nil {
+					t.Fatalf("call error = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("call error = %v, want %v", err, tt.err)
+			}
+		})
+	}
+
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(SaveData{Nodes: []SaveNode{{ID: "1N", Class: "example.com/Source"}}}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := capturedWorkspaceClass{w: w, deleteID: 1}
+	if err := w.DefineClass("example.com", ClassSpec{Name: "example.com/Source", Runtime: runtime}); !errors.Is(err, ErrInactive) {
+		t.Fatalf("define class deleted reactivated node error = %v, want inactive", err)
+	}
+	wrongClass := NewWorkspace()
+	if err := wrongClass.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wrongClass.Restore(SaveData{Nodes: []SaveNode{{ID: "1N", Class: "example.com/Source"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wrongClass.DefineClass("example.com", ClassSpec{Name: "example.com/Source", Runtime: capturedWorkspaceClass{w: wrongClass, wrongClass: 1}}); !errors.Is(err, ErrInactive) {
+		t.Fatalf("define class changed reactivated node error = %v, want inactive", err)
+	}
+	directReactivation := NewWorkspace()
+	directReactivation.classes["example.com/Source"] = &classRecord{spec: ClassSpec{Name: "example.com/Source", Runtime: nodeClassFunc(func(NodeContext, NodeState, InitMode) (NodeRuntime, error) {
+		return struct{}{}, nil
+	})}}
+	directReactivation.nodes[2] = &nodeRecord{id: 2, class: "example.com/Other", state: StateActive}
+	directReactivation.nodes[3] = &nodeRecord{id: 3, class: "example.com/Source", state: StateInactive}
+	_ = directReactivation.reactivatedInitNodesLocked("example.com/Source", nil)
+
+	deleteClose := NewWorkspace()
+	deleteRuntime := mutatingDeleteNode{w: deleteClose, close: true}
+	if err := deleteClose.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Source", Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+		deleteRuntime.id = ctx.ID
+		return deleteRuntime, nil
+	})}}}); err != nil {
+		t.Fatal(err)
+	}
+	deleteNode, _ := deleteClose.CreateNode("example.com/Source", NodeOptions{})
+	if err := deleteClose.DeleteNode(deleteNode); !errors.Is(err, ErrClosed) {
+		t.Fatalf("delete after close hook = %v, want closed", err)
+	}
+
+	deleteMissing := NewWorkspace()
+	missingRuntime := mutatingDeleteNode{w: deleteMissing, delete: true}
+	if err := deleteMissing.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Source", Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+		missingRuntime.id = ctx.ID
+		return missingRuntime, nil
+	})}}}); err != nil {
+		t.Fatal(err)
+	}
+	missingNode, _ := deleteMissing.CreateNode("example.com/Source", NodeOptions{})
+	if err := deleteMissing.DeleteNode(missingNode); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete after node removed hook = %v, want not found", err)
+	}
+
+	detachWorkspace := NewWorkspace()
+	detacher := mutatingDetachNode{w: detachWorkspace}
+	if err := detachWorkspace.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Source",
+		Runtime: nodeClassFunc(func(NodeContext, NodeState, InitMode) (NodeRuntime, error) { return detacher, nil }),
+		Inputs:  []PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: InputPort, FixedType: testType}},
+		Outputs: []PortSpec{{ID: PortID{Number: 1, Kind: OutputPort}, Direction: OutputPort, FixedType: testType}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	n1, _ := detachWorkspace.CreateNode("example.com/Source", NodeOptions{})
+	n2, _ := detachWorkspace.CreateNode("example.com/Source", NodeOptions{})
+	detachLink, _ := detachWorkspace.CreateLink(
+		FullPortID{Node: n2, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: n1, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	detacher.link = detachLink
+	detacher.delete = true
+	detachWorkspace.nodes[n1].runtime = detacher
+	detachWorkspace.nodes[n2].runtime = detacher
+	if err := detachWorkspace.DeleteLink(detachLink); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete link after hook removed link = %v, want not found", err)
+	}
+
+	finalCleanup := NewWorkspace()
+	finalDetacher := mutatingDetachNode{w: finalCleanup}
+	if err := finalCleanup.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Source",
+		Runtime: nodeClassFunc(func(NodeContext, NodeState, InitMode) (NodeRuntime, error) { return finalDetacher, nil }),
+		Inputs:  []PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: InputPort, FixedType: testType}},
+		Outputs: []PortSpec{{ID: PortID{Number: 1, Kind: OutputPort}, Direction: OutputPort, FixedType: testType}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	f1, _ := finalCleanup.CreateNode("example.com/Source", NodeOptions{})
+	f2, _ := finalCleanup.CreateNode("example.com/Source", NodeOptions{})
+	f3, _ := finalCleanup.CreateNode("example.com/Source", NodeOptions{})
+	fLink, _ := finalCleanup.CreateLink(FullPortID{Node: f2, Port: PortID{Number: 1, Kind: InputPort}}, FullPortID{Node: f1, Port: PortID{Number: 1, Kind: OutputPort}}, LinkOptions{})
+	finalDetacher.add = &linkRecord{id: 999, input: FullPortID{Node: f3, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: f1, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	finalCleanup.nodes[f1].runtime = finalDetacher
+	finalCleanup.nodes[f2].runtime = finalDetacher
+	if err := finalCleanup.DeleteNode(f1); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := finalCleanup.links[fLink]; ok {
+		t.Fatal("original link should be deleted")
+	}
+	if _, ok := finalCleanup.links[999]; ok {
+		t.Fatal("concurrently added attached link should be deleted by final cleanup")
+	}
+}
+
+type deletingExportNode struct {
+	w  *Workspace
+	id NodeID
+}
+
+func (n deletingExportNode) ExportPrivateState() (any, error) {
+	n.w.mu.Lock()
+	delete(n.w.nodes, n.id)
+	n.w.mu.Unlock()
+	return "deleted", nil
+}
+
+func TestCoverageFinalReachableBranches(t *testing.T) {
+	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	c, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	link1, _ := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	nodes[b].failDetach = true
+	if err := w.DeleteNode(a); err == nil {
+		t.Fatal("expected delete node to surface attached link detach error")
+	}
+	nodes[b].failDetach = false
+	w.links[link1].state = StateInactive
+	w.links[100] = &linkRecord{id: 100, state: StateActive, input: FullPortID{Node: c, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: b, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	_, linkEvents := w.inactiveEventsForNodesLocked(map[NodeID]bool{a: true})
+	if len(linkEvents) != 0 {
+		t.Fatalf("inactive/unrelated link events = %#v, want none", linkEvents)
+	}
+	w.links[link1].state = StateActive
+	w.links[101] = &linkRecord{id: 101, state: StateActive, input: FullPortID{Node: c, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	_, linkEvents = w.inactiveEventsForNodesLocked(map[NodeID]bool{a: true})
+	if len(linkEvents) != 2 || linkEvents[0].id != link1 || linkEvents[1].id != 101 {
+		t.Fatalf("sorted link events = %#v", linkEvents)
+	}
+
+	closeRecall, closeNodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	closeNode, _ := closeRecall.CreateNode("example.com/Source", NodeOptions{})
+	closeNodes[closeNode].panicOnClose = true
+	if err := closeRecall.RecallClass("example.com", "example.com/Source"); err == nil {
+		t.Fatal("expected recall close error")
+	}
+	closeUnregister, unregisterNodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	unregisterNode, _ := closeUnregister.CreateNode("example.com/Source", NodeOptions{})
+	unregisterNodes[unregisterNode].panicOnClose = true
+	if err := closeUnregister.UnregisterLibrary("example.com"); err == nil {
+		t.Fatal("expected unregister close error")
+	}
+
+	copyRace := NewWorkspace()
+	var deleting deletingExportNode
+	if err := copyRace.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name: "example.com/DeleteOnExport",
+		Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+			deleting.w = copyRace
+			deleting.id = ctx.ID
+			return deleting, nil
+		}),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	copyNode, _ := copyRace.CreateNode("example.com/DeleteOnExport", NodeOptions{})
+	if _, err := copyRace.Copy([]NodeID{copyNode}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("copy after export deleted node = %v, want not found", err)
+	}
+
+	pasteClose := NewWorkspace()
+	closeRuntime := capturedWorkspaceClass{w: pasteClose, closeDuring: true}
+	if err := pasteClose.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/ClosePaste", Runtime: closeRuntime}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pasteClose.Paste(Clipboard{Nodes: []SaveNode{{ID: "1N", Class: "example.com/ClosePaste"}}}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("paste closed during init = %v, want closed", err)
+	}
+	pasteInactive := NewWorkspace()
+	inactiveRuntime := capturedWorkspaceClass{w: pasteInactive, recallClass: true}
+	if err := pasteInactive.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/InactivePaste", Runtime: inactiveRuntime}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pasteInactive.Paste(Clipboard{Nodes: []SaveNode{{ID: "1N", Class: "example.com/InactivePaste"}}}); !errors.Is(err, ErrInactive) {
+		t.Fatalf("paste inactive during init = %v, want inactive", err)
+	}
+
+	class := scopedTestClass("example.com", "Source")
+	multi := NewWorkspace()
+	if err := multi.RegisterLibrary(StaticLibrary{LibraryName: "b.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := multi.RegisterLibrary(StaticLibrary{LibraryName: "a.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if libs := multi.Snapshot().Libraries; len(libs) != 2 || libs[0].Name != "a.com" || libs[1].Name != "b.com" {
+		t.Fatalf("sorted libraries = %#v", libs)
+	}
+	_ = class
+
+	commitWorkspace, _ := testWorkspace(t)
+	x, _ := commitWorkspace.CreateNode("example.com/Source", NodeOptions{})
+	y, _ := commitWorkspace.CreateNode("example.com/Source", NodeOptions{})
+	pending, err := commitWorkspace.prepareCreateLinkLocked(
+		FullPortID{Node: y, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: x, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.link.typ = ""
+	if err := commitWorkspace.commitPreparedLinkLocked(pending); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("commit changed implicit type = %v, want type mismatch", err)
+	}
+	commitWorkspace.closed = true
+	if _, err := commitWorkspace.prepareCreateLinkLocked(
+		FullPortID{Node: y, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: x, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); !errors.Is(err, ErrClosed) {
+		t.Fatalf("prepare link closed = %v, want closed", err)
+	}
+	if err := commitWorkspace.commitPreparedLinkLocked(pending); !errors.Is(err, ErrClosed) {
+		t.Fatalf("commit link closed = %v, want closed", err)
+	}
+
+	validateWorkspace, _ := testWorkspace(t)
+	p, _ := validateWorkspace.CreateNode("example.com/Source", NodeOptions{})
+	q, _ := validateWorkspace.CreateNode("example.com/Source", NodeOptions{})
+	validateWorkspace.links[1] = &linkRecord{id: 1, input: FullPortID{Node: q, Port: PortID{Number: 99, Kind: InputPort}}, output: FullPortID{Node: p, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	if err := validateWorkspace.validateAttachedLinksLocked(q); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("missing input attached validation = %v, want invalid port", err)
+	}
+	validateWorkspace.links[1] = &linkRecord{id: 1, input: FullPortID{Node: q, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: p, Port: PortID{Number: 99, Kind: OutputPort}}, typ: testType}
+	if err := validateWorkspace.validateAttachedLinksLocked(q); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("missing output attached validation = %v, want invalid port", err)
+	}
+	validateWorkspace.links[1] = &linkRecord{id: 1, input: FullPortID{Node: q, Port: PortID{Number: 99, Kind: InputPort}}, output: FullPortID{Node: p, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	if err := validateWorkspace.validateAttachedLinksLocked(999); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("second-pass missing input validation = %v, want invalid port", err)
+	}
+	validateWorkspace.links[1] = &linkRecord{id: 1, input: FullPortID{Node: 999, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: p, Port: PortID{Number: 1, Kind: OutputPort}}, typ: testType}
+	if err := validateWorkspace.validateAttachedLinksLocked(123); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second-pass missing node validation = %v, want not found", err)
+	}
+
+	scopeRuntime := &nodeScopeClass{scopes: map[NodeID]NodeScope{}}
+	scopeWorkspace := NewWorkspace()
+	if err := scopeWorkspace.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Scoped", Runtime: scopeRuntime}}}); err != nil {
+		t.Fatal(err)
+	}
+	scopeNode, _ := scopeWorkspace.CreateNode("example.com/Scoped", NodeOptions{})
+	if err := scopeRuntime.scopes[scopeNode].SetState(NodeState{DisplayName: "committed"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := scopeWorkspace.Node(scopeNode); got.Dynamic.DisplayName != "committed" {
+		t.Fatalf("committed SetState = %#v", got.Dynamic)
+	}
+
+	failCreate := NewWorkspace()
+	if err := failCreate.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Fail", Runtime: &lifecycleClass{log: &[]string{}, fail: true}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failCreate.CreateNode("example.com/Fail", NodeOptions{}); err == nil {
+		t.Fatal("expected create node init error")
+	}
+	if err := failCreate.RecallClass("example.com", "example.com/Fail"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failCreate.CreateNode("example.com/Fail", NodeOptions{}); !errors.Is(err, ErrInactive) {
+		t.Fatalf("create inactive class = %v, want inactive", err)
+	}
+
+	defineClose := NewWorkspace()
+	if err := defineClose.RegisterLibrary(StaticLibrary{LibraryName: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := defineClose.Restore(SaveData{Nodes: []SaveNode{{ID: "1N", Class: "example.com/CloseDefine"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := defineClose.DefineClass("example.com", ClassSpec{Name: "example.com/CloseDefine", Runtime: capturedWorkspaceClass{w: defineClose, closeDuring: true}}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("define closed during init = %v, want closed", err)
+	}
+
+	pasteLinkErr, _ := testWorkspace(t)
+	if _, _, err := pasteLinkErr.Paste(Clipboard{
+		Nodes: []SaveNode{{ID: "1N", Class: "example.com/Source"}, {ID: "2N", Class: "example.com/Source"}},
+		Links: []SaveLink{{Name: "1L:2N99i:1N1o", Type: testType}},
+	}); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("paste link create error = %v, want invalid port", err)
+	}
+
+	initMetadata := &nodeScopeClass{scopes: map[NodeID]NodeScope{}, metadataKeyInInit: "only", metadataValueInInit: "value"}
+	initWorkspace := NewWorkspace()
+	if err := initWorkspace.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Meta", Runtime: initMetadata}}}); err != nil {
+		t.Fatal(err)
+	}
+	initNode, _ := initWorkspace.CreateNode("example.com/Meta", NodeOptions{})
+	if err := initMetadata.scopes[initNode].DeleteMetadataValue("only"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := initWorkspace.Node(initNode); got.Dynamic.Metadata != nil {
+		t.Fatalf("metadata after deleting last key = %#v, want nil", got.Dynamic.Metadata)
+	}
+	initPorts := &initScopeExerciseClass{}
+	initPortsWorkspace := NewWorkspace()
+	if err := initPortsWorkspace.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: "example.com/Ports", Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+		if err := ctx.Node.SetMetadataValue("only", "value"); err != nil {
+			return nil, err
+		}
+		if err := ctx.Node.DeleteMetadataValue("only"); err != nil {
+			return nil, err
+		}
+		if snap, ok := ctx.Node.Snapshot(); !ok || snap.Dynamic.Metadata != nil {
+			return nil, fmt.Errorf("metadata after init delete = %#v", snap.Dynamic.Metadata)
+		}
+		if err := ctx.Node.SetPorts([]PortSpec{{ID: PortID{Number: 0, Kind: InputPort}, Direction: InputPort}}, nil); !errors.Is(err, ErrInvalidPort) {
+			return nil, fmt.Errorf("invalid input SetPorts = %v", err)
+		}
+		if err := ctx.Node.SetPorts(nil, []PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: OutputPort}}); !errors.Is(err, ErrInvalidPort) {
+			return nil, fmt.Errorf("invalid output SetPorts = %v", err)
+		}
+		if err := ctx.Node.SetPorts([]PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: InputPort}}, []PortSpec{{ID: PortID{Number: 1, Kind: OutputPort}, Direction: OutputPort}}); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	})}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initPortsWorkspace.CreateNode("example.com/Ports", NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = initPorts
+
+	directScope := &nodeScope{w: NewWorkspace(), id: 1, initRec: &nodeRecord{id: 1}}
+	if err := directScope.SetPorts([]PortSpec{{ID: PortID{Number: 0, Kind: InputPort}, Direction: InputPort}}, nil); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("direct init SetPorts invalid input = %v, want invalid port", err)
+	}
+	if err := directScope.SetPorts(nil, []PortSpec{{ID: PortID{Number: 1, Kind: InputPort}, Direction: OutputPort}}); !errors.Is(err, ErrInvalidPort) {
+		t.Fatalf("direct init SetPorts invalid output = %v, want invalid port", err)
+	}
+}
+
+type nodeClassFunc func(NodeContext, NodeState, InitMode) (NodeRuntime, error)
+
+func (f nodeClassFunc) InitNode(ctx NodeContext, state NodeState, mode InitMode) (NodeRuntime, error) {
+	return f(ctx, state, mode)
 }
 
 func TestLifecycleRestoreRollsBackOnInitError(t *testing.T) {

@@ -252,18 +252,18 @@ func (w *Workspace) Restore(data SaveData) error {
 		}
 	}
 	w.nextNode = NodeID(data.NextNode)
+	if w.nextNode <= 0 {
+		w.nextNode = 1
+	}
 	if w.nextNode <= maxNode {
 		w.nextNode = maxNode + 1
 	}
 	w.nextLink = LinkID(data.NextLink)
-	if w.nextLink <= maxLink {
-		w.nextLink = maxLink + 1
-	}
-	if w.nextNode <= 0 {
-		w.nextNode = 1
-	}
 	if w.nextLink <= 0 {
 		w.nextLink = 1
+	}
+	if w.nextLink <= maxLink {
+		w.nextLink = maxLink + 1
 	}
 	w.refreshActivityLocked()
 	initNodes := make([]restoreInitNode, 0, len(w.nodes))

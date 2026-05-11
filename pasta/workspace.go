@@ -555,10 +555,7 @@ func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 	if err := w.canSetNodePortsLocked(id, inputs, outputs); err != nil {
 		return opErr("set node ports", "validate", err)
 	}
-	node, ok := w.nodes[id]
-	if !ok {
-		return opErr("set node ports", "validate", ErrNotFound)
-	}
+	node := w.nodes[id]
 	node.inputs, node.outputs = clonePorts(inputs), clonePorts(outputs)
 	return nil
 }
@@ -1310,9 +1307,6 @@ func (w *Workspace) removeInvalidLinksLocked() []linkDetachEvent {
 	var detachEvents []linkDetachEvent
 	for _, id := range ids {
 		link := w.links[id]
-		if link == nil {
-			continue
-		}
 		inNode := w.nodes[link.input.Node]
 		outNode := w.nodes[link.output.Node]
 		if inNode == nil || outNode == nil {
@@ -1777,12 +1771,6 @@ func (s *nodeScope) SetPorts(inputs, outputs []PortSpec) error {
 		return err
 	}
 	return s.updateInitRecord(func(rec *nodeRecord) error {
-		if err := validatePorts(inputs, InputPort); err != nil {
-			return opErr("set node ports", "validate", err)
-		}
-		if err := validatePorts(outputs, OutputPort); err != nil {
-			return opErr("set node ports", "validate", err)
-		}
 		rec.inputs = clonePorts(inputs)
 		rec.outputs = clonePorts(outputs)
 		return nil
