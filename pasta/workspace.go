@@ -582,30 +582,50 @@ func (w *Workspace) SetLinkWaypoints(id LinkID, waypoints []string) error {
 
 // Copy serializes selected nodes and internal links between them.
 func (w *Workspace) Copy(ids []NodeID) (Clipboard, error) {
+	selected := make(map[NodeID]bool, len(ids))
+	for _, id := range ids {
+		selected[id] = true
+	}
+	w.mu.RLock()
+	for _, id := range ids {
+		if _, ok := w.nodes[id]; !ok {
+			w.mu.RUnlock()
+			return Clipboard{}, opErr("copy", "validate", ErrNotFound)
+		}
+	}
+	w.mu.RUnlock()
+	exports, err := w.exportPrivateStates(selected)
+	if err != nil {
+		return Clipboard{}, err
+	}
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	selected := make(map[NodeID]bool, len(ids))
 	var clip Clipboard
+	copied := make(map[NodeID]bool, len(ids))
 	for _, id := range ids {
 		node, ok := w.nodes[id]
 		if !ok {
 			return Clipboard{}, opErr("copy", "validate", ErrNotFound)
 		}
-		if selected[id] {
+		if copied[id] {
 			continue
 		}
-		selected[id] = true
+		copied[id] = true
+		state := cloneNodeState(node.dynamic)
+		if private, ok := exports[id]; ok {
+			state.Private = clonePrivateState(private)
+		}
 		clip.Nodes = append(clip.Nodes, SaveNode{
 			ID:      id.String(),
 			Class:   node.class,
-			State:   cloneNodeState(node.dynamic),
+			State:   state,
 			Inputs:  clonePorts(node.inputs),
 			Outputs: clonePorts(node.outputs),
 		})
 	}
 	sort.Slice(clip.Nodes, func(i, j int) bool { return clip.Nodes[i].ID < clip.Nodes[j].ID })
 	for _, link := range w.links {
-		if selected[link.input.Node] && selected[link.output.Node] {
+		if copied[link.input.Node] && copied[link.output.Node] {
 			clip.Links = append(clip.Links, SaveLink{
 				Name:      FullLinkName{Link: link.id, Input: link.input, Output: link.output}.String(),
 				Type:      link.typ,
@@ -1379,7 +1399,35 @@ func cloneLinkRecords(records map[LinkID]*linkRecord) map[LinkID]*linkRecord {
 
 func cloneNodeState(state NodeState) NodeState {
 	state.Metadata = cloneStringMap(state.Metadata)
+	state.Private = clonePrivateState(state.Private)
 	return state
+}
+
+func clonePrivateState(private any) any {
+	switch value := private.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for k, v := range value {
+			out[k] = clonePrivateState(v)
+		}
+		return out
+	case []any:
+		out := make([]any, len(value))
+		for i, v := range value {
+			out[i] = clonePrivateState(v)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(value))
+		for k, v := range value {
+			out[k] = v
+		}
+		return out
+	case []string:
+		return append([]string(nil), value...)
+	default:
+		return private
+	}
 }
 
 func clonePorts(ports []PortSpec) []PortSpec {

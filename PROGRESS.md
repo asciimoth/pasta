@@ -39,6 +39,7 @@ layout because the repo root is not itself a Go module.
 - Synchronized private node state updates through workspace and library-scoped APIs.
 - Node-scoped runtime API for a node to update its own state, private data,
   coordinates, and ports through workspace validation and locking.
+- Optional private state export/import hooks for runtime-owned state.
 - Dynamic node port replacement with validation that existing links remain valid.
 - Link creation and deletion.
 - Link creation prepares under lock, runs node hooks outside the workspace lock,
@@ -68,6 +69,8 @@ layout because the repo root is not itself a Go module.
 - Restore skips broken persisted links, but rejects invalid persisted link
   constraints such as duplicate link IDs, type mismatches, multiplicity
   violations, and cycles.
+- Error-returning save path that exports current private state from live
+  runtimes while preserving the stable snapshot-only `Save` API.
 - Deterministic restore runtime initialization using DAG ordering.
 - Late class definition can reactivate preserved inactive nodes and links.
 - Class recall recovery reinitializes recovered node runtimes.
@@ -103,6 +106,8 @@ layout because the repo root is not itself a Go module.
   - library unregister/register recovery and rollback
   - explicit lifecycle hook order for node deletion and workspace close with
     attached links
+  - runtime private state export/import, defensive copy behavior, and rollback
+    on hook failures
 
 ## Verified
 
@@ -118,7 +123,6 @@ go vet ./pasta/...
 
 - Complete node lifecycle hooks:
   - richer link deleted/inactivated notifications if needed by link contracts
-  - export/import private state
 - Add explicit worker shutdown/close semantics for nodes with goroutines.
 - Replace or wrap the current JSON-like `any` persistence shape with a concrete
   `github.com/asciimoth/configer` integration.

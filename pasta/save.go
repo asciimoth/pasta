@@ -33,15 +33,35 @@ type SaveLink struct {
 func (w *Workspace) Save() SaveData {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.saveLocked(nil)
+}
+
+// SaveWithRuntimeState returns deterministic workspace data after asking active
+// node runtimes to export their current private state.
+func (w *Workspace) SaveWithRuntimeState() (SaveData, error) {
+	exports, err := w.exportPrivateStates(nil)
+	if err != nil {
+		return SaveData{}, err
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.saveLocked(exports), nil
+}
+
+func (w *Workspace) saveLocked(exports map[NodeID]any) SaveData {
 	data := SaveData{
 		NextNode: int64(w.nextNode),
 		NextLink: int64(w.nextLink),
 	}
 	for _, node := range w.nodes {
+		state := cloneNodeState(node.dynamic)
+		if private, ok := exports[node.id]; ok {
+			state.Private = clonePrivateState(private)
+		}
 		data.Nodes = append(data.Nodes, SaveNode{
 			ID:      node.id.String(),
 			Class:   node.class,
-			State:   cloneNodeState(node.dynamic),
+			State:   state,
 			Inputs:  clonePorts(node.inputs),
 			Outputs: clonePorts(node.outputs),
 		})
@@ -56,6 +76,31 @@ func (w *Workspace) Save() SaveData {
 	}
 	sort.Slice(data.Links, func(i, j int) bool { return data.Links[i].Name < data.Links[j].Name })
 	return data
+}
+
+func (w *Workspace) exportPrivateStates(selected map[NodeID]bool) (map[NodeID]any, error) {
+	w.mu.RLock()
+	runtimes := make(map[NodeID]NodeRuntime)
+	for id, node := range w.nodes {
+		if selected != nil && !selected[id] {
+			continue
+		}
+		if node.state == StateActive && node.runtime != nil {
+			runtimes[id] = node.runtime
+		}
+	}
+	w.mu.RUnlock()
+	exports := make(map[NodeID]any)
+	for id, runtime := range runtimes {
+		private, ok, err := w.callExportPrivateState(runtime)
+		if err != nil {
+			return nil, opErr("export private state", "hook", err)
+		}
+		if ok {
+			exports[id] = private
+		}
+	}
+	return exports, nil
 }
 
 // Restore replaces workspace model state from SaveData.

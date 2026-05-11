@@ -185,6 +185,16 @@ type NodeCloseHook interface {
 	Close() error
 }
 
+// NodePrivateExportHook lets a runtime provide its current private state for persistence.
+type NodePrivateExportHook interface {
+	ExportPrivateState() (any, error)
+}
+
+// NodePrivateImportHook lets a runtime receive restored or default private state.
+type NodePrivateImportHook interface {
+	ImportPrivateState(any) error
+}
+
 // StaticLibrary is a simple Library implementation backed by ClassSpec values.
 type StaticLibrary struct {
 	LibraryName string

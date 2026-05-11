@@ -50,6 +50,11 @@ workspace.
 `Save` produces deterministic `SaveData`: nodes and links are sorted, IDs are
 formatted through canonical helpers, and ID generator state is included. Private
 node state is stored as `any` so callers can use a JSON-like/config tree.
+Runtimes that own volatile private state can implement `NodePrivateExportHook`;
+`SaveWithRuntimeState` and `Copy` call that hook outside the workspace lock and
+use the exported value in the saved or clipboard data. Runtimes that need an
+explicit import callback can implement `NodePrivateImportHook`, which runs after
+node initialization with the default or restored private value.
 
 `Restore` validates IDs, ports, endpoint references, type compatibility, and DAG
 safety. Missing classes restore nodes as inactive. Broken links are skipped.

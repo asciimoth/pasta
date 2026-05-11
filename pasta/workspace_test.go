@@ -763,6 +763,48 @@ type lifecycleNode struct {
 	inspectOnAttach    WorkspaceRO
 }
 
+type privateHookClass struct {
+	nodes      map[NodeID]*privateHookNode
+	imports    *[]any
+	failImport bool
+}
+
+func (c *privateHookClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	node := &privateHookNode{imports: c.imports, failImport: c.failImport}
+	if c.nodes != nil {
+		c.nodes[ctx.ID] = node
+	}
+	return node, nil
+}
+
+type privateHookNode struct {
+	exported    any
+	imports     *[]any
+	failExport  bool
+	panicExport bool
+	failImport  bool
+}
+
+func (n *privateHookNode) ExportPrivateState() (any, error) {
+	if n.panicExport {
+		panic("export private panic")
+	}
+	if n.failExport {
+		return nil, fmt.Errorf("export private failed")
+	}
+	return n.exported, nil
+}
+
+func (n *privateHookNode) ImportPrivateState(private any) error {
+	if n.failImport {
+		return fmt.Errorf("import private failed")
+	}
+	if n.imports != nil {
+		*n.imports = append(*n.imports, private)
+	}
+	return nil
+}
+
 func (n *lifecycleNode) LinkObject(endpoint LinkEndpoint) (any, error) {
 	if n.panicOnProvider {
 		panic("provider panic")
@@ -884,6 +926,112 @@ func lifecycleWorkspace(t *testing.T, classRuntime *lifecycleClass) (*Workspace,
 		t.Fatal(err)
 	}
 	return w, nodes, &log
+}
+
+func privateHookWorkspace(t *testing.T, classRuntime *privateHookClass, defaultPrivate any) (*Workspace, map[NodeID]*privateHookNode, *[]any) {
+	t.Helper()
+	imports := []any{}
+	nodes := map[NodeID]*privateHookNode{}
+	classRuntime.nodes = nodes
+	classRuntime.imports = &imports
+	class := ClassSpec{
+		Name: "example.com/Private",
+		Default: NodeState{
+			Private: defaultPrivate,
+		},
+		Runtime: classRuntime,
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	return w, nodes, &imports
+}
+
+func TestLifecyclePrivateStateExportAndImportHooks(t *testing.T) {
+	w, nodes, imports := privateHookWorkspace(t, &privateHookClass{}, map[string]any{"source": "default"})
+	id, err := w.CreateNode("example.com/Private", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*imports) != 1 {
+		t.Fatalf("imports = %#v, want one default import", *imports)
+	}
+	imported, ok := (*imports)[0].(map[string]any)
+	if !ok || imported["source"] != "default" {
+		t.Fatalf("imported private = %#v", (*imports)[0])
+	}
+	nodes[id].exported = map[string]any{"source": "runtime", "items": []any{"a"}}
+	if saved := w.Save(); saved.Nodes[0].State.Private.(map[string]any)["source"] != "default" {
+		t.Fatalf("Save private = %#v, want stored default", saved.Nodes[0].State.Private)
+	}
+	saved, err := w.SaveWithRuntimeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := saved.Nodes[0].State.Private.(map[string]any)
+	if private["source"] != "runtime" {
+		t.Fatalf("exported private = %#v", private)
+	}
+	private["source"] = "changed"
+	again, err := w.SaveWithRuntimeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Nodes[0].State.Private.(map[string]any)["source"] != "runtime" {
+		t.Fatalf("exported private was not defensively copied: %#v", again.Nodes[0].State.Private)
+	}
+	saved = again
+	clip, err := w.Copy([]NodeID{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clip.Nodes[0].State.Private.(map[string]any)["source"] != "runtime" {
+		t.Fatalf("clipboard private = %#v, want runtime export", clip.Nodes[0].State.Private)
+	}
+
+	restored, _, restoredImports := privateHookWorkspace(t, &privateHookClass{}, nil)
+	if err := restored.Restore(saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(*restoredImports) != 1 {
+		t.Fatalf("restored imports = %#v, want one restore import", *restoredImports)
+	}
+	if (*restoredImports)[0].(map[string]any)["source"] != "runtime" {
+		t.Fatalf("restored import = %#v, want runtime export", (*restoredImports)[0])
+	}
+}
+
+func TestLifecyclePrivateStateHookErrorsRollback(t *testing.T) {
+	w, nodes, _ := privateHookWorkspace(t, &privateHookClass{}, nil)
+	id, err := w.CreateNode("example.com/Private", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes[id].failExport = true
+	if _, err := w.SaveWithRuntimeState(); err == nil {
+		t.Fatal("expected export error")
+	}
+	if _, err := w.Copy([]NodeID{id}); err == nil {
+		t.Fatal("expected copy export error")
+	}
+	nodes[id].failExport = false
+	nodes[id].panicExport = true
+	if _, err := w.SaveWithRuntimeState(); err == nil {
+		t.Fatal("expected export panic error")
+	}
+
+	importFailing := &privateHookClass{failImport: true}
+	restored, _, _ := privateHookWorkspace(t, importFailing, nil)
+	original := restored.Save()
+	data := SaveData{Nodes: []SaveNode{{ID: "1N", Class: "example.com/Private", State: NodeState{Private: "persisted"}}}}
+	if err := restored.Restore(data); err == nil {
+		t.Fatal("expected import error")
+	}
+	after := restored.Save()
+	if fmt.Sprint(after) != fmt.Sprint(original) {
+		t.Fatalf("restore should roll back after import error, got %#v want %#v", after, original)
+	}
 }
 
 func TestLifecycleCreateLinkUsesInputObjectAndAttachDetachHooks(t *testing.T) {

@@ -30,7 +30,34 @@ func (w *Workspace) initNodeRuntime(class NodeClass, rec *nodeRecord, mode InitM
 	if err != nil {
 		return nil, scope, opErr("create node", "hook", err)
 	}
+	err = w.callImportPrivateState(runtime, clonePrivateState(rec.dynamic.Private))
+	if err != nil {
+		return nil, scope, opErr("create node", "hook", err)
+	}
 	return runtime, scope, nil
+}
+
+func (w *Workspace) callExportPrivateState(runtime NodeRuntime) (private any, ok bool, err error) {
+	hook, ok := runtime.(NodePrivateExportHook)
+	if !ok {
+		return nil, false, nil
+	}
+	err = w.recoverHook("export private state", func() error {
+		var exportErr error
+		private, exportErr = hook.ExportPrivateState()
+		return exportErr
+	})
+	return private, true, err
+}
+
+func (w *Workspace) callImportPrivateState(runtime NodeRuntime, private any) error {
+	hook, ok := runtime.(NodePrivateImportHook)
+	if !ok {
+		return nil
+	}
+	return w.recoverHook("import private state", func() error {
+		return hook.ImportPrivateState(private)
+	})
 }
 
 func (w *Workspace) callLinkObject(runtime NodeRuntime, endpoint LinkEndpoint) (object any, err error) {
