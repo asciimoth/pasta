@@ -1,6 +1,7 @@
 package pasta
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -358,6 +359,137 @@ func TestSaveRestoreAndPasteRemapIDs(t *testing.T) {
 	}
 	if nodes[0] == a || nodes[1] == b || links[0] == link {
 		t.Fatal("paste reused original IDs")
+	}
+}
+
+func TestSaveOutputIsDeterministic(t *testing.T) {
+	w, _ := testWorkspace(t)
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
+		DisplayName: "source",
+		Coordinate:  "x:1",
+		Metadata:    map[string]string{"z": "last", "a": "first"},
+		Private:     map[string]any{"count": float64(2), "label": "alpha"},
+	}})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
+		DisplayName: "sink",
+		Coordinate:  "x:2",
+	}})
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{Waypoints: []string{"p2", "p1"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	gotBytes, err := json.MarshalIndent(w.Save(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(gotBytes)
+	want := `{
+  "nextNode": 3,
+  "nextLink": 2,
+  "nodes": [
+    {
+      "id": "1N",
+      "class": "example.com/Source",
+      "state": {
+        "DisplayName": "source",
+        "Description": "",
+        "PrimaryType": "",
+        "Coordinate": "x:1",
+        "Metadata": {
+          "a": "first",
+          "z": "last"
+        },
+        "Private": {
+          "count": 2,
+          "label": "alpha"
+        }
+      },
+      "inputs": [
+        {
+          "ID": {
+            "Number": 1,
+            "Kind": "input"
+          },
+          "Name": "in",
+          "Direction": "input",
+          "FixedType": "example.com/int",
+          "AcceptedTypes": null,
+          "Multiple": false,
+          "Metadata": null
+        }
+      ],
+      "outputs": [
+        {
+          "ID": {
+            "Number": 1,
+            "Kind": "output"
+          },
+          "Name": "out",
+          "Direction": "output",
+          "FixedType": "example.com/int",
+          "AcceptedTypes": null,
+          "Multiple": false,
+          "Metadata": null
+        }
+      ]
+    },
+    {
+      "id": "2N",
+      "class": "example.com/Source",
+      "state": {
+        "DisplayName": "sink",
+        "Description": "",
+        "PrimaryType": "",
+        "Coordinate": "x:2",
+        "Metadata": null,
+        "Private": null
+      },
+      "inputs": [
+        {
+          "ID": {
+            "Number": 1,
+            "Kind": "input"
+          },
+          "Name": "in",
+          "Direction": "input",
+          "FixedType": "example.com/int",
+          "AcceptedTypes": null,
+          "Multiple": false,
+          "Metadata": null
+        }
+      ],
+      "outputs": [
+        {
+          "ID": {
+            "Number": 1,
+            "Kind": "output"
+          },
+          "Name": "out",
+          "Direction": "output",
+          "FixedType": "example.com/int",
+          "AcceptedTypes": null,
+          "Multiple": false,
+          "Metadata": null
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "name": "1L:2N1i:1N1o",
+      "type": "example.com/int",
+      "waypoints": [
+        "p2",
+        "p1"
+      ]
+    }
+  ]
+}`
+	if got != want {
+		t.Fatalf("save JSON:\n%s", got)
 	}
 }
 
@@ -795,6 +927,57 @@ func TestLifecycleRestoreInitializesActiveNodesAsRestore(t *testing.T) {
 	}
 	if len(restored.Snapshot().Links) != 1 {
 		t.Fatal("restore should preserve valid links")
+	}
+}
+
+type restoreOrderClass struct {
+	log *[]NodeID
+}
+
+func (c restoreOrderClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	*c.log = append(*c.log, ctx.ID)
+	return nil, nil
+}
+
+func TestRestoreInitializesNodesInDeterministicDAGOrder(t *testing.T) {
+	log := []NodeID{}
+	class := ClassSpec{
+		Name:    "example.com/Source",
+		Runtime: restoreOrderClass{log: &log},
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	data := SaveData{
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source"},
+			{ID: "2N", Class: "example.com/Source"},
+			{ID: "3N", Class: "example.com/Source"},
+		},
+		Links: []SaveLink{
+			{Name: "1L:2N1i:1N1o", Type: testType},
+			{Name: "2L:3N1i:2N1o", Type: testType},
+		},
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	want := []NodeID{3, 2, 1}
+	if fmt.Sprint(log) != fmt.Sprint(want) {
+		t.Fatalf("restore init order = %#v, want %#v", log, want)
 	}
 }
 

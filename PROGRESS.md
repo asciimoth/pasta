@@ -63,6 +63,7 @@ layout because the repo root is not itself a Go module.
 - Immediate removal of broken links when nodes or ports disappear.
 - Copy/paste for selected nodes and internal links with ID remapping.
 - Deterministic `SaveData` DTOs and basic restore path.
+- Deterministic restore runtime initialization using DAG ordering.
 - Initial `ARCHITECTURE.md` and `AGENTS.md`.
 - Tests for:
   - name validation
@@ -73,6 +74,8 @@ layout because the repo root is not itself a Go module.
   - broken link removal
   - linked port update validation
   - save/restore
+  - deterministic save output
+  - deterministic restore initialization order
   - copy/paste ID remapping
   - private state updates in snapshots, save, and copy
   - lifecycle hook order
@@ -107,14 +110,12 @@ go vet ./pasta/...
   - library unregister/register recovery
   - reactivation of preserved inactive nodes and links
 - Replace or wrap the current JSON-like `any` persistence shape with a concrete
-  `configer` integration or adapter.
-- Implement restore ordering using the DAG ordering described in `plan.md`.
+  `github.com/asciimoth/configer` integration.
 - Expand controller/query APIs:
   - possible class queries
   - richer "can I do this?" validation queries
   - metadata editing helpers
   - disable/enable APIs if needed
-- Add golden tests for deterministic save output.
 - Add lifecycle hook-order tests.
 - Add concurrent read/write and recursive-lock risk tests.
 - Add tests for restore edge cases, inactive recovery, and broken persisted

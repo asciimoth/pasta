@@ -165,6 +165,7 @@ func (w *Workspace) Restore(data SaveData) error {
 			initNodes = append(initNodes, restoreInitNode{record: node, class: class.spec.Runtime})
 		}
 	}
+	w.sortRestoreInitNodesLocked(initNodes)
 	w.mu.Unlock()
 	locked = false
 
@@ -205,4 +206,44 @@ func (w *Workspace) Restore(data SaveData) error {
 type restoreInitNode struct {
 	record *nodeRecord
 	class  NodeClass
+}
+
+func (w *Workspace) sortRestoreInitNodesLocked(nodes []restoreInitNode) {
+	remaining := make(map[NodeID]restoreInitNode, len(nodes))
+	for _, node := range nodes {
+		remaining[node.record.id] = node
+	}
+	ordered := nodes[:0]
+	for len(remaining) > 0 {
+		var picked NodeID
+		for id := range remaining {
+			if picked != 0 && id >= picked {
+				continue
+			}
+			if !w.hasOutgoingLinkToRemainingLocked(id, remaining) {
+				picked = id
+			}
+		}
+		if picked == 0 {
+			for id := range remaining {
+				if picked == 0 || id < picked {
+					picked = id
+				}
+			}
+		}
+		ordered = append(ordered, remaining[picked])
+		delete(remaining, picked)
+	}
+	copy(nodes, ordered)
+}
+
+func (w *Workspace) hasOutgoingLinkToRemainingLocked(id NodeID, remaining map[NodeID]restoreInitNode) bool {
+	for _, link := range w.links {
+		if link.output.Node == id {
+			if _, ok := remaining[link.input.Node]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
