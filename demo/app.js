@@ -11,6 +11,7 @@ const state = {
   classRegistry: new Set(),
   pasteOffset: 30,
   flushingPositions: false,
+  polling: false,
 };
 
 const typeStyles = {
@@ -27,6 +28,13 @@ const typeStyles = {
     bg: "#332717",
     border: "#b87d25",
     portOff: "#725225",
+  },
+  "stream.pasta.demo/stream": {
+    name: "stream",
+    color: "#5ee0a0",
+    bg: "#173226",
+    border: "#2b9a68",
+    portOff: "#2d6248",
   },
 };
 
@@ -51,6 +59,7 @@ window.addEventListener("load", async () => {
   setupGraph();
   bindUI();
   await refresh(await call("seed"));
+  startPolling();
 });
 
 async function startWASM() {
@@ -171,6 +180,49 @@ async function refresh(res) {
   syncGraph(state.snapshot);
   renderMenu();
   updateLogs(res.logs);
+}
+
+function startPolling() {
+  window.setInterval(async () => {
+    if (!state.snapshot || state.syncing || state.flushingPositions || state.polling) return;
+    state.polling = true;
+    try {
+      const res = await rawCall("snapshot");
+      applyPolledSnapshot(res.data);
+      updateLogs(res.logs);
+    } catch (_) {
+      // rawCall already reports the backend error in the log panel.
+    } finally {
+      state.polling = false;
+    }
+  }, 500);
+}
+
+function applyPolledSnapshot(snapshot) {
+  if (!sameTopology(state.snapshot, snapshot)) {
+    state.snapshot = snapshot;
+    registerClasses(snapshot.classes);
+    renderPalette(snapshot.classes);
+    syncGraph(snapshot);
+    renderMenu();
+    return;
+  }
+  state.snapshot = snapshot;
+  renderMenu();
+  state.graph.setDirtyCanvas(true, true);
+}
+
+function sameTopology(a, b) {
+  if (!a || !b || a.nodes.length !== b.nodes.length || a.links.length !== b.links.length) return false;
+  const nodeIDs = new Set(a.nodes.map((node) => node.id));
+  for (const node of b.nodes) {
+    if (!nodeIDs.has(node.id)) return false;
+  }
+  const linkIDs = new Set(a.links.map((link) => link.id));
+  for (const link of b.links) {
+    if (!linkIDs.has(link.id)) return false;
+  }
+  return true;
 }
 
 function registerClasses(classes) {
@@ -580,6 +632,11 @@ function valueLabel(node) {
     const text = String(node.text ?? "");
     const compact = text.length > 18 ? `${text.slice(0, 17)}...` : text;
     return `text: ${compact}`;
+  }
+  if (node.primaryType === "stream.pasta.demo/stream") {
+    const text = String(node.text ?? "");
+    const compact = text.length > 18 ? `${text.slice(0, 17)}...` : text;
+    return `stream: ${compact}`;
   }
   return `value: ${formatNumber(node.value)}`;
 }

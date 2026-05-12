@@ -125,6 +125,7 @@ func (a *appState) reset() {
 	a.workspace = pasta.NewWorkspace(pasta.WithLogger((*demoLogger)(a)))
 	a.must(a.workspace.RegisterLibrary(examples.CalculatorLibrary{}), "register calculator library")
 	a.must(a.workspace.RegisterLibrary(StringLibrary{}), "register string library")
+	a.must(a.workspace.RegisterLibrary(StreamLibrary{}), "register stream library")
 	a.log("workspace initialized and demo classes registered")
 }
 
@@ -299,7 +300,32 @@ func (a *appState) seed() error {
 	if _, err := a.workspace.CreateLink(full(restResult, StringInput), full(replace, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
 		return err
 	}
-	a.log("seeded calculator graph and string push graph")
+	streamSink, err := a.newNode(StreamSinkClass, 80, 820, 0)
+	if err != nil {
+		return err
+	}
+	upperStream, err := a.newNode(StreamUppercaseClass, 320, 820, 0)
+	if err != nil {
+		return err
+	}
+	prefix, err := a.newNode(StreamPrefixClass, 560, 820, 0)
+	if err != nil {
+		return err
+	}
+	provider, err := a.newNode(StreamProviderClass, 800, 820, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(upperStream, StreamInput), full(streamSink, StreamOutput), pasta.LinkOptions{Type: StreamType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(prefix, StreamInput), full(upperStream, StreamOutput), pasta.LinkOptions{Type: StreamType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(provider, StreamInput), full(prefix, StreamOutput), pasta.LinkOptions{Type: StreamType}); err != nil {
+		return err
+	}
+	a.log("seeded calculator graph, string push graph, and stream pull graph")
 	return nil
 }
 
@@ -572,6 +598,9 @@ func (a *appState) restoreLocked(data pasta.SaveData) error {
 	if err := a.workspace.RegisterLibrary(StringLibrary{}); err != nil {
 		return err
 	}
+	if err := a.workspace.RegisterLibrary(StreamLibrary{}); err != nil {
+		return err
+	}
 	if err := a.workspace.Restore(data); err != nil {
 		return err
 	}
@@ -602,7 +631,7 @@ func (a *appState) snapshot() snapshotDTO {
 	s := a.workspace.Snapshot()
 	out := snapshotDTO{}
 	for _, class := range s.Classes {
-		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName) {
+		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName) {
 			continue
 		}
 		out.Classes = append(out.Classes, classDTO{
@@ -783,6 +812,9 @@ func numberValue(v any) float64 {
 }
 
 func textValue(v any) string {
+	if text, ok := streamTextValue(v); ok {
+		return text
+	}
 	return stringStateFromAny(v).Value
 }
 
