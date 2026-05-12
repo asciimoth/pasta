@@ -154,7 +154,7 @@ type NodeContext struct {
 // Runtime values can implement any of the optional hook interfaces below. The
 // workspace never type-checks link contract values beyond calling those hooks;
 // nodes should validate any link object they receive before accepting it.
-type NodeRuntime interface{}
+type NodeRuntime any
 
 // NodeScope is the mutation surface for one node implementation.
 //

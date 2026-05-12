@@ -3,7 +3,9 @@ package pasta
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -1230,12 +1232,7 @@ func portAccepts(port PortSpec, typ string) bool {
 	if port.FixedType != "" {
 		return port.FixedType == typ
 	}
-	for _, accepted := range port.AcceptedTypes {
-		if accepted == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(port.AcceptedTypes, typ)
 }
 
 func (w *Workspace) pathExistsLocked(from, to NodeID, ignore LinkID) bool {
@@ -1302,7 +1299,7 @@ func (w *Workspace) removeInvalidLinksLocked() []linkDetachEvent {
 			ids = append(ids, id)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	inputCounts := map[FullPortID]int{}
 	var detachEvents []linkDetachEvent
 	for _, id := range ids {
@@ -1803,9 +1800,7 @@ func cloneClassSpec(spec ClassSpec) ClassSpec {
 
 func cloneLibraries(records map[string]Library) map[string]Library {
 	out := make(map[string]Library, len(records))
-	for name, lib := range records {
-		out[name] = lib
-	}
+	maps.Copy(out, records)
 	return out
 }
 
@@ -1872,9 +1867,7 @@ func clonePrivateState(private any) any {
 		return out
 	case map[string]string:
 		out := make(map[string]string, len(value))
-		for k, v := range value {
-			out[k] = v
-		}
+		maps.Copy(out, value)
 		return out
 	case []string:
 		return append([]string(nil), value...)
@@ -1898,8 +1891,6 @@ func cloneStringMap(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }

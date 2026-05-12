@@ -2,6 +2,7 @@ package pasta
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -221,7 +222,7 @@ func (w *Workspace) cleanupInitializedRuntimes(runtimes map[NodeID]NodeRuntime, 
 	for id := range scopes {
 		scopeIDs = append(scopeIDs, id)
 	}
-	sort.Slice(scopeIDs, func(i, j int) bool { return scopeIDs[i] < scopeIDs[j] })
+	slices.Sort(scopeIDs)
 	for _, id := range scopeIDs {
 		if scope := scopes[id]; scope != nil {
 			scope.finishInit()
@@ -232,7 +233,7 @@ func (w *Workspace) cleanupInitializedRuntimes(runtimes map[NodeID]NodeRuntime, 
 	for id := range runtimes {
 		runtimeIDs = append(runtimeIDs, id)
 	}
-	sort.Slice(runtimeIDs, func(i, j int) bool { return runtimeIDs[i] < runtimeIDs[j] })
+	slices.Sort(runtimeIDs)
 	var first error
 	for _, id := range runtimeIDs {
 		if err := w.callNodeClose(runtimes[id]); err != nil && first == nil {
