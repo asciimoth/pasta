@@ -71,6 +71,8 @@
           typos
           commitizen
 
+          coverage-reporter
+
           just
         ];
       };
