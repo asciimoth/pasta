@@ -38,6 +38,16 @@ const typeStyles = {
   },
 };
 
+const nodeMetrics = {
+  minWidth: 210,
+  maxWidth: 420,
+  minHeight: 86,
+  portRowHeight: 20,
+  titleFont: "14px Arial",
+  bodyFont: "13px sans-serif",
+};
+
+let measureCtx = null;
 const els = {};
 
 window.addEventListener("load", async () => {
@@ -208,7 +218,13 @@ function applyPolledSnapshot(snapshot) {
     return;
   }
   state.snapshot = snapshot;
-  renderMenu();
+  for (const snap of snapshot.nodes) {
+    const node = graphNode(snap.id);
+    if (!node) continue;
+    node.title = nodeTitle(snap);
+    resizeGraphNode(node, snap);
+  }
+  patchMenu();
   state.graph.setDirtyCanvas(true, true);
 }
 
@@ -231,16 +247,22 @@ function registerClasses(classes) {
     if (state.classRegistry.has(type)) continue;
     function PastaNode() {
       this.title = cls.displayName || cls.shortName;
-      this.size = [210, cls.inputs.length && cls.outputs.length ? 104 : 86];
+      this.size = defaultNodeSize(cls);
       for (const input of cls.inputs) this.addInput(input.name, liteGraphType(input.fixedType));
       for (const output of cls.outputs) this.addOutput(output.name, liteGraphType(output.fixedType));
       this.properties = { backendId: "" };
     }
     PastaNode.title = cls.displayName || cls.shortName;
+    const style = classTypeStyle(cls);
+    if (style) {
+      PastaNode.title_color = style.border;
+      PastaNode.title_text_color = contrastTextColor(style.border);
+    }
     PastaNode.prototype.onDrawForeground = function (ctx) {
       if (!this.backendId) return;
       const snap = findNode(this.backendId);
       if (!snap) return;
+      resizeGraphNode(this, snap);
       ctx.fillStyle = "#dce5e8";
       ctx.font = "13px sans-serif";
       ctx.fillText(valueLabel(snap), 12, this.size[1] - 16);
@@ -319,8 +341,8 @@ function renderPalette(classes) {
       button.dataset.type = style.name;
     }
     button.addEventListener("click", async () => {
-      const x = 80 + (state.snapshot.nodes.length % 3) * 230;
-      const y = 80 + Math.floor(state.snapshot.nodes.length / 3) * 140;
+      const x = 80 + (state.snapshot.nodes.length % 3) * 460;
+      const y = 80 + Math.floor(state.snapshot.nodes.length / 3) * 220;
       await refresh(await call("createNode", { class: cls.name, x, y, value: 0 }));
     });
     els.palette.appendChild(button);
@@ -342,6 +364,7 @@ function syncGraph(snapshot) {
     applyNodeTypeStyle(node, snap.primaryType);
     for (let i = 0; i < snap.inputs.length; i++) node.inputs[i].pastaPort = snap.inputs[i].id;
     for (let i = 0; i < snap.outputs.length; i++) node.outputs[i].pastaPort = snap.outputs[i].id;
+    resizeGraphNode(node, snap);
     state.graph.add(node);
     state.backendToLG.set(snap.id, node.id);
     state.lgToBackend.set(node.id, snap.id);
@@ -366,6 +389,7 @@ function syncGraph(snapshot) {
 function renderMenu() {
   els.menu.replaceChildren();
   const node = state.selectedBackendId ? findNode(state.selectedBackendId) : null;
+  els.menu.dataset.nodeId = node ? node.id : "";
   if (!node || !node.menu) {
     els.menu.textContent = node ? "This node has no menu." : "Select a node.";
     els.menu.className = "panelText";
@@ -374,27 +398,22 @@ function renderMenu() {
   els.menu.className = "";
   const title = document.createElement("div");
   title.className = "status";
+  title.dataset.role = "menu-title";
   title.textContent = `${node.shortClass} ${node.id}`;
   els.menu.appendChild(title);
 
   if (node.messages && node.messages.length) {
-    const messages = document.createElement("div");
-    messages.className = "nodeMessages";
-    for (const message of node.messages) {
-      const item = document.createElement("div");
-      item.className = `nodeMessage ${message.type || "note"}`;
-      item.textContent = message.text || "";
-      messages.appendChild(item);
-    }
-    els.menu.appendChild(messages);
+    els.menu.appendChild(renderNodeMessages(node.messages));
   }
 
   const nameWrap = document.createElement("div");
   nameWrap.className = "field";
+  nameWrap.dataset.role = "name-field";
   const nameLabel = document.createElement("label");
   nameLabel.textContent = "Name";
   const nameInput = document.createElement("input");
   nameInput.type = "text";
+  nameInput.dataset.role = "name-input";
   nameInput.value = node.displayName || node.shortClass;
   nameInput.addEventListener("change", async () => {
     await refresh(await call("renameNode", { id: node.id, name: nameInput.value }));
@@ -405,26 +424,32 @@ function renderMenu() {
   for (const block of node.menu.blocks || []) {
     const blockEl = document.createElement("div");
     blockEl.className = "menuBlock";
+    blockEl.dataset.block = block.id;
     for (const field of block.fields || []) {
       const wrap = document.createElement("div");
       wrap.className = "field";
+      wrap.dataset.block = block.id;
+      wrap.dataset.field = field.id;
       const label = document.createElement("label");
       label.textContent = field.label || field.id;
       wrap.appendChild(label);
       if (field.readOnly || field.kind === "read-only") {
         const value = document.createElement("div");
         value.className = "readonly";
+        value.dataset.role = "field-value";
         value.textContent = formatAny(field.value);
         wrap.appendChild(value);
       } else {
         const input = document.createElement("input");
         input.type = field.kind === "float64" || field.kind === "int64" ? "number" : "text";
+        input.dataset.role = "field-input";
         input.value = field.value ?? "";
         input.addEventListener("change", async () => {
           const value = input.type === "number" ? Number(input.value) : input.value;
+          const currentNode = findNode(node.id);
           await refresh(await call("updateMenuField", {
             node: node.id,
-            version: node.menu.version,
+            version: currentNode && currentNode.menu ? currentNode.menu.version : node.menu.version,
             block: block.id,
             field: field.id,
             value,
@@ -437,6 +462,8 @@ function renderMenu() {
     for (const buttonSpec of block.buttons || []) {
       const button = document.createElement("button");
       button.type = "button";
+      button.dataset.block = block.id;
+      button.dataset.button = buttonSpec.id;
       button.disabled = !!buttonSpec.disabled;
       button.textContent = buttonSpec.label || buttonSpec.id;
       button.addEventListener("click", async () => {
@@ -446,6 +473,130 @@ function renderMenu() {
     }
     els.menu.appendChild(blockEl);
   }
+}
+
+function patchMenu() {
+  const node = state.selectedBackendId ? findNode(state.selectedBackendId) : null;
+  if (!node || !node.menu || els.menu.dataset.nodeId !== node.id) {
+    renderMenu();
+    return;
+  }
+
+  const title = els.menu.querySelector('[data-role="menu-title"]');
+  if (!title) {
+    renderMenu();
+    return;
+  }
+  const titleText = `${node.shortClass} ${node.id}`;
+  if (title.textContent !== titleText) title.textContent = titleText;
+
+  patchMessages(node.messages || []);
+
+  const nameInput = els.menu.querySelector('[data-role="name-input"]');
+  if (!nameInput) {
+    renderMenu();
+    return;
+  }
+  patchInputValue(nameInput, node.displayName || node.shortClass);
+
+  for (const block of node.menu.blocks || []) {
+    if (!els.menu.querySelector(`.menuBlock[data-block="${cssEscape(block.id)}"]`)) {
+      renderMenu();
+      return;
+    }
+    for (const field of block.fields || []) {
+      const wrap = els.menu.querySelector(`.field[data-block="${cssEscape(block.id)}"][data-field="${cssEscape(field.id)}"]`);
+      if (!wrap) {
+        renderMenu();
+        return;
+      }
+      const label = wrap.querySelector("label");
+      const labelText = field.label || field.id;
+      if (!label || label.textContent !== labelText) {
+        renderMenu();
+        return;
+      }
+      if (field.readOnly || field.kind === "read-only") {
+        const value = wrap.querySelector('[data-role="field-value"]');
+        if (!value) {
+          renderMenu();
+          return;
+        }
+        const text = formatAny(field.value);
+        if (value.textContent !== text) value.textContent = text;
+      } else {
+        const input = wrap.querySelector('[data-role="field-input"]');
+        if (!input) {
+          renderMenu();
+          return;
+        }
+        const type = field.kind === "float64" || field.kind === "int64" ? "number" : "text";
+        if (input.type !== type) {
+          renderMenu();
+          return;
+        }
+        patchInputValue(input, field.value ?? "");
+      }
+    }
+    for (const buttonSpec of block.buttons || []) {
+      const button = els.menu.querySelector(`button[data-block="${cssEscape(block.id)}"][data-button="${cssEscape(buttonSpec.id)}"]`);
+      if (!button) {
+        renderMenu();
+        return;
+      }
+      button.disabled = !!buttonSpec.disabled;
+      const text = buttonSpec.label || buttonSpec.id;
+      if (button.textContent !== text) button.textContent = text;
+    }
+  }
+}
+
+function patchMessages(messages) {
+  const nextKey = JSON.stringify(messages.map((message) => ({
+    id: message.id,
+    type: message.type || "note",
+    text: message.text || "",
+  })));
+  const current = els.menu.querySelector(".nodeMessages");
+  if (current && current.dataset.key === nextKey) return;
+  if (current) current.remove();
+  if (!messages.length) return;
+  const title = els.menu.querySelector('[data-role="menu-title"]');
+  const rendered = renderNodeMessages(messages);
+  rendered.dataset.key = nextKey;
+  if (title && title.nextSibling) {
+    els.menu.insertBefore(rendered, title.nextSibling);
+  } else {
+    els.menu.appendChild(rendered);
+  }
+}
+
+function renderNodeMessages(messages) {
+  const wrap = document.createElement("div");
+  wrap.className = "nodeMessages";
+  wrap.dataset.key = JSON.stringify((messages || []).map((message) => ({
+    id: message.id,
+    type: message.type || "note",
+    text: message.text || "",
+  })));
+  for (const message of messages || []) {
+    const item = document.createElement("div");
+    item.className = `nodeMessage ${message.type || "note"}`;
+    item.textContent = message.text || "";
+    wrap.appendChild(item);
+  }
+  return wrap;
+}
+
+function patchInputValue(input, value) {
+  const text = String(value ?? "");
+  if (document.activeElement === input) return;
+  if (input.value !== text) input.value = text;
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 async function copySelected() {
@@ -551,6 +702,73 @@ function applyNodeTypeStyle(node, primaryType) {
   node.boxcolor = style.color;
 }
 
+function defaultNodeSize(cls) {
+  const rows = Math.max((cls.inputs || []).length, (cls.outputs || []).length, 1);
+  return [
+    nodeMetrics.minWidth,
+    Math.max(nodeMetrics.minHeight, 64 + rows * nodeMetrics.portRowHeight),
+  ];
+}
+
+function resizeGraphNode(graphNode, snap) {
+  const next = nodeSizeForSnapshot(snap);
+  if (Math.abs(graphNode.size[0] - next[0]) < 0.5 && Math.abs(graphNode.size[1] - next[1]) < 0.5) return;
+  graphNode.size = next;
+}
+
+function nodeSizeForSnapshot(snap) {
+  const ctx = textMeasureContext();
+  const labels = [
+    nodeTitle(snap),
+    valueLabel(snap),
+    ...(snap.inputs || []).map((port) => port.name || port.id),
+    ...(snap.outputs || []).map((port) => port.name || port.id),
+  ];
+  let width = nodeMetrics.minWidth;
+  for (let i = 0; i < labels.length; i++) {
+    ctx.font = i === 0 ? nodeMetrics.titleFont : nodeMetrics.bodyFont;
+    width = Math.max(width, Math.ceil(ctx.measureText(String(labels[i])).width + 64));
+  }
+  const rows = Math.max((snap.inputs || []).length, (snap.outputs || []).length, 1);
+  const height = Math.max(nodeMetrics.minHeight, 64 + rows * nodeMetrics.portRowHeight);
+  return [Math.min(nodeMetrics.maxWidth, width), height];
+}
+
+function textMeasureContext() {
+  if (!measureCtx) {
+    const canvas = document.createElement("canvas");
+    measureCtx = canvas.getContext("2d");
+  }
+  return measureCtx;
+}
+
+function contrastTextColor(hex) {
+  const rgb = parseHexColor(hex);
+  if (!rgb) return "#ffffff";
+  const linear = rgb.map((part) => {
+    const value = part / 255;
+    return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+  });
+  const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  const contrastWithDark = (luminance + 0.05) / 0.05;
+  const contrastWithLight = 1.05 / (luminance + 0.05);
+  return contrastWithDark >= contrastWithLight ? "#101315" : "#ffffff";
+}
+
+function parseHexColor(hex) {
+  const text = String(hex || "").trim();
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text);
+  if (!match) return null;
+  const value = match[1].length === 3
+    ? match[1].split("").map((part) => part + part).join("")
+    : match[1];
+  return [
+    Number.parseInt(value.slice(0, 2), 16),
+    Number.parseInt(value.slice(2, 4), 16),
+    Number.parseInt(value.slice(4, 6), 16),
+  ];
+}
+
 function applyLinkTypeStyle(output, input, outSlot, inSlot, backendLink) {
   const graphLink = findGraphLink(output, input, outSlot, inSlot);
   const style = typeStyle(backendLink.type);
@@ -630,13 +848,17 @@ function formatAny(value) {
 function valueLabel(node) {
   if (node.primaryType === "strings.pasta.demo/string") {
     const text = String(node.text ?? "");
-    const compact = text.length > 18 ? `${text.slice(0, 17)}...` : text;
+    const compact = compactNodeText(text);
     return `text: ${compact}`;
   }
   if (node.primaryType === "stream.pasta.demo/stream") {
     const text = String(node.text ?? "");
-    const compact = text.length > 18 ? `${text.slice(0, 17)}...` : text;
+    const compact = compactNodeText(text);
     return `stream: ${compact}`;
   }
   return `value: ${formatNumber(node.value)}`;
+}
+
+function compactNodeText(text) {
+  return text.length > 56 ? `${text.slice(0, 55)}...` : text;
 }

@@ -223,15 +223,15 @@ func (a *appState) seed() error {
 	if err != nil {
 		return err
 	}
-	right, err := a.newNode(examples.ConstantClass, 80, 260, 6)
+	right, err := a.newNode(examples.ConstantClass, 80, 300, 6)
 	if err != nil {
 		return err
 	}
-	sum, err := a.newNode(examples.AddClass, 360, 170, 0)
+	sum, err := a.newNode(examples.AddClass, 540, 190, 0)
 	if err != nil {
 		return err
 	}
-	result, err := a.newNode(examples.ResultClass, 640, 170, 0)
+	result, err := a.newNode(examples.ResultClass, 1000, 190, 0)
 	if err != nil {
 		return err
 	}
@@ -247,35 +247,35 @@ func (a *appState) seed() error {
 	if err := a.workspace.TriggerNodeMenuButton(result, pasta.MenuButtonRef{Block: "main", Button: "pull"}); err != nil {
 		return err
 	}
-	text, err := a.newNode(TextClass, 80, 460, 0)
+	text, err := a.newNode(TextClass, 80, 560, 0)
 	if err != nil {
 		return err
 	}
-	split, err := a.newNode(SplitClass, 320, 460, 0)
+	split, err := a.newNode(SplitClass, 540, 560, 0)
 	if err != nil {
 		return err
 	}
-	upper, err := a.newNode(UppercaseClass, 560, 390, 0)
+	upper, err := a.newNode(UppercaseClass, 1000, 460, 0)
 	if err != nil {
 		return err
 	}
-	lower, err := a.newNode(LowercaseClass, 560, 510, 0)
+	lower, err := a.newNode(LowercaseClass, 1000, 680, 0)
 	if err != nil {
 		return err
 	}
-	replace, err := a.newNode(ReplaceClass, 560, 630, 0)
+	replace, err := a.newNode(ReplaceClass, 1000, 900, 0)
 	if err != nil {
 		return err
 	}
-	firstResult, err := a.newNode(StringResultClass, 820, 390, 0)
+	firstResult, err := a.newNode(StringResultClass, 1460, 460, 0)
 	if err != nil {
 		return err
 	}
-	secondResult, err := a.newNode(StringResultClass, 820, 510, 0)
+	secondResult, err := a.newNode(StringResultClass, 1460, 680, 0)
 	if err != nil {
 		return err
 	}
-	restResult, err := a.newNode(StringResultClass, 820, 630, 0)
+	restResult, err := a.newNode(StringResultClass, 1460, 900, 0)
 	if err != nil {
 		return err
 	}
@@ -300,19 +300,19 @@ func (a *appState) seed() error {
 	if _, err := a.workspace.CreateLink(full(restResult, StringInput), full(replace, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
 		return err
 	}
-	streamSink, err := a.newNode(StreamSinkClass, 80, 820, 0)
+	streamSink, err := a.newNode(StreamSinkClass, 80, 1180, 0)
 	if err != nil {
 		return err
 	}
-	upperStream, err := a.newNode(StreamUppercaseClass, 320, 820, 0)
+	upperStream, err := a.newNode(StreamUppercaseClass, 540, 1180, 0)
 	if err != nil {
 		return err
 	}
-	prefix, err := a.newNode(StreamPrefixClass, 560, 820, 0)
+	prefix, err := a.newNode(StreamPrefixClass, 1000, 1180, 0)
 	if err != nil {
 		return err
 	}
-	provider, err := a.newNode(StreamProviderClass, 800, 820, 0)
+	provider, err := a.newNode(StreamProviderClass, 1460, 1180, 0)
 	if err != nil {
 		return err
 	}

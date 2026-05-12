@@ -17,6 +17,9 @@ tidy:
 	go -C demo mod tidy
 	go work sync
 
+lint:
+  golangci-lint run ./pasta/... ./demo/...
+
 demo-build:
 	GOOS=js GOARCH=wasm go -C demo build -o app.wasm .
 	if [ -f "$(go env GOROOT)/misc/wasm/wasm_exec.js" ]; then \
