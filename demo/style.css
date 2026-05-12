@@ -128,6 +128,8 @@ button:hover {
 }
 
 .palette button {
+  border-left: 4px solid var(--type-color, var(--line));
+  background: linear-gradient(90deg, var(--type-bg, var(--panel-2)), var(--panel-2) 70%);
   text-align: left;
 }
 

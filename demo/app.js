@@ -13,6 +13,23 @@ const state = {
   flushingPositions: false,
 };
 
+const typeStyles = {
+  "calc.pasta.example.com/number": {
+    name: "number",
+    color: "#48b8ff",
+    bg: "#162838",
+    border: "#2f86c3",
+    portOff: "#2f5d7c",
+  },
+  "strings.pasta.demo/string": {
+    name: "string",
+    color: "#f0b84f",
+    bg: "#332717",
+    border: "#b87d25",
+    portOff: "#725225",
+  },
+};
+
 const els = {};
 
 window.addEventListener("load", async () => {
@@ -46,6 +63,7 @@ function setupGraph() {
   state.graph = new LGraph();
   state.canvas = new LGraphCanvas("#graphCanvas", state.graph);
   state.canvas.background_image = "";
+  applyTypeStylesToCanvas(state.canvas);
   state.canvas.onNodeSelected = (node) => {
     state.selectedBackendId = node.backendId || null;
     renderMenu();
@@ -162,8 +180,8 @@ function registerClasses(classes) {
     function PastaNode() {
       this.title = cls.displayName || cls.shortName;
       this.size = [210, cls.inputs.length && cls.outputs.length ? 104 : 86];
-      for (const input of cls.inputs) this.addInput(input.name, input.fixedType || "number");
-      for (const output of cls.outputs) this.addOutput(output.name, output.fixedType || "number");
+      for (const input of cls.inputs) this.addInput(input.name, liteGraphType(input.fixedType));
+      for (const output of cls.outputs) this.addOutput(output.name, liteGraphType(output.fixedType));
       this.properties = { backendId: "" };
     }
     PastaNode.title = cls.displayName || cls.shortName;
@@ -238,10 +256,16 @@ function registerClasses(classes) {
 function renderPalette(classes) {
   els.palette.replaceChildren();
   for (const cls of classes) {
+    const style = classTypeStyle(cls);
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = cls.displayName || cls.shortName;
     button.title = cls.description || cls.name;
+    if (style) {
+      button.style.setProperty("--type-color", style.color);
+      button.style.setProperty("--type-bg", style.bg);
+      button.dataset.type = style.name;
+    }
     button.addEventListener("click", async () => {
       const x = 80 + (state.snapshot.nodes.length % 3) * 230;
       const y = 80 + Math.floor(state.snapshot.nodes.length / 3) * 140;
@@ -263,6 +287,7 @@ function syncGraph(snapshot) {
     node.backendId = snap.id;
     node.properties.backendId = snap.id;
     node.pos = [snap.coordinate[0], snap.coordinate[1]];
+    applyNodeTypeStyle(node, snap.primaryType);
     for (let i = 0; i < snap.inputs.length; i++) node.inputs[i].pastaPort = snap.inputs[i].id;
     for (let i = 0; i < snap.outputs.length; i++) node.outputs[i].pastaPort = snap.outputs[i].id;
     state.graph.add(node);
@@ -276,7 +301,10 @@ function syncGraph(snapshot) {
     if (!output || !input) continue;
     const outSlot = slotForPort(output.outputs, link.output.port);
     const inSlot = slotForPort(input.inputs, link.input.port);
-    if (outSlot >= 0 && inSlot >= 0) output.connect(outSlot, input, inSlot);
+    if (outSlot >= 0 && inSlot >= 0) {
+      output.connect(outSlot, input, inSlot);
+      applyLinkTypeStyle(output, input, outSlot, inSlot, link);
+    }
   }
 
   state.graph.setDirtyCanvas(true, true);
@@ -436,6 +464,61 @@ function slotForPort(slots, port) {
 function nodeType(cls) {
   const name = cls.name || cls.class || cls.shortName;
   return `pasta/${name.replace(/[^A-Za-z0-9_/-]/g, "_")}`;
+}
+
+function liteGraphType(type) {
+  return type || "any";
+}
+
+function classTypeStyle(cls) {
+  const ports = [...(cls.outputs || []), ...(cls.inputs || [])];
+  const fixedType = ports.find((port) => port.fixedType)?.fixedType;
+  return typeStyle(fixedType);
+}
+
+function typeStyle(type) {
+  return typeStyles[type] || null;
+}
+
+function applyTypeStylesToCanvas(canvas) {
+  LGraphCanvas.link_type_colors = LGraphCanvas.link_type_colors || {};
+  canvas.default_connection_color_byType = canvas.default_connection_color_byType || {};
+  canvas.default_connection_color_byTypeOff = canvas.default_connection_color_byTypeOff || {};
+  for (const [type, style] of Object.entries(typeStyles)) {
+    LGraphCanvas.link_type_colors[type] = style.color;
+    canvas.default_connection_color_byType[type] = style.color;
+    canvas.default_connection_color_byTypeOff[type] = style.portOff;
+  }
+}
+
+function applyNodeTypeStyle(node, primaryType) {
+  const style = typeStyle(primaryType);
+  if (!style) return;
+  node.color = style.border;
+  node.bgcolor = style.bg;
+  node.boxcolor = style.color;
+}
+
+function applyLinkTypeStyle(output, input, outSlot, inSlot, backendLink) {
+  const graphLink = findGraphLink(output, input, outSlot, inSlot);
+  const style = typeStyle(backendLink.type);
+  if (!graphLink || !style) return;
+  graphLink.backendId = backendLink.id;
+  graphLink.color = backendLink.state === "active" ? style.color : style.portOff;
+  graphLink.type = backendLink.type;
+}
+
+function findGraphLink(output, input, outSlot, inSlot) {
+  const linkIDs = (output.outputs[outSlot] && output.outputs[outSlot].links) || [];
+  for (const linkID of linkIDs) {
+    const link = state.graph.links[linkID];
+    if (!link) continue;
+    if (link.origin_id === output.id && link.origin_slot === outSlot &&
+        link.target_id === input.id && link.target_slot === inSlot) {
+      return link;
+    }
+  }
+  return null;
 }
 
 function nodeTitle(node) {
