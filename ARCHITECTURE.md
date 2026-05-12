@@ -44,6 +44,10 @@ Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects
 without interpreting application-specific behavior.
 
+The core deliberately does not implement undo/redo. Higher layers such as
+editors or controllers can build command histories around the validated
+workspace mutation API.
+
 ## Domain Model
 
 Libraries define classes under their own qualified-name prefix. A class provides
@@ -59,12 +63,39 @@ field is its own port and whose `Peer` field is the other endpoint. Link objects
 are application-owned values; the workspace only hands them from the input-side
 provider or caller to both attach hooks.
 
+Each port has either one fixed type or an accepted set of types. A link always
+has one fixed type, and at least one endpoint involved in link creation must
+provide a fixed type. The chosen link type is normally the type of the port
+where a UI started the drag, but callers may request a type explicitly. A link
+may attach only to a fixed port of that same type or to a flexible port whose
+accepted set contains that type. Unlinked ports may freely change their fixed
+type or accepted set; linked ports may only change in ways that keep every
+attached link valid. Type compatibility is implemented through the same pure
+validation path used by `Can...` queries and mutating methods.
+
+Node coordinates and link waypoints are opaque editor strings. The workspace
+stores, copies, and persists them, but does not parse coordinate systems,
+layouts, or path geometry.
+
 ## Validation
 
 Names are centralized in `names.go`; IDs and composed link names are centralized
-in `ids.go`. Link creation validates endpoint existence, direction, type
-compatibility, input multiplicity, ownership for scoped callers, and DAG safety
-before committing state.
+in `ids.go`. Qualified class and type names are URL-like ASCII names containing
+letters, digits, dots, dashes, and slashes, and must start with a letter. Library
+names are domain-like ASCII names containing letters, digits, dots, and dashes.
+Classes must be defined under their library prefix and start with an uppercase
+letter after that prefix. Type names start with a lowercase letter after their
+library-like prefix; any library may use any valid type name, so the prefix is a
+namespace rather than an access-control rule.
+
+Workspace-generated IDs are stable across save/restore and unique within their
+object kind. Canonical forms are `123N` for nodes, `456i` or `456o` for ports,
+`123N456o` for full ports, `789L` for links, and
+`789L:123N456i:321N654o` for full link names.
+
+Link creation validates endpoint existence, direction, type compatibility,
+input multiplicity, ownership for scoped callers, and DAG safety before
+committing state.
 
 Broken links, where an endpoint or port no longer exists, are removed
 immediately. Inactive links, where endpoints still exist but a class or library
@@ -72,6 +103,14 @@ is unavailable, are preserved for editor recovery. Defining a missing or
 recalled class reactivates preserved nodes and links when their endpoints and
 ports are still valid, and reinitializes recovered node runtimes outside the
 workspace lock.
+
+Libraries may be registered and unregistered at runtime. Registering a library
+asks it to define its currently known classes; registered libraries may define
+more classes later or recall their own classes. Recalled classes, unregistered
+libraries, and missing libraries/classes on restore make affected nodes inactive
+instead of deleting them. A library scope may define and recall only its own
+classes, mutate only its own nodes, and create or mutate links only when both
+endpoint nodes are owned by that library.
 
 ## Lifecycle
 
@@ -96,6 +135,22 @@ Link creation follows a transactional sequence:
 If link-object creation or a before-attach hook fails or panics, the reserved ID
 is rolled back and the workspace graph is unchanged. After-attach panics are
 logged but do not roll back the committed link.
+
+Link objects are opaque `any` values whose behavioral contract belongs to the
+link type. They may be configuration structs, callback functions, interface
+implementations, or richer objects. Endpoint runtimes are responsible for
+type-checking the object during attach and rejecting incompatible values early.
+The framework does not define whether a link is push-based, pull-based, or
+mixed; those call patterns happen directly between runtimes and are not forced
+through the workspace lock.
+
+Nodes and links can be deleted or inactivated while a long-lived inter-node call
+is in flight. The workspace notifies affected runtimes through deletion,
+detachment, inactivation, broken-link, and close hooks. The runtime or link
+contract is responsible for unblocking ongoing work, typically through an error,
+closed channel, context, callback, or another type-specific mechanism. Pasta
+does not require a built-in cancellation primitive and does not try to stop
+runtime goroutines directly.
 
 Link deletion calls input then output `BeforeLinkDetach` hooks outside the lock,
 removes the link, and then calls input then output `AfterLinkDetach` hooks.
@@ -158,6 +213,10 @@ as broken. Persisted links that reference existing endpoints but violate type,
 multiplicity, duplicate-ID, or DAG constraints reject the restore and roll the
 workspace back to its previous state.
 
+Restore initializes active nodes in deterministic DAG order: nodes without
+outgoing links to still-uncreated nodes come first, with node ID as the tie
+breaker.
+
 The persistence DTO is intentionally small:
 
 - `SaveData.NextNode` and `SaveData.NextLink` preserve generator progress.
@@ -171,3 +230,14 @@ state that should survive save/copy must be exported through
 `NodePrivateExportHook` into the node private state field.
 Ephemeral node messages are intentionally excluded from the DTO and clipboard
 data, and restore clears messages from the previous workspace contents.
+
+## Copy And Paste
+
+`Copy` serializes selected nodes with class names, public state, private state,
+coordinates, current ports, and internal links whose endpoints are both in the
+selection. Copied internal links include their type and waypoint strings. Links
+to nodes outside the selection are omitted.
+
+`Paste` creates new node and link IDs and never reuses copied IDs. Pasted active
+nodes are initialized with `InitModeRestore`, matching restore semantics for
+private and public state.
