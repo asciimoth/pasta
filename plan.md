@@ -81,6 +81,84 @@ Ephemeral node messages are not persisted, copied, pasted, restored, or included
 in save data. They may appear in current snapshots for renderers, but they must
 not become durable graph state.
 
+### Node Menus
+
+Nodes may expose an optional ephemeral menu for editor UIs, remote controllers,
+or LLM agents. A menu is not graph model state and must not be included in
+save, restore, copy, paste, or class defaults. If menu values need to survive
+those operations, the node implementation must mirror the durable data into its
+private state and rebuild the menu after initialization.
+
+The menu value should be a JSON-serializable document that combines:
+
+- schema: enough structure for a generic UI to render simple controls
+- state: the current values for those controls
+- identity/version information: enough for external code to submit an update
+  against the menu version it observed
+
+The schema should support, at minimum:
+
+- one default block when no explicit blocks are supplied
+- multiple blocks with stable IDs and optional titles
+- read-only display fields
+- editable string, int64, float64, and bool fields
+- checkboxes as bool-field render hints
+- optional fixed enumerations of acceptable values for scalar fields
+- buttons with stable IDs, labels, and optional disabled/read-only state
+- repeatable templates for one or more grouped fields, so a node can expose a
+  variable-length list such as hosts where each item contains hostname and IP
+  fields
+
+The first implementation should keep validation simple and strict:
+
+- reject non-JSON-compatible menu state values
+- reject duplicate block, field, button, template, and repeated-item IDs inside
+  the same scope
+- reject values whose type does not match the declared field type
+- reject scalar values outside a declared fixed-value list
+- preserve unknown metadata only if it is explicitly stored in a metadata map;
+  avoid accepting arbitrary top-level keys that the core cannot validate
+
+Menu mutation must go through workspace-owned methods so locking, node
+existence checks, and watcher notifications stay centralized. Required mutation
+surfaces:
+
+- full workspace API: query a node menu, replace a node menu, clear a node menu,
+  submit an externally edited menu state, and trigger a menu button
+- library scope: the same operations, restricted to nodes owned by that library
+- node scope: replace, clear, and patch its own menu state from runtime code
+- read-only API: snapshot current menus for renderers and inspectors
+
+External updates should not directly write arbitrary menu documents into the
+node. Instead, the workspace should validate the update against the node's
+current schema, then deliver the accepted change to the node runtime through an
+optional hook. The hook can accept, reject, normalize, or mirror values into
+private state. Button presses should be delivered as events, not persisted as a
+latched state value.
+
+Watchers should be able to subscribe to menu replacement, clearing, accepted
+state change, and button-trigger events. Watcher delivery should follow the same
+non-blocking, defensive-copy pattern as message watchers. Menu snapshots and
+events must not expose mutable internal maps, slices, or config trees.
+
+The text interchange format should be deterministic JSON for both UIs and LLM
+agents. Provide helpers to marshal the complete menu document to text and to
+unmarshal proposed state updates from text before validation. These helpers
+should use the same DTOs as snapshots so tests can cover one canonical shape.
+
+Suggested implementation order:
+
+1. Define menu DTOs and validation helpers in a new `menu.go`.
+2. Add menu storage to node records and defensive cloning helpers.
+3. Add read-only snapshots and full workspace query/mutation methods.
+4. Add node-scope and library-scope menu methods with ownership checks.
+5. Add optional runtime hooks for accepted state changes and button triggers.
+6. Add menu watcher subscription and event delivery.
+7. Add deterministic marshal/unmarshal helpers for complete menu documents and
+   proposed state updates.
+8. Update documentation and tests for validation, concurrency, scoped access,
+   watcher events, lifecycle clearing, and non-persistence.
+
 Nodes must be able to update their private state at any time, including from
 background goroutines owned by the node. These updates still need to go through
 a workspace-provided or node-scoped API so they are synchronized, panic-safe,
@@ -342,6 +420,8 @@ all model-valid operations:
 - create and delete links
 - move or edit public node metadata
 - get and set node coordinate strings
+- query node menus, submit validated menu state updates, and trigger menu
+  buttons
 - get and set link waypoint coordinate arrays
 - change ports and port types where allowed
 - query possible node classes
@@ -487,6 +567,8 @@ Tests should cover:
 - inactive and broken state handling
 - copy/paste ID remapping
 - node coordinate and link waypoint persistence
+- node menu schema/state validation, scoped mutation, watcher events, and
+  exclusion from save/restore/copy/paste
 - save/restore round trips
 - deterministic save output
 - lifecycle hook ordering

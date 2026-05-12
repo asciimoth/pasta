@@ -216,6 +216,7 @@ func (w *Workspace) Restore(data SaveData) error {
 	oldNodes, oldLinks, oldMessages := w.nodes, w.links, cloneMessageRecords(w.messages)
 	oldNextNode, oldNextLink, oldNextMessage := w.nextNode, w.nextLink, w.nextMessage
 	restoreMessageEvents := w.removeAllMessagesLocked()
+	restoreMenuEvents := w.removeAllMenusLocked()
 	w.nextMessage = 1
 	rollback := func() {
 		w.nodes, w.links = oldNodes, oldLinks
@@ -319,9 +320,11 @@ func (w *Workspace) Restore(data SaveData) error {
 		}
 	}
 	watchers := w.messageWatchersLocked()
+	menuWatchers := w.menuWatchersLocked()
 	w.mu.Unlock()
 	locked = false
 	w.notifyMessageWatchers(watchers, restoreMessageEvents)
+	w.notifyMenuWatchers(menuWatchers, restoreMenuEvents)
 	return nil
 }
 

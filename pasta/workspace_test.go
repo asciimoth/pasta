@@ -652,6 +652,281 @@ func TestDeletingNodeRemovesEphemeralMessages(t *testing.T) {
 	}
 }
 
+type menuRuntimeClass struct {
+	runtime NodeRuntime
+	scopes  map[NodeID]NodeScope
+}
+
+func (c menuRuntimeClass) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	if c.scopes != nil {
+		c.scopes[ctx.ID] = ctx.Node
+	}
+	if c.runtime != nil {
+		return c.runtime, nil
+	}
+	return struct{}{}, nil
+}
+
+type menuHookRuntime struct {
+	updates []MenuStateUpdate
+	buttons []MenuButtonRef
+}
+
+func (r *menuHookRuntime) ApplyMenuUpdate(update MenuStateUpdate) (MenuStateUpdate, error) {
+	r.updates = append(r.updates, update)
+	return MenuStateUpdate{
+		Version: update.Version,
+		Fields: []MenuFieldUpdate{{
+			Block: "default",
+			Field: "name",
+			Value: "normalized",
+		}},
+	}, nil
+}
+
+func (r *menuHookRuntime) TriggerMenuButton(ref MenuButtonRef) error {
+	r.buttons = append(r.buttons, ref)
+	return nil
+}
+
+func testMenu() NodeMenu {
+	return NodeMenu{
+		Blocks: []MenuBlock{{
+			ID: "default",
+			Fields: []MenuField{
+				{ID: "status", Kind: MenuFieldReadOnly, Value: "ready"},
+				{ID: "name", Kind: MenuFieldString, Value: "initial", Options: []MenuOption{{Value: "initial"}, {Value: "normalized"}}},
+				{ID: "count", Kind: MenuFieldInt64, Value: int64(2)},
+				{ID: "ratio", Kind: MenuFieldFloat64, Value: 1.5},
+				{ID: "enabled", Kind: MenuFieldBool, Value: true, Render: MenuRenderCheckbox},
+			},
+			Buttons: []MenuButton{{ID: "refresh", Label: "Refresh"}},
+			Repeats: []MenuRepeat{{
+				ID: "hosts",
+				Template: []MenuField{
+					{ID: "host", Kind: MenuFieldString, Value: ""},
+					{ID: "ip", Kind: MenuFieldString, Value: ""},
+				},
+				Items: []MenuRepeatItem{{
+					ID: "one",
+					Fields: []MenuField{
+						{ID: "host", Value: "alpha"},
+						{ID: "ip", Value: "10.0.0.1"},
+					},
+				}},
+			}},
+		}},
+	}
+}
+
+func TestNodeMenusUpdateHooksWatchersAndSnapshots(t *testing.T) {
+	hook := &menuHookRuntime{}
+	class := ClassSpec{Name: "example.com/Menu", Runtime: menuRuntimeClass{runtime: hook}}
+	w := NewWorkspace()
+	lib := &captureScopeLibrary{name: "example.com", classes: []ClassSpec{class}}
+	other := &captureScopeLibrary{name: "other.com", classes: []ClassSpec{scopedTestClass("other.com", "Source")}}
+	if err := w.RegisterLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RegisterLibrary(other); err != nil {
+		t.Fatal(err)
+	}
+	node, err := lib.scope.CreateNode("example.com/Menu", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherNode, err := other.scope.CreateNode("other.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := w.WatchMenus(16)
+	defer sub.Close()
+
+	if err := lib.scope.SetNodeMenu(node, testMenu()); err != nil {
+		t.Fatal(err)
+	}
+	replaced := <-sub.Events()
+	if replaced.Kind != MenuReplaced || replaced.Node != node || replaced.Menu == nil || replaced.Menu.Version != 1 {
+		t.Fatalf("replace event = %#v", replaced)
+	}
+	if err := lib.scope.SetNodeMenu(otherNode, testMenu()); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("scoped SetNodeMenu cross-library error = %v, want ownership", err)
+	}
+
+	menu, ok := w.NodeMenu(node)
+	if !ok || menu.Version != 1 {
+		t.Fatalf("NodeMenu = %#v ok=%v", menu, ok)
+	}
+	menu.Blocks[0].Fields[1].Value = "mutated"
+	snap, ok := w.Node(node)
+	if !ok || snap.Menu == nil || snap.Menu.Blocks[0].Fields[1].Value != "initial" {
+		t.Fatalf("menu snapshot leaked mutable state: %#v", snap.Menu)
+	}
+
+	updated, err := w.UpdateNodeMenuState(node, MenuStateUpdate{
+		Version: 1,
+		Fields:  []MenuFieldUpdate{{Block: "default", Field: "name", Value: "initial"}},
+		Repeats: []MenuRepeatUpdate{{
+			Block:  "default",
+			Repeat: "hosts",
+			Items: []MenuRepeatItemState{{
+				ID:     "two",
+				Fields: map[string]any{"host": "beta", "ip": "10.0.0.2"},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != 2 || updated.Blocks[0].Fields[1].Value != "normalized" {
+		t.Fatalf("updated menu = %#v", updated)
+	}
+	if len(hook.updates) != 1 || hook.updates[0].Version != 1 {
+		t.Fatalf("menu update hook calls = %#v", hook.updates)
+	}
+	changed := <-sub.Events()
+	if changed.Kind != MenuStateChanged || changed.Menu == nil || changed.Menu.Version != 2 {
+		t.Fatalf("state event = %#v", changed)
+	}
+
+	if err := w.TriggerNodeMenuButton(node, MenuButtonRef{Block: "default", Button: "refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(hook.buttons) != 1 || hook.buttons[0].Button != "refresh" {
+		t.Fatalf("button hook calls = %#v", hook.buttons)
+	}
+	triggered := <-sub.Events()
+	if triggered.Kind != MenuButtonTriggered || triggered.Button.Button != "refresh" {
+		t.Fatalf("button event = %#v", triggered)
+	}
+
+	if _, err := w.UpdateNodeMenuState(node, MenuStateUpdate{Version: 1, Fields: []MenuFieldUpdate{{Block: "default", Field: "name", Value: "initial"}}}); !errors.Is(err, ErrStaleMenu) {
+		t.Fatalf("stale update error = %v, want stale menu", err)
+	}
+	if _, err := w.UpdateNodeMenuState(node, MenuStateUpdate{Version: 2, Fields: []MenuFieldUpdate{{Block: "default", Field: "status", Value: "bad"}}}); !errors.Is(err, ErrInvalidMenu) {
+		t.Fatalf("read-only update error = %v, want invalid menu", err)
+	}
+	if _, err := w.UpdateNodeMenuState(node, MenuStateUpdate{Version: 2, Fields: []MenuFieldUpdate{{Block: "default", Field: "count", Value: "bad"}}}); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("type mismatch update error = %v, want type mismatch", err)
+	}
+
+	if err := w.ClearNodeMenu(node); err != nil {
+		t.Fatal(err)
+	}
+	cleared := <-sub.Events()
+	if cleared.Kind != MenuCleared || cleared.Menu == nil || cleared.Menu.Version != 2 {
+		t.Fatalf("clear event = %#v", cleared)
+	}
+	if _, ok := w.NodeMenu(node); ok {
+		t.Fatal("menu should be cleared")
+	}
+}
+
+func TestNodeMenusNodeScopeMarshalAndNonPersistence(t *testing.T) {
+	scopes := map[NodeID]NodeScope{}
+	class := ClassSpec{Name: "example.com/Menu", Runtime: menuRuntimeClass{scopes: scopes}}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := w.CreateNode("example.com/Menu", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scopes[node].SetMenu(testMenu()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scopes[node].UpdateMenuState(MenuStateUpdate{Version: 1, Fields: []MenuFieldUpdate{{Block: "default", Field: "enabled", Value: false}}}); err != nil {
+		t.Fatal(err)
+	}
+	menu, ok := w.NodeMenu(node)
+	if !ok || menu.Version != 2 || menu.Blocks[0].Fields[4].Value != false {
+		t.Fatalf("node-scoped menu = %#v ok=%v", menu, ok)
+	}
+	text, err := MarshalNodeMenu(menu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := UnmarshalNodeMenu(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.Blocks[0].Fields[2].Value != int64(2) {
+		t.Fatalf("round-trip int64 value = %#v", roundTrip.Blocks[0].Fields[2].Value)
+	}
+	updateText, err := MarshalMenuStateUpdate(MenuStateUpdate{Version: 2, Fields: []MenuFieldUpdate{{Block: "default", Field: "count", Value: int64(4)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	update, err := UnmarshalMenuStateUpdate(updateText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.Fields[0].Value != json.Number("4") {
+		t.Fatalf("unmarshaled update value = %#v", update.Fields[0].Value)
+	}
+
+	saved := w.Save()
+	clip, err := w.Copy([]NodeID{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.NodeMenu(node); ok {
+		t.Fatal("menu should not survive restore")
+	}
+	pasted, _, err := w.Paste(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.NodeMenu(pasted[0]); ok {
+		t.Fatal("menu should not be copied or pasted")
+	}
+}
+
+func TestNodeMenuValidation(t *testing.T) {
+	w, _ := testWorkspace(t)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetNodeMenu(node, NodeMenu{Blocks: []MenuBlock{{ID: "dup"}, {ID: "dup"}}}); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate block error = %v, want duplicate", err)
+	}
+	if err := w.SetNodeMenu(node, NodeMenu{Blocks: []MenuBlock{{
+		ID:     "default",
+		Fields: []MenuField{{ID: "bad", Kind: MenuFieldString, Value: 1}},
+	}}}); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("field type error = %v, want type mismatch", err)
+	}
+	if err := w.SetNodeMenu(node, NodeMenu{Blocks: []MenuBlock{{
+		ID: "default",
+		Fields: []MenuField{{
+			ID:      "choice",
+			Kind:    MenuFieldString,
+			Value:   "c",
+			Options: []MenuOption{{Value: "a"}},
+		}},
+	}}}); !errors.Is(err, ErrTypeMismatch) {
+		t.Fatalf("option error = %v, want type mismatch", err)
+	}
+	if err := w.SetNodeMenu(node, NodeMenu{Blocks: []MenuBlock{{
+		ID:     "default",
+		Fields: []MenuField{{ID: "fn", Kind: MenuFieldReadOnly, Value: func() {}}},
+	}}}); !errors.Is(err, ErrInvalidMenu) {
+		t.Fatalf("non-json error = %v, want invalid menu", err)
+	}
+	if err := w.SetNodeMenu(node, NodeMenu{}); err != nil {
+		t.Fatal(err)
+	}
+	menu, ok := w.NodeMenu(node)
+	if !ok || len(menu.Blocks) != 1 || menu.Blocks[0].ID != "default" {
+		t.Fatalf("default block menu = %#v ok=%v", menu, ok)
+	}
+}
+
 func TestSetNodePrivateUpdatesSnapshotsSaveAndCopy(t *testing.T) {
 	w, _ := testWorkspace(t)
 	node, err := w.CreateNode("example.com/Source", NodeOptions{})

@@ -61,6 +61,21 @@ func (w *Workspace) callImportPrivateState(runtime NodeRuntime, private any) err
 	})
 }
 
+func (w *Workspace) callMenuUpdateHook(hook NodeMenuUpdateHook, update MenuStateUpdate) (out MenuStateUpdate, err error) {
+	err = w.recoverHook("apply menu update", func() error {
+		var updateErr error
+		out, updateErr = hook.ApplyMenuUpdate(update)
+		return updateErr
+	})
+	return out, err
+}
+
+func (w *Workspace) callMenuButtonHook(hook NodeMenuButtonHook, ref MenuButtonRef) error {
+	return w.recoverHook("trigger menu button", func() error {
+		return hook.TriggerMenuButton(ref)
+	})
+}
+
 func (w *Workspace) callLinkObject(runtime NodeRuntime, endpoint LinkEndpoint) (object any, err error) {
 	provider, ok := runtime.(LinkObjectProvider)
 	if !ok {

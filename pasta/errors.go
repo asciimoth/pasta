@@ -25,6 +25,10 @@ var (
 	ErrCycle = errors.New("pasta: graph cycle")
 	// ErrInactive reports that an operation requires active objects.
 	ErrInactive = errors.New("pasta: inactive object")
+	// ErrInvalidMenu reports that a node menu document or update is malformed.
+	ErrInvalidMenu = errors.New("pasta: invalid menu")
+	// ErrStaleMenu reports that a menu update targeted an older menu version.
+	ErrStaleMenu = errors.New("pasta: stale menu")
 )
 
 // Error describes a structured workspace failure.

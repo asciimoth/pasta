@@ -24,12 +24,13 @@ type Workspace struct {
 	nextLink    LinkID
 	nextMessage MessageID
 
-	libraries map[string]Library
-	classes   map[string]*classRecord
-	nodes     map[NodeID]*nodeRecord
-	links     map[LinkID]*linkRecord
-	messages  map[MessageID]*messageRecord
-	watchers  map[*MessageSubscription]bool
+	libraries    map[string]Library
+	classes      map[string]*classRecord
+	nodes        map[NodeID]*nodeRecord
+	links        map[LinkID]*linkRecord
+	messages     map[MessageID]*messageRecord
+	watchers     map[*MessageSubscription]bool
+	menuWatchers map[*MenuSubscription]bool
 }
 
 type classRecord struct {
@@ -47,6 +48,7 @@ type nodeRecord struct {
 	inputs  []PortSpec
 	outputs []PortSpec
 	runtime NodeRuntime
+	menu    *NodeMenu
 }
 
 type linkRecord struct {
@@ -72,6 +74,55 @@ type MessageSubscription struct {
 	mu     sync.Mutex
 	ch     chan MessageEvent
 	closed bool
+}
+
+// MenuSubscription receives ephemeral node menu events.
+type MenuSubscription struct {
+	w      *Workspace
+	mu     sync.Mutex
+	ch     chan MenuEvent
+	closed bool
+}
+
+// Events returns the channel carrying menu events.
+func (s *MenuSubscription) Events() <-chan MenuEvent {
+	if s == nil {
+		return nil
+	}
+	return s.ch
+}
+
+// Close unsubscribes and closes the event channel.
+func (s *MenuSubscription) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	close(s.ch)
+	w := s.w
+	s.mu.Unlock()
+	if w != nil {
+		w.mu.Lock()
+		delete(w.menuWatchers, s)
+		w.mu.Unlock()
+	}
+}
+
+func (s *MenuSubscription) send(event MenuEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.ch <- event:
+	default:
+	}
 }
 
 // Events returns the channel carrying message events.
@@ -132,15 +183,16 @@ func WithLogger(logger Logger) WorkspaceOption {
 // at 1. Register one or more libraries before creating nodes.
 func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 	w := &Workspace{
-		nextNode:    1,
-		nextLink:    1,
-		nextMessage: 1,
-		libraries:   make(map[string]Library),
-		classes:     make(map[string]*classRecord),
-		nodes:       make(map[NodeID]*nodeRecord),
-		links:       make(map[LinkID]*linkRecord),
-		messages:    make(map[MessageID]*messageRecord),
-		watchers:    make(map[*MessageSubscription]bool),
+		nextNode:     1,
+		nextLink:     1,
+		nextMessage:  1,
+		libraries:    make(map[string]Library),
+		classes:      make(map[string]*classRecord),
+		nodes:        make(map[NodeID]*nodeRecord),
+		links:        make(map[LinkID]*linkRecord),
+		messages:     make(map[MessageID]*messageRecord),
+		watchers:     make(map[*MessageSubscription]bool),
+		menuWatchers: make(map[*MenuSubscription]bool),
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -184,10 +236,13 @@ func (w *Workspace) Close() error {
 		l.state = StateInactive
 	}
 	messageEvents := w.removeAllMessagesLocked()
+	menuEvents := w.removeAllMenusLocked()
 	w.nextMessage = 1
 	watchers := w.messageWatchersLocked()
+	menuWatchers := w.menuWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, messageEvents)
+	w.notifyMenuWatchers(menuWatchers, menuEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveWorkspaceClose)
 	w.callLinkInactiveEvents(linkEvents, InactiveWorkspaceClose)
 	if err := w.callCloseEvents(nodeEvents); err != nil {
@@ -518,6 +573,7 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 		return opErr("delete node", "validate", ErrNotFound)
 	}
 	messageEvents := w.removeNodeMessagesLocked(id)
+	menuEvents := w.clearNodeMenuLocked(id)
 	delete(w.nodes, id)
 	for linkID, link := range w.links {
 		if link.input.Node == id || link.output.Node == id {
@@ -525,8 +581,10 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 		}
 	}
 	watchers := w.messageWatchersLocked()
+	menuWatchers := w.menuWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, messageEvents)
+	w.notifyMenuWatchers(menuWatchers, menuEvents)
 	w.callAfterDelete(runtime)
 	if err := w.callNodeClose(runtime); err != nil {
 		return opErr("delete node", "hook", err)
@@ -665,6 +723,222 @@ func (w *Workspace) WatchMessages(buffer int) *MessageSubscription {
 		w.watchers = make(map[*MessageSubscription]bool)
 	}
 	w.watchers[sub] = true
+	w.mu.Unlock()
+	return sub
+}
+
+// SetNodeMenu replaces the ephemeral menu for one node.
+func (w *Workspace) SetNodeMenu(id NodeID, menu NodeMenu) error {
+	w.mu.Lock()
+	if err := w.checkOpenLocked("set node menu"); err != nil {
+		w.mu.Unlock()
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		w.mu.Unlock()
+		return opErr("set node menu", "validate", ErrNotFound)
+	}
+	version := int64(1)
+	if node.menu != nil {
+		version = node.menu.Version + 1
+	}
+	normalized, err := normalizeMenu(menu, version)
+	if err != nil {
+		w.mu.Unlock()
+		return opErr("set node menu", "validate", err)
+	}
+	node.menu = &normalized
+	event := MenuEvent{Kind: MenuReplaced, Node: id, Menu: menuPointer(normalized)}
+	watchers := w.menuWatchersLocked()
+	w.mu.Unlock()
+	w.notifyMenuWatchers(watchers, []MenuEvent{event})
+	return nil
+}
+
+// ClearNodeMenu removes the ephemeral menu for one node.
+func (w *Workspace) ClearNodeMenu(id NodeID) error {
+	w.mu.Lock()
+	if err := w.checkOpenLocked("clear node menu"); err != nil {
+		w.mu.Unlock()
+		return err
+	}
+	if _, ok := w.nodes[id]; !ok {
+		w.mu.Unlock()
+		return opErr("clear node menu", "validate", ErrNotFound)
+	}
+	events := w.clearNodeMenuLocked(id)
+	watchers := w.menuWatchersLocked()
+	w.mu.Unlock()
+	w.notifyMenuWatchers(watchers, events)
+	return nil
+}
+
+// UpdateNodeMenuState validates and commits an externally proposed menu state update.
+func (w *Workspace) UpdateNodeMenuState(id NodeID, update MenuStateUpdate) (NodeMenu, error) {
+	update, err := normalizeMenuStateUpdate(update)
+	if err != nil {
+		return NodeMenu{}, opErr("update node menu state", "validate", err)
+	}
+	w.mu.RLock()
+	if err := w.checkOpenLocked("update node menu state"); err != nil {
+		w.mu.RUnlock()
+		return NodeMenu{}, err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		w.mu.RUnlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", ErrNotFound)
+	}
+	if node.menu == nil {
+		w.mu.RUnlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", ErrNotFound)
+	}
+	base := cloneNodeMenu(*node.menu)
+	runtime := node.runtime
+	w.mu.RUnlock()
+	if _, err := applyMenuStateUpdate(base, update); err != nil {
+		return NodeMenu{}, opErr("update node menu state", "validate", err)
+	}
+	applied := update
+	if hook, ok := runtime.(NodeMenuUpdateHook); ok {
+		hookUpdate, err := w.callMenuUpdateHook(hook, update)
+		if err != nil {
+			return NodeMenu{}, opErr("update node menu state", "hook", err)
+		}
+		if !reflect.DeepEqual(hookUpdate, MenuStateUpdate{}) {
+			applied, err = normalizeMenuStateUpdate(hookUpdate)
+			if err != nil {
+				return NodeMenu{}, opErr("update node menu state", "hook", err)
+			}
+			if applied.Version == 0 {
+				applied.Version = update.Version
+			}
+		}
+	}
+	w.mu.Lock()
+	if err := w.checkOpenLocked("update node menu state"); err != nil {
+		w.mu.Unlock()
+		return NodeMenu{}, err
+	}
+	node, ok = w.nodes[id]
+	if !ok {
+		w.mu.Unlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", ErrNotFound)
+	}
+	if node.menu == nil {
+		w.mu.Unlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", ErrNotFound)
+	}
+	next, err := applyMenuStateUpdate(*node.menu, applied)
+	if err != nil {
+		w.mu.Unlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", err)
+	}
+	next.Version = node.menu.Version + 1
+	node.menu = &next
+	event := MenuEvent{Kind: MenuStateChanged, Node: id, Menu: menuPointer(next), Update: applied}
+	watchers := w.menuWatchersLocked()
+	w.mu.Unlock()
+	w.notifyMenuWatchers(watchers, []MenuEvent{event})
+	return cloneNodeMenu(next), nil
+}
+
+func (w *Workspace) updateNodeMenuStateDirect(id NodeID, update MenuStateUpdate) (NodeMenu, error) {
+	update, err := normalizeMenuStateUpdate(update)
+	if err != nil {
+		return NodeMenu{}, opErr("update node menu state", "validate", err)
+	}
+	w.mu.Lock()
+	if err := w.checkOpenLocked("update node menu state"); err != nil {
+		w.mu.Unlock()
+		return NodeMenu{}, err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		w.mu.Unlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", ErrNotFound)
+	}
+	if node.menu == nil {
+		w.mu.Unlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", ErrNotFound)
+	}
+	next, err := applyMenuStateUpdate(*node.menu, update)
+	if err != nil {
+		w.mu.Unlock()
+		return NodeMenu{}, opErr("update node menu state", "validate", err)
+	}
+	next.Version = node.menu.Version + 1
+	node.menu = &next
+	event := MenuEvent{Kind: MenuStateChanged, Node: id, Menu: menuPointer(next), Update: update}
+	watchers := w.menuWatchersLocked()
+	w.mu.Unlock()
+	w.notifyMenuWatchers(watchers, []MenuEvent{event})
+	return cloneNodeMenu(next), nil
+}
+
+// TriggerNodeMenuButton validates and delivers an ephemeral menu button event.
+func (w *Workspace) TriggerNodeMenuButton(id NodeID, ref MenuButtonRef) error {
+	if !validMenuID(ref.Block) || !validMenuID(ref.Button) {
+		return opErr("trigger node menu button", "validate", ErrInvalidName)
+	}
+	w.mu.RLock()
+	if err := w.checkOpenLocked("trigger node menu button"); err != nil {
+		w.mu.RUnlock()
+		return err
+	}
+	node, ok := w.nodes[id]
+	if !ok {
+		w.mu.RUnlock()
+		return opErr("trigger node menu button", "validate", ErrNotFound)
+	}
+	if node.menu == nil {
+		w.mu.RUnlock()
+		return opErr("trigger node menu button", "validate", ErrNotFound)
+	}
+	menu := cloneNodeMenu(*node.menu)
+	runtime := node.runtime
+	w.mu.RUnlock()
+	button, ok := findMenuButton(menu, ref)
+	if !ok {
+		return opErr("trigger node menu button", "validate", ErrNotFound)
+	}
+	if button.Disabled {
+		return opErr("trigger node menu button", "validate", ErrInactive)
+	}
+	if hook, ok := runtime.(NodeMenuButtonHook); ok {
+		if err := w.callMenuButtonHook(hook, ref); err != nil {
+			return opErr("trigger node menu button", "hook", err)
+		}
+	}
+	w.mu.RLock()
+	if err := w.checkOpenLocked("trigger node menu button"); err != nil {
+		w.mu.RUnlock()
+		return err
+	}
+	node, ok = w.nodes[id]
+	if !ok || node.menu == nil || node.menu.Version != menu.Version {
+		w.mu.RUnlock()
+		return opErr("trigger node menu button", "validate", ErrStaleMenu)
+	}
+	current := cloneNodeMenu(*node.menu)
+	watchers := w.menuWatchersLocked()
+	w.mu.RUnlock()
+	w.notifyMenuWatchers(watchers, []MenuEvent{{Kind: MenuButtonTriggered, Node: id, Menu: menuPointer(current), Button: ref}})
+	return nil
+}
+
+// WatchMenus subscribes to ephemeral node menu events.
+func (w *Workspace) WatchMenus(buffer int) *MenuSubscription {
+	if buffer < 0 {
+		buffer = 0
+	}
+	sub := &MenuSubscription{w: w, ch: make(chan MenuEvent, buffer)}
+	w.mu.Lock()
+	if w.menuWatchers == nil {
+		w.menuWatchers = make(map[*MenuSubscription]bool)
+	}
+	w.menuWatchers[sub] = true
 	w.mu.Unlock()
 	return sub
 }
@@ -1102,6 +1376,17 @@ func (w *Workspace) NodeMessages(id NodeID) []NodeMessage {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.nodeMessagesLocked(id)
+}
+
+// NodeMenu returns a defensive snapshot of one node's current ephemeral menu.
+func (w *Workspace) NodeMenu(id NodeID) (NodeMenu, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	node, ok := w.nodes[id]
+	if !ok || node.menu == nil {
+		return NodeMenu{}, false
+	}
+	return cloneNodeMenu(*node.menu), true
 }
 
 func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDetachEvent, error) {
@@ -1544,7 +1829,7 @@ func snapshotClass(class *classRecord) ClassSnapshot {
 }
 
 func snapshotNode(node *nodeRecord) NodeSnapshot {
-	return NodeSnapshot{
+	snap := NodeSnapshot{
 		ID:      node.id,
 		Class:   node.class,
 		Library: node.library,
@@ -1553,11 +1838,20 @@ func snapshotNode(node *nodeRecord) NodeSnapshot {
 		Inputs:  clonePorts(node.inputs),
 		Outputs: clonePorts(node.outputs),
 	}
+	if node.menu != nil {
+		menu := cloneNodeMenu(*node.menu)
+		snap.Menu = &menu
+	}
+	return snap
 }
 
 func (w *Workspace) snapshotNodeLocked(node *nodeRecord) NodeSnapshot {
 	snap := snapshotNode(node)
 	snap.Messages = w.nodeMessagesLocked(node.id)
+	if node.menu != nil {
+		menu := cloneNodeMenu(*node.menu)
+		snap.Menu = &menu
+	}
 	return snap
 }
 
@@ -1630,6 +1924,67 @@ func (w *Workspace) notifyMessageWatchers(watchers []*MessageSubscription, event
 			watcher.send(event)
 		}
 	}
+}
+
+func (w *Workspace) clearNodeMenuLocked(id NodeID) []MenuEvent {
+	node := w.nodes[id]
+	if node == nil || node.menu == nil {
+		return nil
+	}
+	old := cloneNodeMenu(*node.menu)
+	node.menu = nil
+	return []MenuEvent{{Kind: MenuCleared, Node: id, Menu: menuPointer(old)}}
+}
+
+func (w *Workspace) removeAllMenusLocked() []MenuEvent {
+	events := make([]MenuEvent, 0)
+	for id, node := range w.nodes {
+		if node.menu == nil {
+			continue
+		}
+		old := cloneNodeMenu(*node.menu)
+		node.menu = nil
+		events = append(events, MenuEvent{Kind: MenuCleared, Node: id, Menu: menuPointer(old)})
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].Node < events[j].Node })
+	return events
+}
+
+func (w *Workspace) menuWatchersLocked() []*MenuSubscription {
+	watchers := make([]*MenuSubscription, 0, len(w.menuWatchers))
+	for watcher := range w.menuWatchers {
+		watchers = append(watchers, watcher)
+	}
+	return watchers
+}
+
+func (w *Workspace) notifyMenuWatchers(watchers []*MenuSubscription, events []MenuEvent) {
+	if len(watchers) == 0 || len(events) == 0 {
+		return
+	}
+	for _, event := range events {
+		event = cloneMenuEvent(event)
+		for _, watcher := range watchers {
+			watcher.send(event)
+		}
+	}
+}
+
+func menuPointer(menu NodeMenu) *NodeMenu {
+	cloned := cloneNodeMenu(menu)
+	return &cloned
+}
+
+func cloneMenuEvent(event MenuEvent) MenuEvent {
+	out := event
+	if event.Menu != nil {
+		out.Menu = menuPointer(*event.Menu)
+	}
+	update, err := normalizeMenuStateUpdate(event.Update)
+	if err == nil {
+		out.Update = update
+	}
+	return out
 }
 
 func snapshotLink(link *linkRecord) LinkSnapshot {
@@ -1835,6 +2190,46 @@ func (s *libraryScope) RemoveNodeMessage(id NodeID, messageID MessageID) error {
 	return s.w.RemoveNodeMessage(id, messageID)
 }
 
+func (s *libraryScope) SetNodeMenu(id NodeID, menu NodeMenu) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope set node menu", "validate", ErrOwnership)
+	}
+	return s.w.SetNodeMenu(id, menu)
+}
+
+func (s *libraryScope) ClearNodeMenu(id NodeID) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope clear node menu", "validate", ErrOwnership)
+	}
+	return s.w.ClearNodeMenu(id)
+}
+
+func (s *libraryScope) UpdateNodeMenuState(id NodeID, update MenuStateUpdate) (NodeMenu, error) {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return NodeMenu{}, opErr("scope update node menu state", "validate", ErrOwnership)
+	}
+	return s.w.UpdateNodeMenuState(id, update)
+}
+
+func (s *libraryScope) TriggerNodeMenuButton(id NodeID, ref MenuButtonRef) error {
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope trigger node menu button", "validate", ErrOwnership)
+	}
+	return s.w.TriggerNodeMenuButton(id, ref)
+}
+
 func (s *libraryScope) CanSetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 	s.w.mu.RLock()
 	owned := s.ownsNodeLocked(id)
@@ -1972,6 +2367,58 @@ func (s *nodeScope) RemoveMessage(id MessageID) error {
 		return opErr("node scope remove message", "validate", ErrNotFound)
 	}
 	return s.w.RemoveNodeMessage(s.id, id)
+}
+
+func (s *nodeScope) SetMenu(menu NodeMenu) error {
+	err := s.w.SetNodeMenu(s.id, menu)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		version := int64(1)
+		if rec.menu != nil {
+			version = rec.menu.Version + 1
+		}
+		normalized, err := normalizeMenu(menu, version)
+		if err != nil {
+			return opErr("node scope set menu", "validate", err)
+		}
+		rec.menu = &normalized
+		return nil
+	})
+}
+
+func (s *nodeScope) ClearMenu() error {
+	err := s.w.ClearNodeMenu(s.id)
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.updateInitRecord(func(rec *nodeRecord) error {
+		rec.menu = nil
+		return nil
+	})
+}
+
+func (s *nodeScope) UpdateMenuState(update MenuStateUpdate) (NodeMenu, error) {
+	menu, err := s.w.updateNodeMenuStateDirect(s.id, update)
+	if !errors.Is(err, ErrNotFound) {
+		return menu, err
+	}
+	var out NodeMenu
+	err = s.updateInitRecord(func(rec *nodeRecord) error {
+		if rec.menu == nil {
+			return opErr("node scope update menu state", "validate", ErrNotFound)
+		}
+		next, err := applyMenuStateUpdate(*rec.menu, update)
+		if err != nil {
+			return opErr("node scope update menu state", "validate", err)
+		}
+		next.Version = rec.menu.Version + 1
+		rec.menu = &next
+		out = cloneNodeMenu(next)
+		return nil
+	})
+	return out, err
 }
 
 func (s *nodeScope) initializing() bool {
@@ -2117,6 +2564,10 @@ func cloneNodeRecords(records map[NodeID]*nodeRecord) map[NodeID]*nodeRecord {
 		copy.dynamic = cloneNodeState(rec.dynamic)
 		copy.inputs = clonePorts(rec.inputs)
 		copy.outputs = clonePorts(rec.outputs)
+		if rec.menu != nil {
+			menu := cloneNodeMenu(*rec.menu)
+			copy.menu = &menu
+		}
 		out[id] = &copy
 	}
 	return out

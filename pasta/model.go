@@ -177,6 +177,9 @@ type NodeScope interface {
 	Snapshot() (NodeSnapshot, bool)
 	AddMessage(MessageType, string) (MessageID, error)
 	RemoveMessage(MessageID) error
+	SetMenu(NodeMenu) error
+	ClearMenu() error
+	UpdateMenuState(MenuStateUpdate) (NodeMenu, error)
 	SetState(NodeState) error
 	SetPrivate(any) error
 	SetCoordinate(string) error
@@ -298,6 +301,25 @@ type NodePrivateImportHook interface {
 	ImportPrivateState(any) error
 }
 
+// NodeMenuUpdateHook lets a runtime validate or normalize external menu edits.
+//
+// ApplyMenuUpdate runs outside the workspace lock after the workspace validates
+// the proposed update against the current menu schema. Returning an error
+// rejects the update. Returning a non-zero MenuStateUpdate lets the runtime
+// normalize the accepted state before the workspace commits it.
+type NodeMenuUpdateHook interface {
+	ApplyMenuUpdate(MenuStateUpdate) (MenuStateUpdate, error)
+}
+
+// NodeMenuButtonHook observes an external menu button trigger.
+//
+// TriggerMenuButton runs outside the workspace lock after the workspace
+// verifies that the button exists and is enabled. Returning an error rejects
+// the trigger event.
+type NodeMenuButtonHook interface {
+	TriggerMenuButton(MenuButtonRef) error
+}
+
 // StaticLibrary is a simple Library implementation backed by ClassSpec values.
 //
 // It is useful for applications whose class set is known up front and for tests
@@ -330,6 +352,7 @@ type WorkspaceRO interface {
 	Node(NodeID) (NodeSnapshot, bool)
 	Link(LinkID) (LinkSnapshot, bool)
 	NodeMessages(NodeID) []NodeMessage
+	NodeMenu(NodeID) (NodeMenu, bool)
 }
 
 // LibraryScope is the write surface available to one registered library.
@@ -354,6 +377,10 @@ type LibraryScope interface {
 	DeleteNodeMetadataValue(NodeID, string) error
 	AddNodeMessage(NodeID, MessageType, string) (MessageID, error)
 	RemoveNodeMessage(NodeID, MessageID) error
+	SetNodeMenu(NodeID, NodeMenu) error
+	ClearNodeMenu(NodeID) error
+	UpdateNodeMenuState(NodeID, MenuStateUpdate) (NodeMenu, error)
+	TriggerNodeMenuButton(NodeID, MenuButtonRef) error
 	CanSetNodePorts(NodeID, []PortSpec, []PortSpec) error
 	SetNodePorts(NodeID, []PortSpec, []PortSpec) error
 	CanCreateLink(FullPortID, FullPortID, string) error
@@ -403,6 +430,7 @@ type NodeSnapshot struct {
 	Inputs   []PortSpec
 	Outputs  []PortSpec
 	Messages []NodeMessage
+	Menu     *NodeMenu
 }
 
 // LinkSnapshot is a read-only link record.
@@ -462,4 +490,27 @@ const (
 type MessageEvent struct {
 	Kind    MessageEventKind
 	Message NodeMessage
+}
+
+// MenuEventKind describes a watcher event for an ephemeral node menu.
+type MenuEventKind string
+
+const (
+	// MenuReplaced means a node menu was replaced.
+	MenuReplaced MenuEventKind = "replaced"
+	// MenuCleared means a node menu was cleared.
+	MenuCleared MenuEventKind = "cleared"
+	// MenuStateChanged means an external or node-scoped state update was accepted.
+	MenuStateChanged MenuEventKind = "state-changed"
+	// MenuButtonTriggered means an enabled menu button was triggered.
+	MenuButtonTriggered MenuEventKind = "button-triggered"
+)
+
+// MenuEvent is delivered to menu subscriptions after menu changes or button triggers.
+type MenuEvent struct {
+	Kind   MenuEventKind
+	Node   NodeID
+	Menu   *NodeMenu
+	Update MenuStateUpdate
+	Button MenuButtonRef
 }
