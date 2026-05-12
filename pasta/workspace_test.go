@@ -1864,6 +1864,381 @@ func TestLifecycleCreateLinkHooksMayReadWorkspace(t *testing.T) {
 	}
 }
 
+type flowClass struct {
+	runtime NodeRuntime
+}
+
+func (c flowClass) InitNode(NodeContext, NodeState, InitMode) (NodeRuntime, error) {
+	return c.runtime, nil
+}
+
+func flowWorkspace(t *testing.T, classes ...ClassSpec) *Workspace {
+	t.Helper()
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: classes}); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func flowClassSpec(local string, class NodeClass) ClassSpec {
+	return ClassSpec{
+		Name:    "example.com/" + local,
+		Runtime: class,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+	}
+}
+
+type flowPullSource interface {
+	Pull() (string, error)
+}
+
+type flowPullObject struct {
+	source flowPullSource
+}
+
+type flowPullOutput struct {
+	scope NodeScope
+	value string
+}
+
+func (n *flowPullOutput) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	n.scope = ctx.Node
+	return n, nil
+}
+
+func (n *flowPullOutput) Pull() (string, error) {
+	if err := n.scope.SetPrivate("pull-called"); err != nil {
+		return "", err
+	}
+	return n.value, nil
+}
+
+func (n *flowPullOutput) BeforeLinkAttach(endpoint LinkEndpoint, object any) error {
+	if endpoint.Direction != OutputPort {
+		return nil
+	}
+	pull, ok := object.(*flowPullObject)
+	if !ok {
+		return fmt.Errorf("unexpected pull object %T", object)
+	}
+	pull.source = n
+	return nil
+}
+
+func (n *flowPullOutput) AfterLinkAttach(LinkEndpoint, any) {}
+
+type flowPullInput struct {
+	object flowPullObject
+}
+
+func (n *flowPullInput) LinkObject(LinkEndpoint) (any, error) {
+	return &n.object, nil
+}
+
+func (n *flowPullInput) Pull() (string, error) {
+	if n.object.source == nil {
+		return "", fmt.Errorf("pull source not attached")
+	}
+	return n.object.source.Pull()
+}
+
+func TestFlowPullInputCanCallOutputAfterLinkCreation(t *testing.T) {
+	output := &flowPullOutput{value: "from-output"}
+	input := &flowPullInput{}
+	w := flowWorkspace(t,
+		flowClassSpec("Source", output),
+		flowClassSpec("Sink", flowClass{runtime: input}),
+	)
+	source, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	sink, _ := w.CreateNode("example.com/Sink", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: sink, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: source, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, err := input.Pull()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "from-output" {
+		t.Fatalf("pull value = %q, want from-output", got)
+	}
+	snap, ok := w.Node(source)
+	if !ok || snap.Dynamic.Private != "pull-called" {
+		t.Fatalf("source private = %#v, want pull-called", snap.Dynamic.Private)
+	}
+}
+
+var errFlowDetached = errors.New("flow detached")
+
+type flowBlockingPullOutput struct {
+	ready     chan struct{}
+	detached  chan struct{}
+	readyOnce sync.Once
+	closeOnce sync.Once
+}
+
+func (n *flowBlockingPullOutput) Pull() (string, error) {
+	n.readyOnce.Do(func() { close(n.ready) })
+	<-n.detached
+	return "", errFlowDetached
+}
+
+func (n *flowBlockingPullOutput) BeforeLinkAttach(endpoint LinkEndpoint, object any) error {
+	if endpoint.Direction != OutputPort {
+		return nil
+	}
+	pull, ok := object.(*flowPullObject)
+	if !ok {
+		return fmt.Errorf("unexpected pull object %T", object)
+	}
+	pull.source = n
+	return nil
+}
+
+func (n *flowBlockingPullOutput) AfterLinkAttach(LinkEndpoint, any) {}
+
+func (n *flowBlockingPullOutput) BeforeLinkDetach(LinkEndpoint) error {
+	return nil
+}
+
+func (n *flowBlockingPullOutput) AfterLinkDetach(endpoint LinkEndpoint) {
+	if endpoint.Direction == OutputPort {
+		n.closeOnce.Do(func() { close(n.detached) })
+	}
+}
+
+func TestFlowInFlightPullCanBeReleasedByDetachHook(t *testing.T) {
+	output := &flowBlockingPullOutput{
+		ready:    make(chan struct{}),
+		detached: make(chan struct{}),
+	}
+	input := &flowPullInput{}
+	w := flowWorkspace(t,
+		flowClassSpec("Source", flowClass{runtime: output}),
+		flowClassSpec("Sink", flowClass{runtime: input}),
+	)
+	source, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	sink, _ := w.CreateNode("example.com/Sink", NodeOptions{})
+	link, err := w.CreateLink(
+		FullPortID{Node: sink, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: source, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := input.Pull()
+		done <- err
+	}()
+	select {
+	case <-output.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pull did not enter the blocking contract")
+	}
+	if err := w.DeleteLink(link); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, errFlowDetached) {
+			t.Fatalf("pull error = %v, want detached", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("detach hook did not release blocked pull")
+	}
+}
+
+type flowPushReceiver interface {
+	Receive(string) error
+}
+
+type flowPushInput struct {
+	scope  NodeScope
+	values []string
+}
+
+func (n *flowPushInput) InitNode(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+	n.scope = ctx.Node
+	return n, nil
+}
+
+func (n *flowPushInput) LinkObject(LinkEndpoint) (any, error) {
+	return flowPushReceiver(n), nil
+}
+
+func (n *flowPushInput) Receive(value string) error {
+	n.values = append(n.values, value)
+	return n.scope.SetPrivate(append([]string(nil), n.values...))
+}
+
+type flowPushOutput struct {
+	receivers []flowPushReceiver
+}
+
+func (n *flowPushOutput) BeforeLinkAttach(endpoint LinkEndpoint, object any) error {
+	if endpoint.Direction != OutputPort {
+		return nil
+	}
+	receiver, ok := object.(flowPushReceiver)
+	if !ok {
+		return fmt.Errorf("unexpected push object %T", object)
+	}
+	n.receivers = append(n.receivers, receiver)
+	return nil
+}
+
+func (n *flowPushOutput) AfterLinkAttach(LinkEndpoint, any) {}
+
+func (n *flowPushOutput) Push(value string) error {
+	for _, receiver := range n.receivers {
+		if err := receiver.Receive(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestFlowPushOutputCanCallInputAfterLinkCreation(t *testing.T) {
+	output := &flowPushOutput{}
+	input := &flowPushInput{}
+	w := flowWorkspace(t,
+		flowClassSpec("Source", flowClass{runtime: output}),
+		flowClassSpec("Sink", input),
+	)
+	source, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	sink, _ := w.CreateNode("example.com/Sink", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: sink, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: source, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Push("one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.Push("two"); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(input.values) != fmt.Sprint([]string{"one", "two"}) {
+		t.Fatalf("input values = %#v", input.values)
+	}
+	snap, ok := w.Node(sink)
+	if !ok || fmt.Sprint(snap.Dynamic.Private) != fmt.Sprint([]string{"one", "two"}) {
+		t.Fatalf("sink private = %#v, want pushed values", snap.Dynamic.Private)
+	}
+}
+
+type flowMixedConn interface {
+	Read() (string, error)
+}
+
+type flowMixedAcceptor interface {
+	NewConn(flowMixedConn) error
+}
+
+type flowMixedObject struct {
+	conn flowMixedConn
+}
+
+func (o *flowMixedObject) NewConn(conn flowMixedConn) error {
+	o.conn = conn
+	return nil
+}
+
+type flowMixedOutput struct {
+	values []string
+}
+
+func (n *flowMixedOutput) BeforeLinkAttach(endpoint LinkEndpoint, object any) error {
+	if endpoint.Direction != OutputPort {
+		return nil
+	}
+	acceptor, ok := object.(flowMixedAcceptor)
+	if !ok {
+		return fmt.Errorf("unexpected mixed object %T", object)
+	}
+	return acceptor.NewConn(&flowMixedConnObject{values: append([]string(nil), n.values...)})
+}
+
+func (n *flowMixedOutput) AfterLinkAttach(LinkEndpoint, any) {}
+
+type flowMixedConnObject struct {
+	values []string
+	next   int
+}
+
+func (c *flowMixedConnObject) Read() (string, error) {
+	if c.next >= len(c.values) {
+		return "", fmt.Errorf("empty connection")
+	}
+	value := c.values[c.next]
+	c.next++
+	return value, nil
+}
+
+type flowMixedInput struct {
+	object flowMixedObject
+}
+
+func (n *flowMixedInput) LinkObject(LinkEndpoint) (any, error) {
+	return &n.object, nil
+}
+
+func (n *flowMixedInput) PullConn() (string, error) {
+	if n.object.conn == nil {
+		return "", fmt.Errorf("mixed connection not attached")
+	}
+	return n.object.conn.Read()
+}
+
+func TestFlowMixedOutputOpensConnectionThatInputPulls(t *testing.T) {
+	output := &flowMixedOutput{values: []string{"alpha", "beta"}}
+	input := &flowMixedInput{}
+	w := flowWorkspace(t,
+		flowClassSpec("Source", flowClass{runtime: output}),
+		flowClassSpec("Sink", flowClass{runtime: input}),
+	)
+	source, _ := w.CreateNode("example.com/Source", NodeOptions{})
+	sink, _ := w.CreateNode("example.com/Sink", NodeOptions{})
+	if _, err := w.CreateLink(
+		FullPortID{Node: sink, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: source, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	first, err := input.PullConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := input.PullConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != "alpha" || second != "beta" {
+		t.Fatalf("mixed values = %q, %q; want alpha, beta", first, second)
+	}
+}
+
 func TestLifecycleNodeHooksMayReadWorkspace(t *testing.T) {
 	w, nodes, log := lifecycleWorkspace(t, &lifecycleClass{})
 	deleted, _ := w.CreateNode("example.com/Source", NodeOptions{})
