@@ -58,7 +58,14 @@ type nodeDTO struct {
 	Coordinate  [2]float64      `json:"coordinate"`
 	Inputs      []portDTO       `json:"inputs"`
 	Outputs     []portDTO       `json:"outputs"`
+	Messages    []messageDTO    `json:"messages,omitempty"`
 	Menu        *pasta.NodeMenu `json:"menu,omitempty"`
+}
+
+type messageDTO struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type linkDTO struct {
@@ -243,25 +250,53 @@ func (a *appState) seed() error {
 	if err != nil {
 		return err
 	}
-	upper, err := a.newNode(UppercaseClass, 360, 460, 0)
+	split, err := a.newNode(SplitClass, 320, 460, 0)
 	if err != nil {
 		return err
 	}
-	replace, err := a.newNode(ReplaceClass, 600, 460, 0)
+	upper, err := a.newNode(UppercaseClass, 560, 390, 0)
 	if err != nil {
 		return err
 	}
-	stringResult, err := a.newNode(StringResultClass, 860, 460, 0)
+	lower, err := a.newNode(LowercaseClass, 560, 510, 0)
 	if err != nil {
 		return err
 	}
-	if _, err := a.workspace.CreateLink(full(upper, StringInput), full(text, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+	replace, err := a.newNode(ReplaceClass, 560, 630, 0)
+	if err != nil {
 		return err
 	}
-	if _, err := a.workspace.CreateLink(full(replace, StringInput), full(upper, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+	firstResult, err := a.newNode(StringResultClass, 820, 390, 0)
+	if err != nil {
 		return err
 	}
-	if _, err := a.workspace.CreateLink(full(stringResult, StringInput), full(replace, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+	secondResult, err := a.newNode(StringResultClass, 820, 510, 0)
+	if err != nil {
+		return err
+	}
+	restResult, err := a.newNode(StringResultClass, 820, 630, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(split, StringInput), full(text, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(upper, StringInput), full(split, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(lower, StringInput), full(split, StringPartOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(replace, StringInput), full(split, StringRestOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(firstResult, StringInput), full(upper, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(secondResult, StringInput), full(lower, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(restResult, StringInput), full(replace, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
 		return err
 	}
 	a.log("seeded calculator graph and string push graph")
@@ -298,7 +333,7 @@ func (a *appState) newNode(class string, x, y, value float64) (pasta.NodeID, err
 		opts = pasta.NodeOptions{UseState: true, State: pasta.NodeState{
 			DisplayName: "Text",
 			PrimaryType: StringType,
-			Private:     map[string]any{"value": "hello pasta"},
+			Private:     map[string]any{"value": "hello PASTA demo"},
 			Metadata:    map[string]string{"createdBy": "demo"},
 		}}
 	}
@@ -584,7 +619,7 @@ func (a *appState) snapshot() snapshotDTO {
 			State: string(node.State), PrimaryType: node.Dynamic.PrimaryType,
 			Value: numberValue(node.Dynamic.Private), Text: textValue(node.Dynamic.Private),
 			Coordinate: [2]float64{x, y}, Inputs: portsDTO(node.Inputs),
-			Outputs: portsDTO(node.Outputs), Menu: node.Menu,
+			Outputs: portsDTO(node.Outputs), Messages: messagesDTO(node.Messages), Menu: node.Menu,
 		})
 	}
 	for _, link := range s.Links {
@@ -639,6 +674,18 @@ func portsDTO(ports []pasta.PortSpec) []portDTO {
 		out = append(out, portDTO{
 			ID: port.ID.String(), Number: port.ID.Number, Kind: string(port.Direction),
 			Name: port.Name, FixedType: port.FixedType, Multiple: port.Multiple,
+		})
+	}
+	return out
+}
+
+func messagesDTO(messages []pasta.NodeMessage) []messageDTO {
+	out := make([]messageDTO, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, messageDTO{
+			ID:   int64(message.ID),
+			Type: string(message.Type),
+			Text: message.Text,
 		})
 	}
 	return out

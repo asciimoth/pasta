@@ -140,6 +140,27 @@ button:hover {
   gap: 8px;
 }
 
+.nodeMessages {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.nodeMessage {
+  border-left: 3px solid #78c7f0;
+  border-radius: 4px;
+  background: #171a1d;
+  padding: 7px 8px;
+}
+
+.nodeMessage.warn {
+  border-left-color: var(--accent-2);
+}
+
+.nodeMessage.err {
+  border-left-color: var(--danger);
+}
+
 .field {
   display: grid;
   gap: 4px;

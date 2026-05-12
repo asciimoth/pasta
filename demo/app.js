@@ -178,6 +178,7 @@ function registerClasses(classes) {
         ctx.fillStyle = "#d45b5b";
         ctx.fillText(snap.state, 130, this.size[1] - 16);
       }
+      drawNodeMessages(ctx, this, snap);
     };
     PastaNode.prototype.onConnectionsChange = async function (type, slot, connected, linkInfo) {
       if (state.syncing || !linkInfo) return;
@@ -295,6 +296,18 @@ function renderMenu() {
   title.className = "status";
   title.textContent = `${node.shortClass} ${node.id}`;
   els.menu.appendChild(title);
+
+  if (node.messages && node.messages.length) {
+    const messages = document.createElement("div");
+    messages.className = "nodeMessages";
+    for (const message of node.messages) {
+      const item = document.createElement("div");
+      item.className = `nodeMessage ${message.type || "note"}`;
+      item.textContent = message.text || "";
+      messages.appendChild(item);
+    }
+    els.menu.appendChild(messages);
+  }
 
   const nameWrap = document.createElement("div");
   nameWrap.className = "field";
@@ -428,6 +441,33 @@ function nodeType(cls) {
 function nodeTitle(node) {
   const name = (node.displayName || node.shortClass || "").trim();
   return `${name || node.shortClass} ${node.id}`;
+}
+
+function drawNodeMessages(ctx, graphNode, snap) {
+  const messages = snap.messages || [];
+  if (!messages.length) return;
+  const message = messages[messages.length - 1];
+  const text = String(message.text || "");
+  const compact = text.length > 42 ? `${text.slice(0, 41)}...` : text;
+  const width = Math.min(230, Math.max(90, ctx.measureText(compact).width + 22));
+  const height = 24;
+  const x = 8;
+  const y = -height - 8;
+  ctx.fillStyle = messageColor(message.type);
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = "#101315";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(compact, x + 10, y + 16);
+  if (messages.length > 1) {
+    ctx.fillStyle = "#eef2f4";
+    ctx.fillText(`+${messages.length - 1}`, graphNode.size[0] - 30, 18);
+  }
+}
+
+function messageColor(type) {
+  if (type === "err") return "#ee7474";
+  if (type === "warn") return "#e1aa4d";
+  return "#78c7f0";
 }
 
 function updateLogs(logs) {

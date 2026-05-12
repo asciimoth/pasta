@@ -144,9 +144,15 @@ Changing it calls `Workspace.UpdateNodeMenuState`, which lets the runtime update
 private state and push values through connected calculator wires.
 
 String `Text` nodes also use `main/value`. Editing the text pushes the value
-through string wires to nodes such as `Trim`, `Uppercase`, `Lowercase`,
-`Replace`, and `String Result`. `Replace` exposes `main/find` and
-`main/replacement` fields and recomputes from its latest pushed input.
+through string wires to nodes such as `Split`, `Trim`, `Uppercase`, `Lowercase`,
+`Replace`, and `String Result`. `Split` exposes `main/separator` and routes the
+first, second, and remaining text segments through separate output ports.
+`Replace` exposes `main/find` and `main/replacement` fields and recomputes from
+its latest pushed input.
+
+String node menus also include demo buttons that attach note, warning, and error
+popup messages to the selected node. These messages are ephemeral Pasta node
+messages: they show in snapshots and on the graph, but are not saved or restored.
 
 ## Save / Restore
 

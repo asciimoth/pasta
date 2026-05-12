@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ const (
 	StringLibraryName = "strings.pasta.demo"
 
 	TextClass         = StringLibraryName + "/Text"
+	SplitClass        = StringLibraryName + "/Split"
 	TrimClass         = StringLibraryName + "/Trim"
 	UppercaseClass    = StringLibraryName + "/Uppercase"
 	LowercaseClass    = StringLibraryName + "/Lowercase"
@@ -22,8 +24,10 @@ const (
 )
 
 var (
-	StringInput  = pasta.PortID{Number: 1, Kind: pasta.InputPort}
-	StringOutput = pasta.PortID{Number: 1, Kind: pasta.OutputPort}
+	StringInput      = pasta.PortID{Number: 1, Kind: pasta.InputPort}
+	StringOutput     = pasta.PortID{Number: 1, Kind: pasta.OutputPort}
+	StringPartOutput = pasta.PortID{Number: 2, Kind: pasta.OutputPort}
+	StringRestOutput = pasta.PortID{Number: 3, Kind: pasta.OutputPort}
 )
 
 type stringSink interface {
@@ -32,6 +36,16 @@ type stringSink interface {
 
 type stringWire struct {
 	sink stringSink
+}
+
+type stringOutputWire struct {
+	port pasta.PortID
+	wire *stringWire
+}
+
+type stringDelivery struct {
+	sink  stringSink
+	value string
 }
 
 type StringLibrary struct{}
@@ -56,6 +70,22 @@ func StringClasses() []pasta.ClassSpec {
 			Default:     stringDefault("Text", map[string]any{"value": "hello pasta"}),
 			Outputs:     []pasta.PortSpec{stringOutput(StringOutput, "text")},
 			Runtime:     stringNodeClass{kind: "text"},
+		},
+		{
+			Name:        SplitClass,
+			DisplayName: "Split",
+			Description: "Splits incoming text across first, second, and rest outputs.",
+			Default: stringDefault("Split", map[string]any{
+				"value":     "",
+				"separator": " ",
+			}),
+			Inputs: []pasta.PortSpec{stringInput(StringInput, "text")},
+			Outputs: []pasta.PortSpec{
+				stringOutput(StringOutput, "first"),
+				stringOutput(StringPartOutput, "second"),
+				stringOutput(StringRestOutput, "rest"),
+			},
+			Runtime: stringNodeClass{kind: "split"},
 		},
 		stringTransformClass(TrimClass, "Trim", "Trims leading and trailing whitespace.", "trim"),
 		stringTransformClass(UppercaseClass, "Uppercase", "Converts text to upper case.", "uppercase"),
@@ -134,7 +164,7 @@ func (c stringNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState, 
 		ctx:   ctx,
 		kind:  c.kind,
 		state: stringStateFromAny(state.Private),
-		sinks: make(map[pasta.LinkID]*stringWire),
+		sinks: make(map[pasta.LinkID]stringOutputWire),
 	}
 	if err := ctx.Node.SetMenu(node.menu()); err != nil {
 		return nil, err
@@ -143,18 +173,20 @@ func (c stringNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState, 
 }
 
 type stringNode struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	ctx   pasta.NodeContext
 	kind  string
 	input string
 	state stringState
-	sinks map[pasta.LinkID]*stringWire
+	msgs  []pasta.MessageID
+	sinks map[pasta.LinkID]stringOutputWire
 }
 
 type stringState struct {
 	Value       string `json:"value"`
 	Find        string `json:"find,omitempty"`
 	Replacement string `json:"replacement,omitempty"`
+	Separator   string `json:"separator,omitempty"`
 }
 
 func (n *stringNode) PushString(value string) {
@@ -163,6 +195,12 @@ func (n *stringNode) PushString(value string) {
 	kind := n.kind
 	state := n.state
 	n.mu.Unlock()
+
+	if kind == "split" {
+		n.setValue(value)
+		n.pushSplit(value, state.Separator)
+		return
+	}
 
 	value = processString(kind, state, value)
 	n.setValue(value)
@@ -183,7 +221,7 @@ func (n *stringNode) BeforeLinkAttach(endpoint pasta.LinkEndpoint, object any) e
 	}
 	if endpoint.Direction == pasta.OutputPort {
 		n.mu.Lock()
-		n.sinks[endpoint.Link] = wire
+		n.sinks[endpoint.Link] = stringOutputWire{port: endpoint.Self.Port, wire: wire}
 		n.mu.Unlock()
 	}
 	return nil
@@ -191,7 +229,7 @@ func (n *stringNode) BeforeLinkAttach(endpoint pasta.LinkEndpoint, object any) e
 
 func (n *stringNode) AfterLinkAttach(endpoint pasta.LinkEndpoint, _ any) {
 	if endpoint.Direction == pasta.OutputPort {
-		n.push(n.value())
+		n.pushCurrent(endpoint.Self.Port)
 	}
 }
 
@@ -211,10 +249,10 @@ func (n *stringNode) AfterLinkDetach(endpoint pasta.LinkEndpoint) {
 }
 
 func (n *stringNode) ApplyMenuUpdate(update pasta.MenuStateUpdate) (pasta.MenuStateUpdate, error) {
-	n.mu.Lock()
+	n.mu.RLock()
 	state := n.state
 	kind := n.kind
-	n.mu.Unlock()
+	n.mu.RUnlock()
 
 	for _, field := range update.Fields {
 		if field.Block != "main" {
@@ -233,6 +271,10 @@ func (n *stringNode) ApplyMenuUpdate(update pasta.MenuStateUpdate) (pasta.MenuSt
 			if kind == "replace" {
 				state.Replacement = stringFromAny(field.Value)
 			}
+		case "separator":
+			if kind == "split" {
+				state.Separator = stringFromAny(field.Value)
+			}
 		}
 	}
 
@@ -240,6 +282,11 @@ func (n *stringNode) ApplyMenuUpdate(update pasta.MenuStateUpdate) (pasta.MenuSt
 	n.state = state
 	input := n.input
 	n.mu.Unlock()
+	if kind == "split" {
+		n.setValueWithoutMenu(input)
+		n.pushSplit(input, state.Separator)
+		return update, nil
+	}
 	if kind == "replace" {
 		value := processString(kind, state, input)
 		n.setValueWithoutMenu(value)
@@ -251,6 +298,48 @@ func (n *stringNode) ApplyMenuUpdate(update pasta.MenuStateUpdate) (pasta.MenuSt
 	return update, nil
 }
 
+func (n *stringNode) TriggerMenuButton(ref pasta.MenuButtonRef) error {
+	if ref.Block != "main" {
+		return nil
+	}
+	switch ref.Button {
+	case "message-note":
+		return n.addMessage(pasta.MessageNote, "This is a demo note attached to the node.")
+	case "message-warn":
+		return n.addMessage(pasta.MessageWarn, "This is a demo warning attached to the node.")
+	case "message-err":
+		return n.addMessage(pasta.MessageErr, "This is a demo error attached to the node.")
+	case "messages-clear":
+		return n.clearMessages()
+	default:
+		return nil
+	}
+}
+
+func (n *stringNode) addMessage(typ pasta.MessageType, text string) error {
+	id, err := n.ctx.Node.AddMessage(typ, text)
+	if err != nil {
+		return err
+	}
+	n.mu.Lock()
+	n.msgs = append(n.msgs, id)
+	n.mu.Unlock()
+	return nil
+}
+
+func (n *stringNode) clearMessages() error {
+	n.mu.Lock()
+	ids := append([]pasta.MessageID(nil), n.msgs...)
+	n.msgs = nil
+	n.mu.Unlock()
+	for _, id := range ids {
+		if err := n.ctx.Node.RemoveMessage(id); err != nil && !errors.Is(err, pasta.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (n *stringNode) ImportPrivateState(private any) error {
 	n.mu.Lock()
 	n.state = stringStateFromAny(private)
@@ -260,15 +349,9 @@ func (n *stringNode) ImportPrivateState(private any) error {
 }
 
 func (n *stringNode) ExportPrivateState() (any, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	return n.state, nil
-}
-
-func (n *stringNode) value() string {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.state.Value
 }
 
 func (n *stringNode) setValue(value string) {
@@ -285,32 +368,72 @@ func (n *stringNode) setValueWithoutMenu(value string) {
 }
 
 func (n *stringNode) push(value string) {
-	n.mu.Lock()
-	sinks := make([]stringSink, 0, len(n.sinks))
-	for _, wire := range n.sinks {
-		if wire.sink != nil {
-			sinks = append(sinks, wire.sink)
-		}
+	n.pushOutputs(nil, value)
+}
+
+func (n *stringNode) pushCurrent(port pasta.PortID) {
+	n.mu.RLock()
+	value := n.state.Value
+	separator := n.state.Separator
+	kind := n.kind
+	n.mu.RUnlock()
+	if kind == "split" {
+		n.pushOutput(port, splitString(value, separator)[port])
+		return
 	}
-	n.mu.Unlock()
-	for _, sink := range sinks {
-		sink.PushString(value)
+	n.pushOutput(port, value)
+}
+
+func (n *stringNode) pushSplit(value, separator string) {
+	n.pushOutputs(splitString(value, separator), "")
+}
+
+func (n *stringNode) pushOutput(port pasta.PortID, value string) {
+	n.pushOutputs(map[pasta.PortID]string{port: value}, "")
+}
+
+func (n *stringNode) pushOutputs(values map[pasta.PortID]string, fallback string) {
+	n.mu.RLock()
+	deliveries := make([]stringDelivery, 0, len(n.sinks))
+	for _, out := range n.sinks {
+		if out.wire == nil || out.wire.sink == nil {
+			continue
+		}
+		value := fallback
+		if values != nil {
+			var ok bool
+			value, ok = values[out.port]
+			if !ok {
+				continue
+			}
+		}
+		deliveries = append(deliveries, stringDelivery{sink: out.wire.sink, value: value})
+	}
+	n.mu.RUnlock()
+	for _, delivery := range deliveries {
+		delivery.sink.PushString(delivery.value)
 	}
 }
 
 func (n *stringNode) menu() pasta.NodeMenu {
-	n.mu.Lock()
+	n.mu.RLock()
 	kind := n.kind
 	state := n.state
-	n.mu.Unlock()
+	n.mu.RUnlock()
 
 	var fields []pasta.MenuField
-	if kind == "replace" {
+	switch kind {
+	case "replace":
 		fields = append(fields,
 			pasta.MenuField{ID: "find", Label: "Find", Kind: pasta.MenuFieldString, Value: state.Find},
 			pasta.MenuField{ID: "replacement", Label: "Replacement", Kind: pasta.MenuFieldString, Value: state.Replacement},
 		)
-	} else {
+	case "split":
+		fields = append(fields,
+			pasta.MenuField{ID: "separator", Label: "Separator", Kind: pasta.MenuFieldString, Value: state.Separator},
+			pasta.MenuField{ID: "value", Label: "Text", Kind: pasta.MenuFieldReadOnly, ReadOnly: true, Value: state.Value},
+		)
+	default:
 		valueField := pasta.MenuField{
 			ID:    "value",
 			Label: "Text",
@@ -327,7 +450,35 @@ func (n *stringNode) menu() pasta.NodeMenu {
 		ID:     "main",
 		Title:  "String",
 		Fields: fields,
+		Buttons: []pasta.MenuButton{
+			{ID: "message-note", Label: "Show Note"},
+			{ID: "message-warn", Label: "Show Warning"},
+			{ID: "message-err", Label: "Show Error"},
+			{ID: "messages-clear", Label: "Clear Messages"},
+		},
 	}}}
+}
+
+func splitString(value, separator string) map[pasta.PortID]string {
+	if separator == "" {
+		separator = " "
+	}
+	parts := strings.SplitN(value, separator, 3)
+	out := map[pasta.PortID]string{
+		StringOutput:     "",
+		StringPartOutput: "",
+		StringRestOutput: "",
+	}
+	if len(parts) > 0 {
+		out[StringOutput] = parts[0]
+	}
+	if len(parts) > 1 {
+		out[StringPartOutput] = parts[1]
+	}
+	if len(parts) > 2 {
+		out[StringRestOutput] = parts[2]
+	}
+	return out
 }
 
 func processString(kind string, state stringState, value string) string {
@@ -355,9 +506,10 @@ func stringStateFromAny(v any) stringState {
 			Value:       stringFromAny(x["value"]),
 			Find:        stringFromAny(x["find"]),
 			Replacement: stringFromAny(x["replacement"]),
+			Separator:   stringFromAny(x["separator"]),
 		}
 	case map[string]string:
-		return stringState{Value: x["value"], Find: x["find"], Replacement: x["replacement"]}
+		return stringState{Value: x["value"], Find: x["find"], Replacement: x["replacement"], Separator: x["separator"]}
 	case string:
 		return stringState{Value: x}
 	default:
