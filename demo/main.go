@@ -52,7 +52,9 @@ type nodeDTO struct {
 	ShortClass  string          `json:"shortClass"`
 	DisplayName string          `json:"displayName"`
 	State       string          `json:"state"`
+	PrimaryType string          `json:"primaryType"`
 	Value       float64         `json:"value"`
+	Text        string          `json:"text"`
 	Coordinate  [2]float64      `json:"coordinate"`
 	Inputs      []portDTO       `json:"inputs"`
 	Outputs     []portDTO       `json:"outputs"`
@@ -115,7 +117,8 @@ func (a *appState) reset() {
 	a.logs = nil
 	a.workspace = pasta.NewWorkspace(pasta.WithLogger((*demoLogger)(a)))
 	a.must(a.workspace.RegisterLibrary(examples.CalculatorLibrary{}), "register calculator library")
-	a.log("workspace initialized and calculator classes registered")
+	a.must(a.workspace.RegisterLibrary(StringLibrary{}), "register string library")
+	a.log("workspace initialized and demo classes registered")
 }
 
 func (a *appState) call(method, raw string) string {
@@ -236,7 +239,32 @@ func (a *appState) seed() error {
 	if err := a.workspace.TriggerNodeMenuButton(result, pasta.MenuButtonRef{Block: "main", Button: "pull"}); err != nil {
 		return err
 	}
-	a.log("seeded calculator graph: 10 + 6 -> result")
+	text, err := a.newNode(TextClass, 80, 460, 0)
+	if err != nil {
+		return err
+	}
+	upper, err := a.newNode(UppercaseClass, 360, 460, 0)
+	if err != nil {
+		return err
+	}
+	replace, err := a.newNode(ReplaceClass, 600, 460, 0)
+	if err != nil {
+		return err
+	}
+	stringResult, err := a.newNode(StringResultClass, 860, 460, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(upper, StringInput), full(text, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(replace, StringInput), full(upper, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(stringResult, StringInput), full(replace, StringOutput), pasta.LinkOptions{Type: StringType}); err != nil {
+		return err
+	}
+	a.log("seeded calculator graph and string push graph")
 	return nil
 }
 
@@ -258,11 +286,19 @@ func (a *appState) createNode(raw string) (snapshotDTO, error) {
 
 func (a *appState) newNode(class string, x, y, value float64) (pasta.NodeID, error) {
 	opts := pasta.NodeOptions{}
-	if class == examples.ConstantClass {
+	switch class {
+	case examples.ConstantClass:
 		opts = pasta.NodeOptions{UseState: true, State: pasta.NodeState{
 			DisplayName: "Constant",
 			PrimaryType: examples.NumberType,
 			Private:     value,
+			Metadata:    map[string]string{"createdBy": "demo"},
+		}}
+	case TextClass:
+		opts = pasta.NodeOptions{UseState: true, State: pasta.NodeState{
+			DisplayName: "Text",
+			PrimaryType: StringType,
+			Private:     map[string]any{"value": "hello pasta"},
 			Metadata:    map[string]string{"createdBy": "demo"},
 		}}
 	}
@@ -350,7 +386,11 @@ func (a *appState) createLink(raw string) (snapshotDTO, error) {
 	if err != nil {
 		return snapshotDTO{}, err
 	}
-	id, err := a.workspace.CreateLink(input, output, pasta.LinkOptions{Type: examples.NumberType})
+	linkType, err := a.linkType(input, output)
+	if err != nil {
+		return snapshotDTO{}, err
+	}
+	id, err := a.workspace.CreateLink(input, output, pasta.LinkOptions{Type: linkType})
 	if err != nil {
 		return snapshotDTO{}, err
 	}
@@ -494,6 +534,9 @@ func (a *appState) restoreLocked(data pasta.SaveData) error {
 	if err := a.workspace.RegisterLibrary(examples.CalculatorLibrary{}); err != nil {
 		return err
 	}
+	if err := a.workspace.RegisterLibrary(StringLibrary{}); err != nil {
+		return err
+	}
 	if err := a.workspace.Restore(data); err != nil {
 		return err
 	}
@@ -524,7 +567,7 @@ func (a *appState) snapshot() snapshotDTO {
 	s := a.workspace.Snapshot()
 	out := snapshotDTO{}
 	for _, class := range s.Classes {
-		if !class.Active || class.Library != examples.CalculatorLibraryName {
+		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName) {
 			continue
 		}
 		out.Classes = append(out.Classes, classDTO{
@@ -538,7 +581,8 @@ func (a *appState) snapshot() snapshotDTO {
 		out.Nodes = append(out.Nodes, nodeDTO{
 			ID: node.ID.String(), Number: int64(node.ID), Class: node.Class,
 			ShortClass: shortClass(node.Class), DisplayName: node.Dynamic.DisplayName,
-			State: string(node.State), Value: numberValue(node.Dynamic.Private),
+			State: string(node.State), PrimaryType: node.Dynamic.PrimaryType,
+			Value: numberValue(node.Dynamic.Private), Text: textValue(node.Dynamic.Private),
 			Coordinate: [2]float64{x, y}, Inputs: portsDTO(node.Inputs),
 			Outputs: portsDTO(node.Outputs), Menu: node.Menu,
 		})
@@ -552,6 +596,41 @@ func (a *appState) snapshot() snapshotDTO {
 		})
 	}
 	return out
+}
+
+func (a *appState) linkType(input, output pasta.FullPortID) (string, error) {
+	inNode, ok := a.workspace.Node(input.Node)
+	if !ok {
+		return "", fmt.Errorf("input node %s not found", input.Node)
+	}
+	outNode, ok := a.workspace.Node(output.Node)
+	if !ok {
+		return "", fmt.Errorf("output node %s not found", output.Node)
+	}
+	inPort, ok := findPort(inNode.Inputs, input.Port)
+	if !ok {
+		return "", fmt.Errorf("input port %s not found", input.Port)
+	}
+	outPort, ok := findPort(outNode.Outputs, output.Port)
+	if !ok {
+		return "", fmt.Errorf("output port %s not found", output.Port)
+	}
+	if outPort.FixedType != "" {
+		return outPort.FixedType, nil
+	}
+	if inPort.FixedType != "" {
+		return inPort.FixedType, nil
+	}
+	return "", nil
+}
+
+func findPort(ports []pasta.PortSpec, id pasta.PortID) (pasta.PortSpec, bool) {
+	for _, port := range ports {
+		if port.ID == id {
+			return port, true
+		}
+	}
+	return pasta.PortSpec{}, false
 }
 
 func portsDTO(ports []pasta.PortSpec) []portDTO {
@@ -654,6 +733,10 @@ func numberValue(v any) float64 {
 	default:
 		return 0
 	}
+}
+
+func textValue(v any) string {
+	return stringStateFromAny(v).Value
 }
 
 type demoLogger appState

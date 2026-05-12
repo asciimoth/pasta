@@ -2,7 +2,8 @@
 
 This demo is a static web app that uses Pasta from Go compiled to WebAssembly as
 the graph backend and `github.com/jagenjo/litegraph.js` as the browser graph
-editor. It currently exposes the calculator library from `pasta/examples`.
+editor. It exposes the calculator library from `pasta/examples` and a
+demo-local string processing library.
 
 The important rule is:
 
@@ -43,9 +44,10 @@ Git.
 
 ## Files
 
-- `main.go`: WASM backend. It owns a `pasta.Workspace`, registers
-  `examples.CalculatorLibrary`, exposes `window.pastaDemoCall(method, json)`,
-  and returns JSON responses.
+- `main.go`: WASM backend. It owns a `pasta.Workspace`, registers the demo
+  libraries, exposes `window.pastaDemoCall(method, json)`, and returns JSON
+  responses.
+- `string_nodes.go`: demo-local string node library using push-style data flow.
 - `main_stub.go`: host build stub so `go test ./...` works outside `GOOS=js
   GOARCH=wasm`.
 - `app.js`: browser controller. It creates the LiteGraph canvas, translates UI
@@ -141,15 +143,20 @@ Calculator constants use the example runtime menu field named `main/value`.
 Changing it calls `Workspace.UpdateNodeMenuState`, which lets the runtime update
 private state and push values through connected calculator wires.
 
+String `Text` nodes also use `main/value`. Editing the text pushes the value
+through string wires to nodes such as `Trim`, `Uppercase`, `Lowercase`,
+`Replace`, and `String Result`. `Replace` exposes `main/find` and
+`main/replacement` fields and recomputes from its latest pushed input.
+
 ## Save / Restore
 
-`save` calls `Workspace.SaveWithRuntimeState()` so runtime-owned calculator
-values are included in the text dump.
+`save` calls `Workspace.SaveWithRuntimeState()` so runtime-owned calculator and
+string values are included in the text dump.
 
-`restore` rebuilds a fresh workspace, registers the calculator library, restores
-the `SaveData`, then rehydrates runtime link objects by deleting and recreating
-each restored link. This mirrors the pattern in `pasta/examples/usage_test.go`.
-The persisted `SaveData` stores graph state, not Go link objects.
+`restore` rebuilds a fresh workspace, registers the demo libraries, restores the
+`SaveData`, then rehydrates runtime link objects by deleting and recreating each
+restored link. This mirrors the pattern in `pasta/examples/usage_test.go`. The
+persisted `SaveData` stores graph state, not Go link objects.
 
 ## Copy / Paste
 

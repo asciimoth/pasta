@@ -161,7 +161,7 @@ function registerClasses(classes) {
     if (state.classRegistry.has(type)) continue;
     function PastaNode() {
       this.title = cls.displayName || cls.shortName;
-      this.size = [190, cls.shortName === "Result" ? 78 : 104];
+      this.size = [210, cls.inputs.length && cls.outputs.length ? 104 : 86];
       for (const input of cls.inputs) this.addInput(input.name, input.fixedType || "number");
       for (const output of cls.outputs) this.addOutput(output.name, output.fixedType || "number");
       this.properties = { backendId: "" };
@@ -173,10 +173,10 @@ function registerClasses(classes) {
       if (!snap) return;
       ctx.fillStyle = "#dce5e8";
       ctx.font = "13px sans-serif";
-      ctx.fillText(`value: ${formatNumber(snap.value)}`, 12, this.size[1] - 16);
+      ctx.fillText(valueLabel(snap), 12, this.size[1] - 16);
       if (snap.state !== "active") {
         ctx.fillStyle = "#d45b5b";
-        ctx.fillText(snap.state, 105, this.size[1] - 16);
+        ctx.fillText(snap.state, 130, this.size[1] - 16);
       }
     };
     PastaNode.prototype.onConnectionsChange = async function (type, slot, connected, linkInfo) {
@@ -221,7 +221,7 @@ function registerClasses(classes) {
         },
       ];
       const snap = findNode(node.backendId);
-      if (snap && snap.shortClass === "Result") {
+      if (snap && snap.class === "calc.pasta.example.com/Result") {
         options.unshift({
           content: "Pull result",
           callback: async () => refresh(await call("triggerMenuButton", { node: node.backendId, block: "main", button: "pull" })),
@@ -257,7 +257,7 @@ function syncGraph(snapshot) {
   state.lgToBackend.clear();
 
   for (const snap of snapshot.nodes) {
-    const node = LiteGraph.createNode(nodeType({ shortName: snap.shortClass }));
+    const node = LiteGraph.createNode(nodeType({ class: snap.class, shortName: snap.shortClass }));
     node.title = nodeTitle(snap);
     node.backendId = snap.id;
     node.properties.backendId = snap.id;
@@ -421,7 +421,8 @@ function slotForPort(slots, port) {
 }
 
 function nodeType(cls) {
-  return `pasta/${cls.shortName}`;
+  const name = cls.name || cls.class || cls.shortName;
+  return `pasta/${name.replace(/[^A-Za-z0-9_/-]/g, "_")}`;
 }
 
 function nodeTitle(node) {
@@ -449,4 +450,13 @@ function formatNumber(value) {
 
 function formatAny(value) {
   return typeof value === "number" ? formatNumber(value) : String(value ?? "");
+}
+
+function valueLabel(node) {
+  if (node.primaryType === "strings.pasta.demo/string") {
+    const text = String(node.text ?? "");
+    const compact = text.length > 18 ? `${text.slice(0, 17)}...` : text;
+    return `text: ${compact}`;
+  }
+  return `value: ${formatNumber(node.value)}`;
 }
