@@ -69,9 +69,13 @@ func (panicLibrary) DefineClasses(LibraryScope) error {
 }
 
 func TestRegisterLibraryRecoversPanic(t *testing.T) {
-	w := NewWorkspace()
+	logger := &testLogger{}
+	w := NewWorkspace(WithLogger(logger))
 	if err := w.RegisterLibrary(panicLibrary{}); err == nil {
 		t.Fatal("expected register panic error")
+	}
+	if len(logger.errs) == 0 {
+		t.Fatal("expected library panic to be logged")
 	}
 	if len(w.Snapshot().Libraries) != 0 {
 		t.Fatal("panicking library registration should be rolled back")
@@ -1772,6 +1776,8 @@ func TestLifecycleCreateLinkUsesInputObjectAndAttachDetachHooks(t *testing.T) {
 
 func TestLifecycleCreateLinkRollsBackOnHookErrorOrPanic(t *testing.T) {
 	w, nodes, _ := lifecycleWorkspace(t, &lifecycleClass{})
+	logger := &testLogger{}
+	w.logger = logger
 	a, _ := w.CreateNode("example.com/Source", NodeOptions{})
 	b, _ := w.CreateNode("example.com/Source", NodeOptions{})
 	nodes[a].failAttach = true
@@ -1785,6 +1791,9 @@ func TestLifecycleCreateLinkRollsBackOnHookErrorOrPanic(t *testing.T) {
 	if len(w.Snapshot().Links) != 0 {
 		t.Fatal("failed attach should not create a link")
 	}
+	if len(logger.errs) == 0 {
+		t.Fatal("expected failed attach hook to be logged")
+	}
 	nodes[a].failAttach = false
 	nodes[b].panicOnProvider = true
 	if _, err := w.CreateLink(
@@ -1796,6 +1805,9 @@ func TestLifecycleCreateLinkRollsBackOnHookErrorOrPanic(t *testing.T) {
 	}
 	if len(w.Snapshot().Links) != 0 {
 		t.Fatal("panicking provider should not create a link")
+	}
+	if len(logger.errs) < 2 {
+		t.Fatal("expected provider panic to be logged")
 	}
 }
 
@@ -2601,6 +2613,8 @@ func (l createThenFailLibrary) DefineClasses(scope LibraryScope) error {
 func TestRegisterLibraryRollbackRestoresInactiveNodesOnDefineError(t *testing.T) {
 	initialRuntime := &lifecycleClass{}
 	w, _, _ := lifecycleWorkspace(t, initialRuntime)
+	logger := &testLogger{}
+	w.logger = logger
 	node, err := w.CreateNode("example.com/Source", NodeOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -2631,6 +2645,9 @@ func TestRegisterLibraryRollbackRestoresInactiveNodesOnDefineError(t *testing.T)
 	})
 	if err == nil {
 		t.Fatal("expected register failure")
+	}
+	if len(logger.errs) == 0 {
+		t.Fatal("expected library define error to be logged")
 	}
 	after := w.Snapshot()
 	if len(after.Libraries) != 0 || len(after.Classes) != len(before.Classes) {

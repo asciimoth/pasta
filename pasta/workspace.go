@@ -172,12 +172,13 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			w.logPanic("register library", r)
+			w.logPanic("register library hook", r)
 			err = errors.Join(opErr("register library", "hook", fmt.Errorf("panic: %v", r)), rollback())
 		}
 	}()
 	var detachEvents []linkDetachEvent
 	if err := lib.DefineClasses(&libraryScope{w: w, library: name, detachEvents: &detachEvents, cleanupRuntimes: cleanupRuntimes}); err != nil {
+		w.logError("register library hook", err)
 		return errors.Join(opErr("register library", "hook", err), rollback())
 	}
 	w.callAfterLinkDetachEvents(detachEvents)
@@ -1440,6 +1441,12 @@ func findPort(ports []PortSpec, id PortID) (*PortSpec, bool) {
 func (w *Workspace) logPanic(op string, r any) {
 	if w.logger != nil {
 		w.logger.Errf("%s panic: %v", op, r)
+	}
+}
+
+func (w *Workspace) logError(op string, err error) {
+	if w.logger != nil && err != nil {
+		w.logger.Errf("%s error: %v", op, err)
 	}
 }
 

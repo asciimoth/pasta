@@ -89,12 +89,10 @@ func (w *Workspace) callAfterLinkAttach(runtime NodeRuntime, endpoint LinkEndpoi
 	if !ok {
 		return
 	}
-	if err := w.recoverHook("after link attach", func() error {
+	_ = w.recoverHook("after link attach", func() error {
 		hook.AfterLinkAttach(endpoint, object)
 		return nil
-	}); err != nil {
-		w.logPanic("after link attach", err)
-	}
+	})
 }
 
 func (w *Workspace) callBeforeLinkDetach(runtime NodeRuntime, endpoint LinkEndpoint) error {
@@ -112,12 +110,10 @@ func (w *Workspace) callAfterLinkDetach(runtime NodeRuntime, endpoint LinkEndpoi
 	if !ok {
 		return
 	}
-	if err := w.recoverHook("after link detach", func() error {
+	_ = w.recoverHook("after link detach", func() error {
 		hook.AfterLinkDetach(endpoint)
 		return nil
-	}); err != nil {
-		w.logPanic("after link detach", err)
-	}
+	})
 }
 
 func (w *Workspace) callAfterLinkInactive(runtime NodeRuntime, endpoint LinkEndpoint, reason InactiveReason) {
@@ -125,12 +121,10 @@ func (w *Workspace) callAfterLinkInactive(runtime NodeRuntime, endpoint LinkEndp
 	if !ok {
 		return
 	}
-	if err := w.recoverHook("after link inactive", func() error {
+	_ = w.recoverHook("after link inactive", func() error {
 		hook.AfterLinkInactive(endpoint, reason)
 		return nil
-	}); err != nil {
-		w.logPanic("after link inactive", err)
-	}
+	})
 }
 
 func (w *Workspace) callBeforeInactive(runtime NodeRuntime, reason InactiveReason) error {
@@ -148,12 +142,10 @@ func (w *Workspace) callAfterInactive(runtime NodeRuntime, reason InactiveReason
 	if !ok {
 		return
 	}
-	if err := w.recoverHook("after inactive", func() error {
+	_ = w.recoverHook("after inactive", func() error {
 		hook.AfterInactive(reason)
 		return nil
-	}); err != nil {
-		w.logPanic("after inactive", err)
-	}
+	})
 }
 
 func (w *Workspace) callBeforeDelete(runtime NodeRuntime) error {
@@ -248,12 +240,10 @@ func (w *Workspace) callAfterDelete(runtime NodeRuntime) {
 	if !ok {
 		return
 	}
-	if err := w.recoverHook("after delete", func() error {
+	_ = w.recoverHook("after delete", func() error {
 		hook.AfterDelete()
 		return nil
-	}); err != nil {
-		w.logPanic("after delete", err)
-	}
+	})
 }
 
 func (w *Workspace) callNodeClose(runtime NodeRuntime) error {
@@ -267,11 +257,15 @@ func (w *Workspace) callNodeClose(runtime NodeRuntime) error {
 func (w *Workspace) recoverHook(op string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			w.logPanic(op, r)
+			w.logPanic(op+" hook", r)
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	return fn()
+	err = fn()
+	if err != nil {
+		w.logError(op+" hook", err)
+	}
+	return err
 }
 
 func (w *Workspace) linkRuntimesLocked(link *linkRecord) (NodeRuntime, NodeRuntime) {
