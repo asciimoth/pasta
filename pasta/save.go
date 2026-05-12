@@ -23,7 +23,8 @@ type SaveData struct {
 //
 // ID is the canonical node ID string. Class is the qualified class name used to
 // recover the node when that class is available. State stores public editor data
-// and private application data.
+// and private application data. Inputs and Outputs preserve the node's current
+// port definitions, including port metadata annotations.
 type SaveNode struct {
 	ID      string     `json:"id"`
 	Class   string     `json:"class"`

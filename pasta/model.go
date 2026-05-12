@@ -26,7 +26,11 @@ const (
 // unique within that node and must use the same direction as Direction. A port
 // can declare one FixedType or a list of AcceptedTypes; linked ports may only
 // be replaced when every existing link still satisfies the new contract.
-// Metadata is editor/application data and is defensively copied by snapshots.
+//
+// Metadata is public string data for editor and application annotations, such
+// as labels, grouping hints, UI affordances, or integration-specific tags. The
+// workspace stores, persists, and defensively copies it, but does not interpret
+// it for validation, type compatibility, lifecycle hooks, or link behavior.
 type PortSpec struct {
 	ID            PortID
 	Name          string
@@ -40,8 +44,10 @@ type PortSpec struct {
 // NodeState is the dynamic state stored for a node.
 //
 // DisplayName, Description, PrimaryType, Coordinate, and Metadata are public
-// editor-facing values. Private is application-owned runtime state; the
-// workspace stores, copies, and restores it without interpretation. Runtimes
+// editor-facing values. Metadata is public string data for annotations that
+// should be visible in snapshots and persistence, but should not affect graph
+// validation or runtime contracts. Private is application-owned runtime state;
+// the workspace stores, copies, and restores it without interpretation. Runtimes
 // that need their latest volatile private value included in SaveWithRuntimeState
 // or Copy should implement NodePrivateExportHook.
 type NodeState struct {
@@ -56,9 +62,11 @@ type NodeState struct {
 // ClassSpec describes a node class definition supplied by a Library.
 //
 // Name must be under the defining library's prefix. Default, Inputs, Outputs,
-// and Metadata are copied into newly created nodes. Runtime is optional; when it
-// is non-nil, the workspace calls InitNode for each active node instance and
-// stores the returned NodeRuntime for later lifecycle hooks.
+// and Metadata are copied into newly created nodes. Class Metadata describes
+// the class itself, for example catalog, palette, or documentation annotations;
+// use Default.Metadata for metadata that should become per-node state. Runtime
+// is optional; when it is non-nil, the workspace calls InitNode for each active
+// node instance and stores the returned NodeRuntime for later lifecycle hooks.
 type ClassSpec struct {
 	Name        string
 	DisplayName string
@@ -74,7 +82,8 @@ type ClassSpec struct {
 //
 // By default CreateNode starts from the class default state. Set UseState to
 // true to use State instead, for example when a controller wants to seed public
-// metadata or private state explicitly.
+// metadata or private state explicitly. Metadata supplied through State is
+// copied into the new node's dynamic state and remains editable after creation.
 type NodeOptions struct {
 	State    NodeState
 	UseState bool
