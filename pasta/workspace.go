@@ -17,16 +17,19 @@ import (
 // Mutations validate the model under the workspace lock, call application hooks
 // outside the lock when needed, then revalidate before commit.
 type Workspace struct {
-	mu       sync.RWMutex
-	logger   Logger
-	closed   bool
-	nextNode NodeID
-	nextLink LinkID
+	mu          sync.RWMutex
+	logger      Logger
+	closed      bool
+	nextNode    NodeID
+	nextLink    LinkID
+	nextMessage MessageID
 
 	libraries map[string]Library
 	classes   map[string]*classRecord
 	nodes     map[NodeID]*nodeRecord
 	links     map[LinkID]*linkRecord
+	messages  map[MessageID]*messageRecord
+	watchers  map[*MessageSubscription]bool
 }
 
 type classRecord struct {
@@ -56,6 +59,62 @@ type linkRecord struct {
 	object    any
 }
 
+type messageRecord struct {
+	id   MessageID
+	node NodeID
+	typ  MessageType
+	text string
+}
+
+// MessageSubscription receives ephemeral node message events.
+type MessageSubscription struct {
+	w      *Workspace
+	mu     sync.Mutex
+	ch     chan MessageEvent
+	closed bool
+}
+
+// Events returns the channel carrying message events.
+func (s *MessageSubscription) Events() <-chan MessageEvent {
+	if s == nil {
+		return nil
+	}
+	return s.ch
+}
+
+// Close unsubscribes and closes the event channel.
+func (s *MessageSubscription) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	close(s.ch)
+	w := s.w
+	s.mu.Unlock()
+	if w != nil {
+		w.mu.Lock()
+		delete(w.watchers, s)
+		w.mu.Unlock()
+	}
+}
+
+func (s *MessageSubscription) send(event MessageEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.ch <- event:
+	default:
+	}
+}
+
 // WorkspaceOption configures a Workspace.
 type WorkspaceOption func(*Workspace)
 
@@ -73,12 +132,15 @@ func WithLogger(logger Logger) WorkspaceOption {
 // at 1. Register one or more libraries before creating nodes.
 func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 	w := &Workspace{
-		nextNode:  1,
-		nextLink:  1,
-		libraries: make(map[string]Library),
-		classes:   make(map[string]*classRecord),
-		nodes:     make(map[NodeID]*nodeRecord),
-		links:     make(map[LinkID]*linkRecord),
+		nextNode:    1,
+		nextLink:    1,
+		nextMessage: 1,
+		libraries:   make(map[string]Library),
+		classes:     make(map[string]*classRecord),
+		nodes:       make(map[NodeID]*nodeRecord),
+		links:       make(map[LinkID]*linkRecord),
+		messages:    make(map[MessageID]*messageRecord),
+		watchers:    make(map[*MessageSubscription]bool),
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -121,7 +183,11 @@ func (w *Workspace) Close() error {
 	for _, l := range w.links {
 		l.state = StateInactive
 	}
+	messageEvents := w.removeAllMessagesLocked()
+	w.nextMessage = 1
+	watchers := w.messageWatchersLocked()
 	w.mu.Unlock()
+	w.notifyMessageWatchers(watchers, messageEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveWorkspaceClose)
 	w.callLinkInactiveEvents(linkEvents, InactiveWorkspaceClose)
 	if err := w.callCloseEvents(nodeEvents); err != nil {
@@ -157,6 +223,8 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
 	oldLinks := cloneLinkRecords(w.links)
+	oldMessages := cloneMessageRecords(w.messages)
+	oldNextMessage := w.nextMessage
 	w.libraries[name] = lib
 	w.mu.Unlock()
 
@@ -167,6 +235,8 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		w.classes = oldClasses
 		w.nodes = oldNodes
 		w.links = oldLinks
+		w.messages = oldMessages
+		w.nextMessage = oldNextMessage
 		w.mu.Unlock()
 		return w.cleanupInitializedRuntimes(cleanupRuntimes, nil)
 	}
@@ -177,10 +247,12 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		}
 	}()
 	var detachEvents []linkDetachEvent
-	if err := lib.DefineClasses(&libraryScope{w: w, library: name, detachEvents: &detachEvents, cleanupRuntimes: cleanupRuntimes}); err != nil {
+	scope := &libraryScope{w: w, library: name, detachEvents: &detachEvents, cleanupRuntimes: cleanupRuntimes, registering: true}
+	if err := lib.DefineClasses(scope); err != nil {
 		w.logError("register library hook", err)
 		return errors.Join(opErr("register library", "hook", err), rollback())
 	}
+	scope.registering = false
 	w.callAfterLinkDetachEvents(detachEvents)
 	return nil
 }
@@ -247,6 +319,8 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
 	oldLinks := cloneLinkRecords(w.links)
+	oldMessages := cloneMessageRecords(w.messages)
+	oldNextMessage := w.nextMessage
 	detachEvents, err := w.defineClassLocked(library, spec)
 	if err != nil {
 		w.mu.Unlock()
@@ -265,6 +339,8 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 			w.classes = oldClasses
 			w.nodes = oldNodes
 			w.links = oldLinks
+			w.messages = oldMessages
+			w.nextMessage = oldNextMessage
 			w.mu.Unlock()
 			return errors.Join(err, cleanupErr)
 		}
@@ -277,6 +353,8 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 		w.classes = oldClasses
 		w.nodes = oldNodes
 		w.links = oldLinks
+		w.messages = oldMessages
+		w.nextMessage = oldNextMessage
 		w.mu.Unlock()
 		return errors.Join(err, w.cleanupInitializedRuntimes(runtimes, scopes))
 	}
@@ -286,6 +364,8 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 			w.classes = oldClasses
 			w.nodes = oldNodes
 			w.links = oldLinks
+			w.messages = oldMessages
+			w.nextMessage = oldNextMessage
 			w.mu.Unlock()
 			return errors.Join(opErr("define class", "validate", ErrInactive), w.cleanupInitializedRuntimes(runtimes, scopes))
 		}
@@ -437,13 +517,16 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 		w.mu.Unlock()
 		return opErr("delete node", "validate", ErrNotFound)
 	}
+	messageEvents := w.removeNodeMessagesLocked(id)
 	delete(w.nodes, id)
 	for linkID, link := range w.links {
 		if link.input.Node == id || link.output.Node == id {
 			delete(w.links, linkID)
 		}
 	}
+	watchers := w.messageWatchersLocked()
 	w.mu.Unlock()
+	w.notifyMessageWatchers(watchers, messageEvents)
 	w.callAfterDelete(runtime)
 	if err := w.callNodeClose(runtime); err != nil {
 		return opErr("delete node", "hook", err)
@@ -515,6 +598,75 @@ func (w *Workspace) DeleteNodeMetadataValue(id NodeID, key string) error {
 		node.dynamic.Metadata = nil
 	}
 	return nil
+}
+
+// AddNodeMessage attaches an ephemeral text message to a node.
+func (w *Workspace) AddNodeMessage(id NodeID, typ MessageType, text string) (MessageID, error) {
+	w.mu.Lock()
+	if err := w.checkOpenLocked("add node message"); err != nil {
+		w.mu.Unlock()
+		return 0, err
+	}
+	if _, ok := w.nodes[id]; !ok {
+		w.mu.Unlock()
+		return 0, opErr("add node message", "validate", ErrNotFound)
+	}
+	if !validMessageType(typ) {
+		w.mu.Unlock()
+		return 0, opErr("add node message", "validate", ErrInvalidName)
+	}
+	messageID := w.nextMessage
+	w.nextMessage++
+	rec := &messageRecord{id: messageID, node: id, typ: typ, text: text}
+	w.messages[messageID] = rec
+	event := MessageEvent{Kind: MessageAdded, Message: snapshotMessage(rec)}
+	watchers := w.messageWatchersLocked()
+	w.mu.Unlock()
+	w.notifyMessageWatchers(watchers, []MessageEvent{event})
+	return messageID, nil
+}
+
+// RemoveNodeMessage removes one ephemeral text message from a node.
+func (w *Workspace) RemoveNodeMessage(nodeID NodeID, messageID MessageID) error {
+	w.mu.Lock()
+	if err := w.checkOpenLocked("remove node message"); err != nil {
+		w.mu.Unlock()
+		return err
+	}
+	if _, ok := w.nodes[nodeID]; !ok {
+		w.mu.Unlock()
+		return opErr("remove node message", "validate", ErrNotFound)
+	}
+	rec, ok := w.messages[messageID]
+	if !ok || rec.node != nodeID {
+		w.mu.Unlock()
+		return opErr("remove node message", "validate", ErrNotFound)
+	}
+	event := MessageEvent{Kind: MessageRemoved, Message: snapshotMessage(rec)}
+	delete(w.messages, messageID)
+	watchers := w.messageWatchersLocked()
+	w.mu.Unlock()
+	w.notifyMessageWatchers(watchers, []MessageEvent{event})
+	return nil
+}
+
+// WatchMessages subscribes to ephemeral node message add/remove events.
+//
+// The returned subscription only receives changes made after subscription. Use
+// Snapshot or NodeMessages to read messages that already exist. Events are
+// dropped when the subscription buffer is full.
+func (w *Workspace) WatchMessages(buffer int) *MessageSubscription {
+	if buffer < 0 {
+		buffer = 0
+	}
+	sub := &MessageSubscription{w: w, ch: make(chan MessageEvent, buffer)}
+	w.mu.Lock()
+	if w.watchers == nil {
+		w.watchers = make(map[*MessageSubscription]bool)
+	}
+	w.watchers[sub] = true
+	w.mu.Unlock()
+	return sub
 }
 
 // SetNodeState replaces editable public/private node state while preserving class and ports.
@@ -931,7 +1083,7 @@ func (w *Workspace) Node(id NodeID) (NodeSnapshot, bool) {
 	if !ok {
 		return NodeSnapshot{}, false
 	}
-	return snapshotNode(node), true
+	return w.snapshotNodeLocked(node), true
 }
 
 // Link returns one link snapshot.
@@ -943,6 +1095,13 @@ func (w *Workspace) Link(id LinkID) (LinkSnapshot, bool) {
 		return LinkSnapshot{}, false
 	}
 	return snapshotLink(link), true
+}
+
+// NodeMessages returns deterministic defensive snapshots of ephemeral messages for one node.
+func (w *Workspace) NodeMessages(id NodeID) []NodeMessage {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.nodeMessagesLocked(id)
 }
 
 func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDetachEvent, error) {
@@ -1354,7 +1513,7 @@ func (w *Workspace) snapshotLocked() Snapshot {
 	sort.Slice(s.Libraries, func(i, j int) bool { return s.Libraries[i].Name < s.Libraries[j].Name })
 	s.Classes = w.classesByLibraryLocked("")
 	for _, node := range w.nodes {
-		s.Nodes = append(s.Nodes, snapshotNode(node))
+		s.Nodes = append(s.Nodes, w.snapshotNodeLocked(node))
 	}
 	sort.Slice(s.Nodes, func(i, j int) bool { return s.Nodes[i].ID < s.Nodes[j].ID })
 	for _, link := range w.links {
@@ -1393,6 +1552,83 @@ func snapshotNode(node *nodeRecord) NodeSnapshot {
 		Dynamic: cloneNodeState(node.dynamic),
 		Inputs:  clonePorts(node.inputs),
 		Outputs: clonePorts(node.outputs),
+	}
+}
+
+func (w *Workspace) snapshotNodeLocked(node *nodeRecord) NodeSnapshot {
+	snap := snapshotNode(node)
+	snap.Messages = w.nodeMessagesLocked(node.id)
+	return snap
+}
+
+func snapshotMessage(message *messageRecord) NodeMessage {
+	return NodeMessage{
+		ID:   message.id,
+		Node: message.node,
+		Type: message.typ,
+		Text: message.text,
+	}
+}
+
+func (w *Workspace) nodeMessagesLocked(id NodeID) []NodeMessage {
+	messages := make([]NodeMessage, 0)
+	for _, message := range w.messages {
+		if message.node == id {
+			messages = append(messages, snapshotMessage(message))
+		}
+	}
+	sort.Slice(messages, func(i, j int) bool { return messages[i].ID < messages[j].ID })
+	return messages
+}
+
+func validMessageType(typ MessageType) bool {
+	switch typ {
+	case MessageNote, MessageWarn, MessageErr:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *Workspace) removeNodeMessagesLocked(id NodeID) []MessageEvent {
+	var events []MessageEvent
+	for messageID, message := range w.messages {
+		if message.node != id {
+			continue
+		}
+		events = append(events, MessageEvent{Kind: MessageRemoved, Message: snapshotMessage(message)})
+		delete(w.messages, messageID)
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].Message.ID < events[j].Message.ID })
+	return events
+}
+
+func (w *Workspace) removeAllMessagesLocked() []MessageEvent {
+	events := make([]MessageEvent, 0, len(w.messages))
+	for messageID, message := range w.messages {
+		events = append(events, MessageEvent{Kind: MessageRemoved, Message: snapshotMessage(message)})
+		delete(w.messages, messageID)
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].Message.ID < events[j].Message.ID })
+	return events
+}
+
+func (w *Workspace) messageWatchersLocked() []*MessageSubscription {
+	watchers := make([]*MessageSubscription, 0, len(w.watchers))
+	for watcher := range w.watchers {
+		watchers = append(watchers, watcher)
+	}
+	return watchers
+}
+
+func (w *Workspace) notifyMessageWatchers(watchers []*MessageSubscription, events []MessageEvent) {
+	if len(watchers) == 0 || len(events) == 0 {
+		return
+	}
+	for _, event := range events {
+		for _, watcher := range watchers {
+			watcher.send(event)
+		}
 	}
 }
 
@@ -1455,6 +1691,7 @@ type libraryScope struct {
 	library         string
 	detachEvents    *[]linkDetachEvent
 	cleanupRuntimes map[NodeID]NodeRuntime
+	registering     bool
 }
 
 func (s *libraryScope) DefineClass(spec ClassSpec) error {
@@ -1481,7 +1718,7 @@ func (s *libraryScope) CreateNode(className string, opts NodeOptions) (NodeID, e
 		return 0, opErr("scope create node", "validate", ErrOwnership)
 	}
 	id, err := s.w.CreateNode(className, opts)
-	if err != nil || s.cleanupRuntimes == nil {
+	if err != nil || !s.registering || s.cleanupRuntimes == nil {
 		return id, err
 	}
 	s.w.mu.RLock()
@@ -1570,6 +1807,32 @@ func (s *libraryScope) DeleteNodeMetadataValue(id NodeID, key string) error {
 		return opErr("scope delete node metadata value", "validate", ErrOwnership)
 	}
 	return s.w.DeleteNodeMetadataValue(id, key)
+}
+
+func (s *libraryScope) AddNodeMessage(id NodeID, typ MessageType, text string) (MessageID, error) {
+	if s.registering {
+		return 0, opErr("scope add node message", "validate", ErrInactive)
+	}
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return 0, opErr("scope add node message", "validate", ErrOwnership)
+	}
+	return s.w.AddNodeMessage(id, typ, text)
+}
+
+func (s *libraryScope) RemoveNodeMessage(id NodeID, messageID MessageID) error {
+	if s.registering {
+		return opErr("scope remove node message", "validate", ErrInactive)
+	}
+	s.w.mu.RLock()
+	owned := s.ownsNodeLocked(id)
+	s.w.mu.RUnlock()
+	if !owned {
+		return opErr("scope remove node message", "validate", ErrOwnership)
+	}
+	return s.w.RemoveNodeMessage(id, messageID)
 }
 
 func (s *libraryScope) CanSetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
@@ -1695,6 +1958,26 @@ func (s *nodeScope) Snapshot() (NodeSnapshot, bool) {
 		return NodeSnapshot{}, false
 	}
 	return snapshotNode(s.initRec), true
+}
+
+func (s *nodeScope) AddMessage(typ MessageType, text string) (MessageID, error) {
+	if s.initializing() {
+		return 0, opErr("node scope add message", "validate", ErrNotFound)
+	}
+	return s.w.AddNodeMessage(s.id, typ, text)
+}
+
+func (s *nodeScope) RemoveMessage(id MessageID) error {
+	if s.initializing() {
+		return opErr("node scope remove message", "validate", ErrNotFound)
+	}
+	return s.w.RemoveNodeMessage(s.id, id)
+}
+
+func (s *nodeScope) initializing() bool {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	return !s.initDone && s.initRec != nil
 }
 
 func (s *nodeScope) SetState(state NodeState) error {
@@ -1847,6 +2130,18 @@ func cloneLinkRecords(records map[LinkID]*linkRecord) map[LinkID]*linkRecord {
 		}
 		copy := *rec
 		copy.waypoints = append([]string(nil), rec.waypoints...)
+		out[id] = &copy
+	}
+	return out
+}
+
+func cloneMessageRecords(records map[MessageID]*messageRecord) map[MessageID]*messageRecord {
+	out := make(map[MessageID]*messageRecord, len(records))
+	for id, rec := range records {
+		if rec == nil {
+			continue
+		}
+		copy := *rec
 		out[id] = &copy
 	}
 	return out

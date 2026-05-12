@@ -23,6 +23,13 @@ Node metadata can be replaced as a whole map or edited one key at a time through
 the workspace, library-scoped, and node-scoped mutation APIs. Snapshots and
 persistence always receive defensive metadata copies.
 
+Ephemeral node messages are transient text notifications of type `note`, `warn`,
+or `err`. They can be attached through the full workspace API, through the
+owning library scope, or by the node runtime through `NodeScope`, and can be
+removed later. Message watchers subscribe to add/remove events for external
+renderers such as popup UIs. Messages are exposed in current snapshots, but are
+not model state for save, copy, paste, or restore.
+
 Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects
 without interpreting application-specific behavior.
@@ -152,3 +159,5 @@ The persistence DTO is intentionally small:
 The DTO stores only model state, not Go runtime values or link objects. Runtime
 state that should survive save/copy must be exported through
 `NodePrivateExportHook` into the node private state field.
+Ephemeral node messages are intentionally excluded from the DTO and clipboard
+data, and restore clears messages from the previous workspace contents.

@@ -213,11 +213,14 @@ func (w *Workspace) Restore(data SaveData) error {
 			maxNode = id
 		}
 	}
-	oldNodes, oldLinks := w.nodes, w.links
-	oldNextNode, oldNextLink := w.nextNode, w.nextLink
+	oldNodes, oldLinks, oldMessages := w.nodes, w.links, cloneMessageRecords(w.messages)
+	oldNextNode, oldNextLink, oldNextMessage := w.nextNode, w.nextLink, w.nextMessage
+	restoreMessageEvents := w.removeAllMessagesLocked()
+	w.nextMessage = 1
 	rollback := func() {
 		w.nodes, w.links = oldNodes, oldLinks
-		w.nextNode, w.nextLink = oldNextNode, oldNextLink
+		w.messages = oldMessages
+		w.nextNode, w.nextLink, w.nextMessage = oldNextNode, oldNextLink, oldNextMessage
 	}
 	w.nodes, w.links = nodes, links
 	seenLinkIDs := map[LinkID]bool{}
@@ -287,7 +290,8 @@ func (w *Workspace) Restore(data SaveData) error {
 			w.mu.Lock()
 			locked = true
 			w.nodes, w.links = oldNodes, oldLinks
-			w.nextNode, w.nextLink = oldNextNode, oldNextLink
+			w.messages = oldMessages
+			w.nextNode, w.nextLink, w.nextMessage = oldNextNode, oldNextLink, oldNextMessage
 			w.mu.Unlock()
 			locked = false
 			return errors.Join(err, cleanupErr)
@@ -300,7 +304,8 @@ func (w *Workspace) Restore(data SaveData) error {
 	locked = true
 	if err := w.checkOpenLocked("restore"); err != nil {
 		w.nodes, w.links = oldNodes, oldLinks
-		w.nextNode, w.nextLink = oldNextNode, oldNextLink
+		w.messages = oldMessages
+		w.nextNode, w.nextLink, w.nextMessage = oldNextNode, oldNextLink, oldNextMessage
 		w.mu.Unlock()
 		locked = false
 		return errors.Join(err, w.cleanupInitializedRuntimes(runtimes, scopes))
@@ -313,8 +318,10 @@ func (w *Workspace) Restore(data SaveData) error {
 			scope.finishInit()
 		}
 	}
+	watchers := w.messageWatchersLocked()
 	w.mu.Unlock()
 	locked = false
+	w.notifyMessageWatchers(watchers, restoreMessageEvents)
 	return nil
 }
 

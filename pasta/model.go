@@ -175,6 +175,8 @@ type NodeScope interface {
 	ID() NodeID
 	ReadOnly() WorkspaceRO
 	Snapshot() (NodeSnapshot, bool)
+	AddMessage(MessageType, string) (MessageID, error)
+	RemoveMessage(MessageID) error
 	SetState(NodeState) error
 	SetPrivate(any) error
 	SetCoordinate(string) error
@@ -327,6 +329,7 @@ type WorkspaceRO interface {
 	ClassesByLibrary(string) []ClassSnapshot
 	Node(NodeID) (NodeSnapshot, bool)
 	Link(LinkID) (LinkSnapshot, bool)
+	NodeMessages(NodeID) []NodeMessage
 }
 
 // LibraryScope is the write surface available to one registered library.
@@ -349,6 +352,8 @@ type LibraryScope interface {
 	SetNodeMetadata(NodeID, map[string]string) error
 	SetNodeMetadataValue(NodeID, string, string) error
 	DeleteNodeMetadataValue(NodeID, string) error
+	AddNodeMessage(NodeID, MessageType, string) (MessageID, error)
+	RemoveNodeMessage(NodeID, MessageID) error
 	CanSetNodePorts(NodeID, []PortSpec, []PortSpec) error
 	SetNodePorts(NodeID, []PortSpec, []PortSpec) error
 	CanCreateLink(FullPortID, FullPortID, string) error
@@ -390,13 +395,14 @@ type ClassSnapshot struct {
 // when the node's class or library is unavailable so editors can present
 // recoverable model state.
 type NodeSnapshot struct {
-	ID      NodeID
-	Class   string
-	Library string
-	State   ObjectState
-	Dynamic NodeState
-	Inputs  []PortSpec
-	Outputs []PortSpec
+	ID       NodeID
+	Class    string
+	Library  string
+	State    ObjectState
+	Dynamic  NodeState
+	Inputs   []PortSpec
+	Outputs  []PortSpec
+	Messages []NodeMessage
 }
 
 // LinkSnapshot is a read-only link record.
@@ -411,4 +417,49 @@ type LinkSnapshot struct {
 	Type      string
 	State     ObjectState
 	Waypoints []string
+}
+
+// MessageID identifies one ephemeral node message in a workspace.
+//
+// Message IDs are not persisted and are regenerated after restore.
+type MessageID int64
+
+// MessageType classifies an ephemeral node message.
+type MessageType string
+
+const (
+	// MessageNote is informational.
+	MessageNote MessageType = "note"
+	// MessageWarn is a warning.
+	MessageWarn MessageType = "warn"
+	// MessageErr is an error.
+	MessageErr MessageType = "err"
+)
+
+// NodeMessage is an ephemeral text message attached to one node.
+//
+// Messages are intended for transient UI notifications, diagnostics, or
+// popups. They are exposed in snapshots and watcher events, but are not saved,
+// copied, restored, or pasted.
+type NodeMessage struct {
+	ID   MessageID
+	Node NodeID
+	Type MessageType
+	Text string
+}
+
+// MessageEventKind describes a watcher event for an ephemeral node message.
+type MessageEventKind string
+
+const (
+	// MessageAdded means Message was attached to its node.
+	MessageAdded MessageEventKind = "added"
+	// MessageRemoved means Message was removed from its node.
+	MessageRemoved MessageEventKind = "removed"
+)
+
+// MessageEvent is delivered to message subscriptions after add/remove changes.
+type MessageEvent struct {
+	Kind    MessageEventKind
+	Message NodeMessage
 }

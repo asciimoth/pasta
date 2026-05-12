@@ -61,6 +61,13 @@ Nodes may change the following public state at runtime:
 - opaque editor coordinates
 - other public metadata needed by editors
 
+Nodes may also have ephemeral text messages attached for UI/runtime feedback.
+Messages have one of three severities, `note`, `warn`, or `err`, and are
+intended for transient popups, diagnostics, or acknowledgable warnings. They can
+be added through the full workspace API, by the owning library scope, or by the
+node itself through its node-scoped API, and they can be removed later.
+External watchers must be able to subscribe to message add/remove events.
+
 Each node also has optional private state owned by the node implementation. The
 workspace stores and restores it, but does not interpret it. Private state is a
 `configer.Config` subtree.
@@ -69,6 +76,10 @@ Node coordinates are stored as an arbitrary string. Different applications may
 use different coordinate systems, layouts, or serialized geometry formats, so
 the core framework should only provide get/set storage and persistence for this
 field.
+
+Ephemeral node messages are not persisted, copied, pasted, restored, or included
+in save data. They may appear in current snapshots for renderers, but they must
+not become durable graph state.
 
 Nodes must be able to update their private state at any time, including from
 background goroutines owned by the node. These updates still need to go through

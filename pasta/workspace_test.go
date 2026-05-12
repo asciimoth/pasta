@@ -523,6 +523,135 @@ func TestSetNodeMetadataUpdatesSnapshotsSaveAndCopy(t *testing.T) {
 	}
 }
 
+func TestEphemeralNodeMessages(t *testing.T) {
+	scopes := map[NodeID]NodeScope{}
+	class := ClassSpec{
+		Name:    "example.com/Scoped",
+		Runtime: &nodeScopeClass{scopes: scopes},
+	}
+	w := NewWorkspace()
+	lib := &captureScopeLibrary{name: "example.com", classes: []ClassSpec{class}}
+	other := &captureScopeLibrary{name: "other.com", classes: []ClassSpec{scopedTestClass("other.com", "Source")}}
+	if err := w.RegisterLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RegisterLibrary(other); err != nil {
+		t.Fatal(err)
+	}
+	node, err := lib.scope.CreateNode("example.com/Scoped", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherNode, err := other.scope.CreateNode("other.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := w.WatchMessages(16)
+	defer sub.Close()
+
+	note, err := w.AddNodeMessage(node, MessageNote, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warn, err := lib.scope.AddNodeMessage(node, MessageWarn, "careful")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errID, err := scopes[node].AddMessage(MessageErr, "failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.AddNodeMessage(node, MessageType("info"), "bad"); !errors.Is(err, ErrInvalidName) {
+		t.Fatalf("AddNodeMessage invalid type error = %v, want invalid name", err)
+	}
+	if _, err := lib.scope.AddNodeMessage(otherNode, MessageNote, "cross"); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("scoped AddNodeMessage cross-library error = %v, want ownership", err)
+	}
+
+	for _, want := range []struct {
+		kind MessageEventKind
+		id   MessageID
+		typ  MessageType
+		text string
+	}{
+		{MessageAdded, note, MessageNote, "hello"},
+		{MessageAdded, warn, MessageWarn, "careful"},
+		{MessageAdded, errID, MessageErr, "failed"},
+	} {
+		got := <-sub.Events()
+		if got.Kind != want.kind || got.Message.ID != want.id || got.Message.Node != node || got.Message.Type != want.typ || got.Message.Text != want.text {
+			t.Fatalf("message event = %#v, want kind %s id %d type %s text %q", got, want.kind, want.id, want.typ, want.text)
+		}
+	}
+
+	snap, ok := w.Node(node)
+	if !ok {
+		t.Fatal("node should exist")
+	}
+	if len(snap.Messages) != 3 || snap.Messages[0].ID != note || snap.Messages[1].ID != warn || snap.Messages[2].ID != errID {
+		t.Fatalf("node snapshot messages = %#v", snap.Messages)
+	}
+	messages := w.NodeMessages(node)
+	if len(messages) != 3 || messages[0].Text != "hello" || messages[2].Type != MessageErr {
+		t.Fatalf("node messages = %#v", messages)
+	}
+
+	if err := scopes[node].RemoveMessage(errID); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-sub.Events(); got.Kind != MessageRemoved || got.Message.ID != errID || got.Message.Text != "failed" {
+		t.Fatalf("remove event = %#v", got)
+	}
+	if err := lib.scope.RemoveNodeMessage(otherNode, note); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("scoped RemoveNodeMessage cross-library error = %v, want ownership", err)
+	}
+
+	saved := w.Save()
+	clip, err := w.Copy([]NodeID{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Nodes) != 2 || len(clip.Nodes) != 1 {
+		t.Fatalf("unexpected save/copy sizes: saved=%d copied=%d", len(saved.Nodes), len(clip.Nodes))
+	}
+	if err := w.Restore(saved); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-sub.Events(); got.Kind != MessageRemoved || got.Message.ID != note {
+		t.Fatalf("restore removal event = %#v, want note removed", got)
+	}
+	if got := <-sub.Events(); got.Kind != MessageRemoved || got.Message.ID != warn {
+		t.Fatalf("restore removal event = %#v, want warn removed", got)
+	}
+	if got := w.NodeMessages(node); len(got) != 0 {
+		t.Fatalf("messages after restore = %#v, want none", got)
+	}
+}
+
+func TestDeletingNodeRemovesEphemeralMessages(t *testing.T) {
+	w, _ := testWorkspace(t)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := w.WatchMessages(8)
+	defer sub.Close()
+	message, err := w.AddNodeMessage(node, MessageWarn, "delete me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-sub.Events()
+	if err := w.DeleteNode(node); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-sub.Events(); got.Kind != MessageRemoved || got.Message.ID != message {
+		t.Fatalf("delete removal event = %#v", got)
+	}
+	if got := w.NodeMessages(node); len(got) != 0 {
+		t.Fatalf("messages after delete = %#v, want none", got)
+	}
+}
+
 func TestSetNodePrivateUpdatesSnapshotsSaveAndCopy(t *testing.T) {
 	w, _ := testWorkspace(t)
 	node, err := w.CreateNode("example.com/Source", NodeOptions{})
