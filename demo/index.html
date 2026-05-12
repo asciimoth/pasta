@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pasta WASM LiteGraph Demo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/css/litegraph.css" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="workbench">
+        <header class="toolbar">
+          <div class="brand">
+            <strong>Pasta Calculator</strong>
+            <span>Go WASM backend + LiteGraph frontend</span>
+          </div>
+          <div class="tools">
+            <button id="seedBtn" type="button">Seed</button>
+            <button id="clearBtn" type="button">Clear</button>
+            <button id="saveBtn" type="button">Save Dump</button>
+            <button id="restoreBtn" type="button">Restore Dump</button>
+            <button id="copyBtn" type="button">Copy</button>
+            <button id="pasteBtn" type="button">Paste</button>
+          </div>
+        </header>
+        <div class="canvasWrap">
+          <canvas id="graphCanvas"></canvas>
+        </div>
+      </section>
+      <aside class="side">
+        <section>
+          <h2>Nodes</h2>
+          <div id="palette" class="palette"></div>
+        </section>
+        <section>
+          <h2>Menu</h2>
+          <div id="menuPanel" class="panelText">Select a node.</div>
+        </section>
+        <section>
+          <h2>Workspace Dump / Clipboard</h2>
+          <textarea id="dumpText" spellcheck="false"></textarea>
+        </section>
+        <section class="logSection">
+          <h2>Log</h2>
+          <pre id="log"></pre>
+        </section>
+      </aside>
+    </main>
+    <script src="./wasm_exec.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/build/litegraph.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

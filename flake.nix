@@ -45,6 +45,7 @@
               description = "Makes sure go.mod matches the source code";
               entry = let script = pkgs.writeShellScript "gotidyhook" ''
                 go -C pasta mod tidy -v
+                go -C demo mod tidy -v
                 go work sync
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
@@ -53,7 +54,8 @@
               enable = true;
               description = "go test --race";
               entry = let script = pkgs.writeShellScript "gotidyhook" ''
-                go test ./pasta/... --race
+                go -C pasta test ./... --race
+                go -C demo test ./... --race
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };
@@ -74,6 +76,8 @@
           coverage-reporter
 
           just
+
+          python3 # for simple http server
         ];
       };
     });
