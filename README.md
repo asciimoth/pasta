@@ -4,6 +4,7 @@
 </p>
 <p align="center">
   <a href='https://coveralls.io/github/asciimoth/pasta?branch=master'><img src='https://coveralls.io/repos/github/asciimoth/pasta/badge.svg?branch=master' alt='CoverageStatus' /></a>
+  <a href="https://pkg.go.dev/github.com/asciimoth/pasta/pasta"><img src="https://pkg.go.dev/badge/github.com/asciimoth/pasta/pasta.svg" alt="Go Reference"></a>
 </p>
 
 # pasta
