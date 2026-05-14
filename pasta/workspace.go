@@ -1153,10 +1153,6 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		w.mu.Unlock()
 		return nil, nil, err
 	}
-	if err := w.validatePasteSingleNodeClassesLocked(clip); err != nil {
-		w.mu.Unlock()
-		return nil, nil, err
-	}
 	w.mu.Unlock()
 	nodeMap := make(map[NodeID]NodeID, len(clip.Nodes))
 	newNodes := make([]NodeID, 0, len(clip.Nodes))
@@ -1167,6 +1163,10 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		}
 		w.mu.Lock()
 		id, rec, runtimeClass, err := w.prepareCreateNodeLocked(saved.Class, NodeOptions{State: saved.State, UseState: true}, InitRestore)
+		if err != nil && w.canSkipPasteSingleNodeDuplicateLocked(saved.Class, err) {
+			w.mu.Unlock()
+			continue
+		}
 		if err == nil {
 			err = w.applySavedNodePortsLocked(rec, saved.Inputs, saved.Outputs)
 			if err != nil {
@@ -1531,19 +1531,12 @@ func (w *Workspace) hasNodeOfClassLocked(className string) bool {
 	return false
 }
 
-func (w *Workspace) validatePasteSingleNodeClassesLocked(clip Clipboard) error {
-	counts := make(map[string]int)
-	for _, saved := range clip.Nodes {
-		class := w.classes[saved.Class]
-		if class == nil || !class.active || !class.spec.SingleNode {
-			continue
-		}
-		counts[saved.Class]++
-		if counts[saved.Class] > 1 || w.hasNodeOfClassLocked(saved.Class) {
-			return opErr("paste", "validate", ErrMultiplicity)
-		}
+func (w *Workspace) canSkipPasteSingleNodeDuplicateLocked(className string, err error) bool {
+	if !errors.Is(err, ErrMultiplicity) {
+		return false
 	}
-	return nil
+	class := w.classes[className]
+	return class != nil && class.active && class.spec.SingleNode && w.hasNodeOfClassLocked(className)
 }
 
 func (w *Workspace) lowestNodeOfClassLocked(className string) NodeID {

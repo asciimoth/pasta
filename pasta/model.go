@@ -65,10 +65,11 @@ type NodeState struct {
 // and Metadata are copied into newly created nodes. Class Metadata describes
 // the class itself, for example catalog, palette, or documentation annotations;
 // use Default.Metadata for metadata that should become per-node state.
-// SingleNode limits the class to zero or one node in a workspace. Creating or
-// pasting another node of the class while one already exists returns
-// ErrMultiplicity. Restore preserves only the lowest-ID persisted node for a
-// single-node class and discards the rest before runtime initialization.
+// SingleNode limits the class to zero or one node in a workspace. Creating
+// another node of the class while one already exists returns ErrMultiplicity.
+// Paste skips duplicated single-node class nodes while preserving other pasted
+// nodes. Restore preserves only the lowest-ID persisted node for a single-node
+// class and discards the rest before runtime initialization.
 // Runtime is optional; when it is non-nil, the workspace calls InitNode for
 // each active node instance and stores the returned NodeRuntime for later
 // lifecycle hooks.
@@ -110,8 +111,9 @@ type LinkOptions struct {
 // Clipboard contains serialized nodes and their internal links for paste.
 //
 // Copy fills this value with the selected nodes and links whose endpoints are
-// both inside the selection. Paste creates fresh node and link IDs and does not
-// reconnect links to nodes outside the clipboard.
+// both inside the selection. Paste creates fresh node and link IDs, skips
+// duplicated single-node class nodes, and does not reconnect links to nodes
+// outside the clipboard.
 type Clipboard struct {
 	Nodes []SaveNode
 	Links []SaveLink

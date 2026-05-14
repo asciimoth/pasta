@@ -78,6 +78,11 @@ A class describes default node state, ports, metadata, and an optional runtime f
 }
 ```
 
+Set `SingleNode: true` only for classes that represent a workspace-wide object,
+such as a singleton inspector or demo-only global control. Pasta rejects direct
+creation when one already exists, while paste drops duplicate single-node
+entries and keeps the rest of the clipboard.
+
 Keep port definitions small and explicit:
 
 ```go

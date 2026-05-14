@@ -25,7 +25,8 @@
 // exist, which lets editors display and recover graphs after a class recall,
 // library unregister, or missing library on restore. Broken links whose
 // endpoints or ports no longer exist are removed immediately.
-// Classes may opt into single-node cardinality; create and paste operations
-// reject additional nodes of those classes, and restore keeps only the lowest-ID
-// duplicate before initialization hooks run.
+// Classes may opt into single-node cardinality; create operations reject
+// additional nodes of those classes, paste skips duplicate single-node class
+// nodes, and restore keeps only the lowest-ID duplicate before initialization
+// hooks run.
 package pasta

@@ -193,7 +193,10 @@ Use `SaveConfigWithRuntimeState` for the config equivalent of `SaveWithRuntimeSt
 
 ## 8. Copy And Paste
 
-Copy serializes selected nodes and internal links whose endpoints are both selected. Paste allocates fresh node and link IDs.
+Copy serializes selected nodes and internal links whose endpoints are both
+selected. Paste allocates fresh node and link IDs. If a copied selection
+includes a single-node class that already exists, Pasta skips that duplicate and
+still pastes the non-single-node nodes.
 
 ```go
 clip, _ := w.Copy([]pasta.NodeID{left, right, sum})
@@ -236,4 +239,3 @@ Common handling:
 - `ErrInactive`: show the preserved inactive object but disable operational controls.
 - `ErrStaleMenu`: refresh the menu version and preserve local user input where possible.
 - `ErrTypeMismatch`, `ErrMultiplicity`, `ErrCycle`: report validation feedback near the attempted link or port edit.
-

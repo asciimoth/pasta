@@ -57,12 +57,14 @@ Nodes keep a stable ID, class name, owning library name, active/inactive state,
 dynamic public/private state, ports, and an optional runtime value.
 
 Single-node classes set `ClassSpec.SingleNode` and may have zero or one node in
-the workspace. `CanCreateNode`, `CreateNode`, and `Paste` reject attempts to add
-another node of that class with `ErrMultiplicity`. During restore, if persisted
-data contains multiple nodes of a single-node class, the workspace preserves the
-node with the lowest `NodeID` and discards the others before link validation and
-before any node initialization or private-state import hooks run. Links attached
-to discarded nodes are treated as broken persisted links and are skipped.
+the workspace. `CanCreateNode` and `CreateNode` reject attempts to add another
+node of that class with `ErrMultiplicity`. `Paste` skips duplicated single-node
+class nodes and continues pasting the rest of the clipboard. During restore, if
+persisted data contains multiple nodes of a single-node class, the workspace
+preserves the node with the lowest `NodeID` and discards the others before link
+validation and before any node initialization or private-state import hooks run.
+Links attached to discarded nodes are treated as broken persisted links and are
+skipped.
 
 Links connect one output `FullPortID` to one input `FullPortID`, carry one fixed
 type name, and may store opaque waypoint strings for editors. Link endpoints are
@@ -249,4 +251,7 @@ to nodes outside the selection are omitted.
 
 `Paste` creates new node and link IDs and never reuses copied IDs. Pasted active
 nodes are initialized with `InitModeRestore`, matching restore semantics for
-private and public state.
+private and public state. If the clipboard contains a single-node class that
+already exists in the workspace, or contains more than one node for the same
+single-node class, `Paste` drops the duplicate single-node entries and preserves
+non-single-node entries. Links touching dropped nodes are omitted.

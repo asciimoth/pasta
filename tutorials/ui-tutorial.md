@@ -306,6 +306,11 @@ if err != nil {
 data, err := json.MarshalIndent(clip, "", "  ")
 ```
 
+If the clipboard contains nodes for single-node classes that already exist in the
+workspace, `Paste` skips those duplicates and still returns the non-single-node
+nodes it created. UI code should use the returned IDs instead of assuming every
+clipboard node was pasted.
+
 After paste, the demo offsets coordinates and tolerates a pasted node disappearing before the coordinate update:
 
 ```go

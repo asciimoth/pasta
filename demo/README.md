@@ -172,6 +172,9 @@ clipboard JSON to the dump textarea.
 `paste` calls `Workspace.Paste(clipboard)` and offsets pasted node coordinates.
 Only links whose endpoints are both inside the selected copied set are included,
 which is Pasta's clipboard contract.
+When the clipboard contains a node from a single-node class that is already
+present, Pasta skips that duplicate and still pastes the other nodes; links
+touching the skipped node are omitted.
 
 ## LiteGraph Integration Notes
 

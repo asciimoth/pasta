@@ -47,8 +47,9 @@ library can implement callbacks, channels, interface contracts, shared objects,
 or any other communication model appropriate for its domain.
 
 Classes can opt into single-node cardinality with `ClassSpec.SingleNode`.
-Workspaces then allow zero or one node of that class, reject create and paste
-operations that would add another node with `ErrMultiplicity`, and restore only
+Workspaces then allow zero or one node of that class. `CreateNode` rejects
+additional nodes with `ErrMultiplicity`, `Paste` skips duplicated single-node
+class nodes while preserving the rest of the clipboard, and restore only keeps
 the lowest-ID persisted node before running initialization hooks.
 
 ## Repository Contents
@@ -78,4 +79,3 @@ Files in this repository are distributed under the CC0 license.
   has waived all copyright and related or neighboring rights to
   <span property="dct:title">pasta</span>.
 </p>
-

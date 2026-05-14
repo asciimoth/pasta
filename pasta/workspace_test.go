@@ -62,12 +62,14 @@ func TestNameValidation(t *testing.T) {
 
 func TestSingleNodeClasses(t *testing.T) {
 	const singleClass = "example.com/Singleton"
+	const regularClass = "example.com/Regular"
 	initIDs := []NodeID{}
+	checkRestoreSnapshot := false
 	singleSpec := ClassSpec{
 		Name:       singleClass,
 		SingleNode: true,
 		Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, mode InitMode) (NodeRuntime, error) {
-			if mode == InitRestore {
+			if mode == InitRestore && checkRestoreSnapshot {
 				snap := ctx.ReadOnly.Snapshot()
 				seen := 0
 				for _, node := range snap.Nodes {
@@ -83,8 +85,9 @@ func TestSingleNodeClasses(t *testing.T) {
 			return struct{}{}, nil
 		}),
 	}
+	regularSpec := ClassSpec{Name: regularClass}
 	w := NewWorkspace()
-	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec}}); err != nil {
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec, regularSpec}}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := w.CreateNode(singleClass, NodeOptions{})
@@ -100,29 +103,44 @@ func TestSingleNodeClasses(t *testing.T) {
 	if nodes := w.Snapshot().Nodes; len(nodes) != 1 || nodes[0].ID != first {
 		t.Fatalf("nodes after rejected create = %#v, want only %s", nodes, first)
 	}
-	clip, err := w.Copy([]NodeID{first})
+	regular, err := w.CreateNode(regularClass, NodeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := w.Paste(clip); !errors.Is(err, ErrMultiplicity) {
-		t.Fatalf("Paste over existing single node = %v, want multiplicity", err)
+	clip, err := w.Copy([]NodeID{first, regular})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if nodes := w.Snapshot().Nodes; len(nodes) != 1 || nodes[0].ID != first {
-		t.Fatalf("nodes after rejected paste = %#v, want only %s", nodes, first)
+	pasted, links, err := w.Paste(clip)
+	if err != nil {
+		t.Fatalf("Paste over existing single node = %v, want skipped duplicate", err)
+	}
+	if len(pasted) != 1 || len(links) != 0 {
+		t.Fatalf("paste with existing single node = nodes %#v links %#v, want one regular node", pasted, links)
+	}
+	if snap, ok := w.Node(pasted[0]); !ok || snap.Class != regularClass {
+		t.Fatalf("pasted duplicate-filtered node = %#v, ok %v; want regular", snap, ok)
+	}
+	if nodes := w.Snapshot().Nodes; len(nodes) != 3 {
+		t.Fatalf("nodes after duplicate-filtered paste = %#v, want original single and two regular nodes", nodes)
 	}
 
 	empty := NewWorkspace()
 	if err := empty.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := empty.Paste(Clipboard{Nodes: []SaveNode{
+	pasted, links, err = empty.Paste(Clipboard{Nodes: []SaveNode{
 		{ID: "1N", Class: singleClass},
 		{ID: "2N", Class: singleClass},
-	}}); !errors.Is(err, ErrMultiplicity) {
-		t.Fatalf("Paste duplicate single nodes = %v, want multiplicity", err)
+	}})
+	if err != nil {
+		t.Fatalf("Paste duplicate single nodes = %v, want skipped duplicate", err)
 	}
-	if nodes := empty.Snapshot().Nodes; len(nodes) != 0 {
-		t.Fatalf("duplicate paste should not create partial nodes: %#v", nodes)
+	if len(pasted) != 1 || len(links) != 0 {
+		t.Fatalf("duplicate single paste = nodes %#v links %#v, want one node", pasted, links)
+	}
+	if nodes := empty.Snapshot().Nodes; len(nodes) != 1 || nodes[0].ID != pasted[0] {
+		t.Fatalf("duplicate paste nodes = %#v, want pasted singleton %s", nodes, pasted[0])
 	}
 
 	initIDs = nil
@@ -130,6 +148,7 @@ func TestSingleNodeClasses(t *testing.T) {
 	if err := restored.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec}}); err != nil {
 		t.Fatal(err)
 	}
+	checkRestoreSnapshot = true
 	if err := restored.Restore(SaveData{Nodes: []SaveNode{
 		{ID: "3N", Class: singleClass},
 		{ID: "1N", Class: singleClass},
