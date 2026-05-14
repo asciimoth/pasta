@@ -249,6 +249,44 @@ func TestKeyNodeAccessTracksActiveConnectivity(t *testing.T) {
 	}
 }
 
+func TestKeyNodeWithoutRuntimeHookGetsAccess(t *testing.T) {
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{
+		Name:    "example.com/Key",
+		KeyNode: true,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := w.CreateNode("example.com/Key", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKeyAccess(t, w, map[NodeID]bool{node: true})
+}
+
+func TestSingleNodePendingCreateRejectsReentrantCreate(t *testing.T) {
+	const singleClass = "example.com/Singleton"
+	w := NewWorkspace()
+	var sawMultiplicity bool
+	class := ClassSpec{
+		Name:       singleClass,
+		SingleNode: true,
+		Runtime: nodeClassFunc(func(NodeContext, NodeState, InitMode) (NodeRuntime, error) {
+			sawMultiplicity = errors.Is(w.CanCreateNode(singleClass), ErrMultiplicity)
+			return struct{}{}, nil
+		}),
+	}
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{class}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CreateNode(singleClass, NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !sawMultiplicity {
+		t.Fatal("CanCreateNode did not see pending single-node create")
+	}
+}
+
 func TestKeyNodeAccessRestoreAfterSingleNodeDedup(t *testing.T) {
 	const (
 		keyClass     = "example.com/Key"
@@ -292,6 +330,77 @@ func TestKeyNodeAccessRestoreAfterSingleNodeDedup(t *testing.T) {
 	}
 	if got := hooks.nodeEvents(3); len(got) != 0 {
 		t.Fatalf("regular linked only to pruned key hook events = %#v, want none", got)
+	}
+}
+
+func TestSingleNodeRestorePruningIgnoresNilAndNonSingleRecords(t *testing.T) {
+	const singleClass = "example.com/Singleton"
+	const regularClass = "example.com/Regular"
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{
+		{Name: singleClass, SingleNode: true},
+		{Name: regularClass},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	nodes := map[NodeID]*nodeRecord{
+		1: nil,
+		2: {id: 2, class: regularClass, state: StateActive},
+		3: {id: 3, class: singleClass, state: StateActive},
+		4: nil,
+		5: {id: 5, class: singleClass, state: StateActive},
+	}
+	w.pruneSingleNodeClassDuplicatesLocked(nodes)
+	w.mu.Unlock()
+	if _, ok := nodes[1]; !ok {
+		t.Fatal("nil node in first pass should be ignored, not removed")
+	}
+	if _, ok := nodes[4]; !ok {
+		t.Fatal("nil node in second pass should be ignored, not removed")
+	}
+	if _, ok := nodes[2]; !ok {
+		t.Fatal("regular node should not be pruned")
+	}
+	if _, ok := nodes[3]; !ok {
+		t.Fatal("lowest single-node class instance should be kept")
+	}
+	if _, ok := nodes[5]; ok {
+		t.Fatal("higher single-node class duplicate should be pruned")
+	}
+}
+
+func TestInternalActivityHelpersCoverEdgeBranches(t *testing.T) {
+	const (
+		keyClass     = "example.com/Key"
+		regularClass = "example.com/Regular"
+	)
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{
+		{Name: keyClass, KeyNode: true},
+		{Name: regularClass},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	w.nodes[1] = nil
+	w.nodes[2] = &nodeRecord{id: 2, class: regularClass, state: StateActive, keyAccess: true}
+	w.nodes[3] = &nodeRecord{id: 3, class: keyClass, state: StateActive, keyAccess: true}
+	if got := w.lowestNodeOfClassLocked(regularClass); got != 2 {
+		w.mu.Unlock()
+		t.Fatalf("lowestNodeOfClassLocked = %s, want 2N", got)
+	}
+	delete(w.nodes, 1)
+	w.links[1] = &linkRecord{id: 1, state: StateInactive, input: FullPortID{Node: 2, Port: PortID{Number: 1, Kind: InputPort}}, output: FullPortID{Node: 3, Port: PortID{Number: 1, Kind: OutputPort}}}
+	access := w.keyAccessLocked()
+	if !access[3] || access[2] {
+		w.mu.Unlock()
+		t.Fatalf("keyAccessLocked with inactive link = %#v, want only key node", access)
+	}
+	events := w.keyAccessEventsForNodesLocked([]NodeID{3, 2, 3})
+	w.mu.Unlock()
+	if len(events) != 2 || events[0].id != 2 || events[1].id != 3 {
+		t.Fatalf("keyAccessEventsForNodesLocked = %#v, want sorted unique nodes 2N and 3N", events)
 	}
 }
 

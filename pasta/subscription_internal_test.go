@@ -47,6 +47,17 @@ func TestSubscriptionNilAndCloseBranches(t *testing.T) {
 	workspace.send(WorkspaceEvent{})
 }
 
+func TestSubscriptionSendDropsWhenChannelIsFull(t *testing.T) {
+	msg := &MessageSubscription{ch: make(chan MessageEvent)}
+	msg.send(MessageEvent{})
+
+	menu := &MenuSubscription{ch: make(chan MenuEvent)}
+	menu.send(MenuEvent{})
+
+	workspace := &WorkspaceSubscription{ch: make(chan WorkspaceEvent)}
+	workspace.send(WorkspaceEvent{})
+}
+
 func TestWorkspaceSubscriptionObservesMutationsAndNodeNotifications(t *testing.T) {
 	w, _ := testWorkspace(t)
 	node, err := w.CreateNode("example.com/Source", NodeOptions{})
@@ -83,6 +94,13 @@ func TestWorkspaceSubscriptionObservesMutationsAndNodeNotifications(t *testing.T
 
 	if err := w.NotifyNodeChanged(999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("NotifyNodeChanged missing node error = %v, want not found", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.NotifyNodeChanged(node); !errors.Is(err, ErrClosed) {
+		t.Fatalf("NotifyNodeChanged closed workspace error = %v, want closed", err)
 	}
 }
 

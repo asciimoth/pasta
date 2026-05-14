@@ -52,12 +52,13 @@ func TestSuiteAlternateSuccessBranches(t *testing.T) {
 		Metadata: map[string]string{"kind": "sink"},
 	}
 	passive := pasta.ClassSpec{Name: "example.com/Passive"}
+	singleton := pasta.ClassSpec{Name: "example.com/Singleton", SingleNode: true}
 
 	RunSuite(t, Suite{
 		NewLibrary: func(*testing.T) pasta.Library {
-			return namedStaticLibrary{name: "example.com", classes: []pasta.ClassSpec{source, sink, passive}}
+			return namedStaticLibrary{name: "example.com", classes: []pasta.ClassSpec{source, sink, passive, singleton}}
 		},
-		Classes: []pasta.ClassSpec{source, sink, passive},
+		Classes: []pasta.ClassSpec{{}, source, sink, passive, singleton},
 		ClassCases: []ClassCase{
 			{Name: source.Name, StrictDefaults: true},
 			{Name: passive.Name, SkipCreate: true},

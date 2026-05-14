@@ -234,6 +234,9 @@ func TestUpdateNodeMenuStateDirectBranches(t *testing.T) {
 
 func TestNodeScopeMenuDuringInitializationBranches(t *testing.T) {
 	w, node := workspaceWithMenuRuntime(t, &configurableMenuRuntime{}, func(ctx NodeContext) error {
+		if err := ctx.Node.NotifyChanged(); !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("NotifyChanged during init error = %v, want not found", err)
+		}
 		if _, err := ctx.Node.AddMessage(MessageNote, "init"); !errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("AddMessage during init error = %v, want not found", err)
 		}
