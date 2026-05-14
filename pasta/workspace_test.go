@@ -60,6 +60,109 @@ func TestNameValidation(t *testing.T) {
 	}
 }
 
+func TestSingleNodeClasses(t *testing.T) {
+	const singleClass = "example.com/Singleton"
+	initIDs := []NodeID{}
+	singleSpec := ClassSpec{
+		Name:       singleClass,
+		SingleNode: true,
+		Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, mode InitMode) (NodeRuntime, error) {
+			if mode == InitRestore {
+				snap := ctx.ReadOnly.Snapshot()
+				seen := 0
+				for _, node := range snap.Nodes {
+					if node.Class == singleClass {
+						seen++
+					}
+				}
+				if seen != 1 {
+					return nil, fmt.Errorf("restore init saw %d single nodes, want 1", seen)
+				}
+			}
+			initIDs = append(initIDs, ctx.ID)
+			return struct{}{}, nil
+		}),
+	}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec}}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := w.CreateNode(singleClass, NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CreateNode(singleClass, NodeOptions{}); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("second CreateNode error = %v, want multiplicity", err)
+	}
+	if err := w.CanCreateNode(singleClass); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("CanCreateNode with existing node = %v, want multiplicity", err)
+	}
+	if nodes := w.Snapshot().Nodes; len(nodes) != 1 || nodes[0].ID != first {
+		t.Fatalf("nodes after rejected create = %#v, want only %s", nodes, first)
+	}
+	clip, err := w.Copy([]NodeID{first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.Paste(clip); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("Paste over existing single node = %v, want multiplicity", err)
+	}
+	if nodes := w.Snapshot().Nodes; len(nodes) != 1 || nodes[0].ID != first {
+		t.Fatalf("nodes after rejected paste = %#v, want only %s", nodes, first)
+	}
+
+	empty := NewWorkspace()
+	if err := empty.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := empty.Paste(Clipboard{Nodes: []SaveNode{
+		{ID: "1N", Class: singleClass},
+		{ID: "2N", Class: singleClass},
+	}}); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("Paste duplicate single nodes = %v, want multiplicity", err)
+	}
+	if nodes := empty.Snapshot().Nodes; len(nodes) != 0 {
+		t.Fatalf("duplicate paste should not create partial nodes: %#v", nodes)
+	}
+
+	initIDs = nil
+	restored := NewWorkspace()
+	if err := restored.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{singleSpec}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.Restore(SaveData{Nodes: []SaveNode{
+		{ID: "3N", Class: singleClass},
+		{ID: "1N", Class: singleClass},
+		{ID: "2N", Class: singleClass},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	nodes := restored.Snapshot().Nodes
+	if len(nodes) != 1 || nodes[0].ID != 1 {
+		t.Fatalf("restored nodes = %#v, want only lowest ID 1N", nodes)
+	}
+	if len(initIDs) != 1 || initIDs[0] != 1 {
+		t.Fatalf("restore init IDs = %#v, want [1N]", initIDs)
+	}
+
+	redefine := NewWorkspace()
+	if err := redefine.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{{Name: singleClass}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := redefine.CreateNode(singleClass, NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := redefine.CreateNode(singleClass, NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := redefine.DefineClass("example.com", singleSpec); !errors.Is(err, ErrMultiplicity) {
+		t.Fatalf("redefine active duplicate class as single = %v, want multiplicity", err)
+	}
+	if nodes := redefine.Snapshot().Nodes; len(nodes) != 2 {
+		t.Fatalf("failed single redefine should preserve active nodes: %#v", nodes)
+	}
+}
+
 type panicLibrary struct{}
 
 func (panicLibrary) Name() string { return "example.com" }

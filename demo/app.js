@@ -340,10 +340,18 @@ function renderPalette(classes) {
       button.style.setProperty("--type-bg", style.bg);
       button.dataset.type = style.name;
     }
+    if (cls.singleNode && hasNodeOfClass(cls.name)) {
+      button.disabled = true;
+      button.title = `${button.title} (already in workspace)`;
+    }
     button.addEventListener("click", async () => {
       const x = 80 + (state.snapshot.nodes.length % 3) * 460;
       const y = 80 + Math.floor(state.snapshot.nodes.length / 3) * 220;
-      await refresh(await call("createNode", { class: cls.name, x, y, value: 0 }));
+      try {
+        await refresh(await call("createNode", { class: cls.name, x, y, value: 0 }));
+      } catch (_) {
+        await refresh(await call("snapshot"));
+      }
     });
     els.palette.appendChild(button);
   }
@@ -613,7 +621,11 @@ async function copySelected() {
 async function pasteFromDump() {
   const text = els.dump.value.trim();
   state.pasteOffset += 30;
-  await refresh(await call("paste", { clipboard: text, dx: state.pasteOffset, dy: state.pasteOffset }));
+  try {
+    await refresh(await call("paste", { clipboard: text, dx: state.pasteOffset, dy: state.pasteOffset }));
+  } catch (_) {
+    await refresh(await call("snapshot"));
+  }
 }
 
 function selectedBackendIds() {
@@ -651,6 +663,10 @@ function backendIdForLG(lgID) {
 
 function findNode(backendId) {
   return state.snapshot && state.snapshot.nodes.find((node) => node.id === backendId);
+}
+
+function hasNodeOfClass(className) {
+  return !!(state.snapshot && state.snapshot.nodes.some((node) => node.class === className));
 }
 
 function portForSlot(backendId, kind, slot) {

@@ -51,10 +51,18 @@ workspace mutation API.
 ## Domain Model
 
 Libraries define classes under their own qualified-name prefix. A class provides
-default node state, default ports, metadata, and the optional runtime factory
-used to initialize each active node instance. Nodes keep a stable ID, class
-name, owning library name, active/inactive state, dynamic public/private state,
-ports, and an optional runtime value.
+default node state, default ports, metadata, optional single-node cardinality,
+and the optional runtime factory used to initialize each active node instance.
+Nodes keep a stable ID, class name, owning library name, active/inactive state,
+dynamic public/private state, ports, and an optional runtime value.
+
+Single-node classes set `ClassSpec.SingleNode` and may have zero or one node in
+the workspace. `CanCreateNode`, `CreateNode`, and `Paste` reject attempts to add
+another node of that class with `ErrMultiplicity`. During restore, if persisted
+data contains multiple nodes of a single-node class, the workspace preserves the
+node with the lowest `NodeID` and discards the others before link validation and
+before any node initialization or private-state import hooks run. Links attached
+to discarded nodes are treated as broken persisted links and are skipped.
 
 Links connect one output `FullPortID` to one input `FullPortID`, carry one fixed
 type name, and may store opaque waypoint strings for editors. Link endpoints are
@@ -209,7 +217,8 @@ node initialization with the default or restored private value.
 `Restore` validates IDs, ports, endpoint references, type compatibility, and DAG
 safety before active links are accepted. Missing classes restore nodes as
 inactive. Persisted links whose endpoint nodes or ports are missing are skipped
-as broken. Persisted links that reference existing endpoints but violate type,
+as broken, including links to duplicate nodes discarded for single-node classes.
+Persisted links that reference existing endpoints but violate type,
 multiplicity, duplicate-ID, or DAG constraints reject the restore and roll the
 workspace back to its previous state.
 

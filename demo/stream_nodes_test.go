@@ -63,6 +63,25 @@ func TestStreamDetachStopsInputReader(t *testing.T) {
 	}
 }
 
+func TestStreamPullWaitsForLateSource(t *testing.T) {
+	w := pasta.NewWorkspace()
+	defer func() { _ = w.Close() }()
+	if err := w.RegisterLibrary(StreamLibrary{}); err != nil {
+		t.Fatalf("RegisterLibrary() error = %v", err)
+	}
+	sink := createStreamNode(t, w, StreamSinkClass, streamState{Value: "waiting"})
+	upper := createStreamNode(t, w, StreamUppercaseClass, streamState{Value: "waiting"})
+	provider := createStreamNode(t, w, StreamProviderClass, streamState{IntervalSeconds: 0.05, Value: "waiting"})
+
+	linkStream(t, w, upper, sink)
+	time.Sleep(25 * time.Millisecond)
+	linkStream(t, w, provider, upper)
+
+	waitForStream(t, w, sink, func(state streamState) bool {
+		return state.Count >= 1 && strings.HasPrefix(state.Value, "CHUNK-")
+	})
+}
+
 func TestStreamWireReadUnblocksOnContextCancel(t *testing.T) {
 	wire := newStreamWire(func(ctx context.Context) (string, bool) {
 		<-ctx.Done()

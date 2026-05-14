@@ -213,6 +213,7 @@ func (w *Workspace) Restore(data SaveData) error {
 			maxNode = id
 		}
 	}
+	w.pruneSingleNodeClassDuplicatesLocked(nodes)
 	oldNodes, oldLinks, oldMessages := w.nodes, w.links, cloneMessageRecords(w.messages)
 	oldNextNode, oldNextLink, oldNextMessage := w.nextNode, w.nextLink, w.nextMessage
 	restoreMessageEvents := w.removeAllMessagesLocked()

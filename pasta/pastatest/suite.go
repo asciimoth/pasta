@@ -190,6 +190,19 @@ func runClassCase(t *testing.T, suite Suite, cc ClassCase) {
 	if err != nil {
 		t.Fatalf("Copy single %q node: %v", cc.Name, err)
 	}
+	if spec.SingleNode {
+		if err := w.CanCreateNode(cc.Name); !errors.Is(err, pasta.ErrMultiplicity) {
+			t.Fatalf("CanCreateNode(%q) with existing single node = %v, want multiplicity", cc.Name, err)
+		}
+		beforePaste := w.Save()
+		if _, _, err := w.Paste(clip); !errors.Is(err, pasta.ErrMultiplicity) {
+			t.Fatalf("Paste single-node %q over existing node = %v, want multiplicity", cc.Name, err)
+		}
+		if !reflect.DeepEqual(beforePaste, w.Save()) {
+			t.Fatalf("rejected Paste single-node %q mutated workspace", cc.Name)
+		}
+		return
+	}
 	nodes, links, err := w.Paste(clip)
 	if err != nil {
 		t.Fatalf("Paste single %q node: %v", cc.Name, err)

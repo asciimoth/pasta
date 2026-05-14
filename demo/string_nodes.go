@@ -19,6 +19,7 @@ const (
 	LowercaseClass    = StringLibraryName + "/Lowercase"
 	ReplaceClass      = StringLibraryName + "/Replace"
 	StringResultClass = StringLibraryName + "/Result"
+	SingleDemoClass   = StringLibraryName + "/SingleDemo"
 
 	StringType = StringLibraryName + "/string"
 )
@@ -110,6 +111,13 @@ func StringClasses() []pasta.ClassSpec {
 			Default:     stringDefault("String Result", map[string]any{"value": ""}),
 			Inputs:      []pasta.PortSpec{stringInput(StringInput, "text")},
 			Runtime:     stringNodeClass{kind: "result"},
+		},
+		{
+			Name:        SingleDemoClass,
+			DisplayName: "Single Demo",
+			Description: "Demonstrates a class that allows only one node in the workspace.",
+			Default:     stringDefault("Single Demo", map[string]any{"value": "only one allowed"}),
+			SingleNode:  true,
 		},
 	}
 }

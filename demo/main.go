@@ -41,6 +41,7 @@ type classDTO struct {
 	ShortName   string    `json:"shortName"`
 	DisplayName string    `json:"displayName"`
 	Description string    `json:"description"`
+	SingleNode  bool      `json:"singleNode,omitempty"`
 	Inputs      []portDTO `json:"inputs"`
 	Outputs     []portDTO `json:"outputs"`
 }
@@ -637,7 +638,8 @@ func (a *appState) snapshot() snapshotDTO {
 		out.Classes = append(out.Classes, classDTO{
 			Name: class.Spec.Name, ShortName: shortClass(class.Spec.Name),
 			DisplayName: class.Spec.DisplayName, Description: class.Spec.Description,
-			Inputs: portsDTO(class.Spec.Inputs), Outputs: portsDTO(class.Spec.Outputs),
+			SingleNode: class.Spec.SingleNode,
+			Inputs:     portsDTO(class.Spec.Inputs), Outputs: portsDTO(class.Spec.Outputs),
 		})
 	}
 	for _, node := range s.Nodes {

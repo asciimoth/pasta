@@ -64,9 +64,14 @@ type NodeState struct {
 // Name must be under the defining library's prefix. Default, Inputs, Outputs,
 // and Metadata are copied into newly created nodes. Class Metadata describes
 // the class itself, for example catalog, palette, or documentation annotations;
-// use Default.Metadata for metadata that should become per-node state. Runtime
-// is optional; when it is non-nil, the workspace calls InitNode for each active
-// node instance and stores the returned NodeRuntime for later lifecycle hooks.
+// use Default.Metadata for metadata that should become per-node state.
+// SingleNode limits the class to zero or one node in a workspace. Creating or
+// pasting another node of the class while one already exists returns
+// ErrMultiplicity. Restore preserves only the lowest-ID persisted node for a
+// single-node class and discards the rest before runtime initialization.
+// Runtime is optional; when it is non-nil, the workspace calls InitNode for
+// each active node instance and stores the returned NodeRuntime for later
+// lifecycle hooks.
 type ClassSpec struct {
 	Name        string
 	DisplayName string
@@ -75,6 +80,7 @@ type ClassSpec struct {
 	Inputs      []PortSpec
 	Outputs     []PortSpec
 	Metadata    map[string]string
+	SingleNode  bool
 	Runtime     NodeClass `json:"-"`
 }
 

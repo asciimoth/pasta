@@ -141,6 +141,7 @@ func (c streamNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState, 
 		state:       streamStateFromAny(state.Private),
 		sources:     make(map[pasta.LinkID]*streamSource),
 		pullCancels: make(map[pasta.LinkID]context.CancelFunc),
+		sourceWake:  make(chan struct{}),
 	}
 	if node.state.IntervalSeconds <= 0 {
 		node.state.IntervalSeconds = 1
@@ -168,6 +169,7 @@ type streamNode struct {
 	msgs        []pasta.MessageID
 	sources     map[pasta.LinkID]*streamSource
 	pullCancels map[pasta.LinkID]context.CancelFunc
+	sourceWake  chan struct{}
 }
 
 type streamState struct {
@@ -210,6 +212,7 @@ func (n *streamNode) AfterLinkAttach(endpoint pasta.LinkEndpoint, object any) {
 	ctx, cancel := context.WithCancel(n.runCtx)
 	n.mu.Lock()
 	n.sources[endpoint.Link] = &streamSource{ctx: ctx, cancel: cancel, wire: wire}
+	n.wakeSourcesLocked()
 	n.mu.Unlock()
 }
 
@@ -348,9 +351,8 @@ func (n *streamNode) readProvider(ctx context.Context) (string, bool) {
 }
 
 func (n *streamNode) readSource(ctx context.Context) (string, bool) {
-	source := n.firstSource()
-	if source == nil {
-		<-ctx.Done()
+	source, ok := n.waitForSource(ctx)
+	if !ok {
 		return "", false
 	}
 	readCtx, cancel := context.WithCancel(source.ctx)
@@ -363,18 +365,35 @@ func (n *streamNode) readSource(ctx context.Context) (string, bool) {
 		case <-done:
 		}
 	}()
-	value, ok := source.wire.Read(readCtx)
+	value, readOK := source.wire.Read(readCtx)
 	close(done)
-	return value, ok
+	return value, readOK
 }
 
-func (n *streamNode) firstSource() *streamSource {
+func (n *streamNode) waitForSource(ctx context.Context) (*streamSource, bool) {
+	for {
+		source, wake := n.firstSource()
+		if source == nil {
+			select {
+			case <-ctx.Done():
+				return nil, false
+			case <-n.runCtx.Done():
+				return nil, false
+			case <-wake:
+				continue
+			}
+		}
+		return source, true
+	}
+}
+
+func (n *streamNode) firstSource() (*streamSource, <-chan struct{}) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	for _, source := range n.sources {
-		return source
+		return source, n.sourceWake
 	}
-	return nil
+	return nil, n.sourceWake
 }
 
 func (n *streamNode) process(value string) string {
@@ -429,6 +448,9 @@ func (n *streamNode) closeLink(link pasta.LinkID) {
 	delete(n.sources, link)
 	cancel := n.pullCancels[link]
 	delete(n.pullCancels, link)
+	if source != nil {
+		n.wakeSourcesLocked()
+	}
 	n.mu.Unlock()
 	if source != nil {
 		source.cancel()
@@ -445,6 +467,7 @@ func (n *streamNode) closeAll() {
 	cancels := n.pullCancels
 	n.sources = make(map[pasta.LinkID]*streamSource)
 	n.pullCancels = make(map[pasta.LinkID]context.CancelFunc)
+	n.wakeSourcesLocked()
 	n.mu.Unlock()
 	for _, source := range sources {
 		source.cancel()
@@ -452,6 +475,11 @@ func (n *streamNode) closeAll() {
 	for _, cancel := range cancels {
 		cancel()
 	}
+}
+
+func (n *streamNode) wakeSourcesLocked() {
+	close(n.sourceWake)
+	n.sourceWake = make(chan struct{})
 }
 
 func (n *streamNode) clearMessages() error {

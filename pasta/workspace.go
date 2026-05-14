@@ -27,6 +27,7 @@ type Workspace struct {
 	libraries    map[string]Library
 	classes      map[string]*classRecord
 	nodes        map[NodeID]*nodeRecord
+	pendingNodes map[NodeID]string
 	links        map[LinkID]*linkRecord
 	messages     map[MessageID]*messageRecord
 	watchers     map[*MessageSubscription]bool
@@ -189,6 +190,7 @@ func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 		libraries:    make(map[string]Library),
 		classes:      make(map[string]*classRecord),
 		nodes:        make(map[NodeID]*nodeRecord),
+		pendingNodes: make(map[NodeID]string),
 		links:        make(map[LinkID]*linkRecord),
 		messages:     make(map[MessageID]*messageRecord),
 		watchers:     make(map[*MessageSubscription]bool),
@@ -531,8 +533,7 @@ func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, erro
 		w.mu.Unlock()
 		return 0, opErr("create node", "validate", ErrInactive)
 	}
-	rec.runtime = runtime
-	w.nodes[id] = rec
+	w.commitPreparedNodeLocked(id, rec, runtime)
 	if scope != nil {
 		scope.finishInit()
 	}
@@ -1152,6 +1153,10 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		w.mu.Unlock()
 		return nil, nil, err
 	}
+	if err := w.validatePasteSingleNodeClassesLocked(clip); err != nil {
+		w.mu.Unlock()
+		return nil, nil, err
+	}
 	w.mu.Unlock()
 	nodeMap := make(map[NodeID]NodeID, len(clip.Nodes))
 	newNodes := make([]NodeID, 0, len(clip.Nodes))
@@ -1198,13 +1203,10 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 			w.mu.Unlock()
 			return nil, nil, opErr("paste", "validate", ErrInactive)
 		}
-		rec.runtime = runtime
-		w.nodes[id] = rec
+		w.commitPreparedNodeLocked(id, rec, runtime)
 		if scope != nil {
 			scope.finishInit()
 		}
-		node := w.nodes[id]
-		node.runtime = runtime
 		w.mu.Unlock()
 		nodeMap[oldID] = id
 		newNodes = append(newNodes, id)
@@ -1247,6 +1249,9 @@ func (w *Workspace) CanCreateNode(className string) error {
 	}
 	if !class.active {
 		return opErr("can create node", "validate", ErrInactive)
+	}
+	if class.spec.SingleNode && w.hasNodeOfClassLocked(className) {
+		return opErr("can create node", "validate", ErrMultiplicity)
 	}
 	return nil
 }
@@ -1405,6 +1410,14 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDet
 	if err := validatePorts(spec.Outputs, OutputPort); err != nil {
 		return nil, opErr("define class", "validate", err)
 	}
+	if spec.SingleNode {
+		keep := w.lowestNodeOfClassLocked(spec.Name)
+		for id, node := range w.nodes {
+			if node.class == spec.Name && id != keep && (node.state == StateActive || node.runtime != nil) {
+				return nil, opErr("define class", "validate", ErrMultiplicity)
+			}
+		}
+	}
 	w.classes[spec.Name] = &classRecord{spec: cloneClassSpec(spec), library: library, active: true}
 	for _, node := range w.nodes {
 		if node.class == spec.Name {
@@ -1413,6 +1426,7 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDet
 			node.outputs = clonePorts(spec.Outputs)
 		}
 	}
+	w.pruneSingleNodeClassDuplicatesLocked(w.nodes)
 	detachEvents := w.removeBrokenLinksLocked()
 	w.refreshActivityLocked()
 	return detachEvents, nil
@@ -1449,8 +1463,14 @@ func (w *Workspace) prepareCreateNodeLocked(className string, opts NodeOptions, 
 	if !class.active {
 		return 0, nil, nil, opErr("create node", "validate", ErrInactive)
 	}
+	if class.spec.SingleNode && w.hasNodeOfClassLocked(className) {
+		return 0, nil, nil, opErr("create node", "validate", ErrMultiplicity)
+	}
 	id := w.nextNode
 	w.nextNode++
+	if class.spec.SingleNode {
+		w.pendingNodes[id] = className
+	}
 	state := cloneNodeState(class.spec.Default)
 	if opts.UseState || !reflect.DeepEqual(opts.State, NodeState{}) {
 		state = cloneNodeState(opts.State)
@@ -1485,8 +1505,85 @@ func (w *Workspace) applySavedNodePortsLocked(rec *nodeRecord, inputs, outputs [
 
 func (w *Workspace) rollbackPreparedNodeLocked(id NodeID) {
 	delete(w.nodes, id)
+	delete(w.pendingNodes, id)
 	if id+1 == w.nextNode {
 		w.nextNode = id
+	}
+}
+
+func (w *Workspace) commitPreparedNodeLocked(id NodeID, rec *nodeRecord, runtime NodeRuntime) {
+	rec.runtime = runtime
+	w.nodes[id] = rec
+	delete(w.pendingNodes, id)
+}
+
+func (w *Workspace) hasNodeOfClassLocked(className string) bool {
+	for _, pendingClass := range w.pendingNodes {
+		if pendingClass == className {
+			return true
+		}
+	}
+	for _, node := range w.nodes {
+		if node.class == className {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Workspace) validatePasteSingleNodeClassesLocked(clip Clipboard) error {
+	counts := make(map[string]int)
+	for _, saved := range clip.Nodes {
+		class := w.classes[saved.Class]
+		if class == nil || !class.active || !class.spec.SingleNode {
+			continue
+		}
+		counts[saved.Class]++
+		if counts[saved.Class] > 1 || w.hasNodeOfClassLocked(saved.Class) {
+			return opErr("paste", "validate", ErrMultiplicity)
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) lowestNodeOfClassLocked(className string) NodeID {
+	var keep NodeID
+	for id, node := range w.nodes {
+		if node == nil || node.class != className {
+			continue
+		}
+		if keep == 0 || id < keep {
+			keep = id
+		}
+	}
+	return keep
+}
+
+func (w *Workspace) pruneSingleNodeClassDuplicatesLocked(nodes map[NodeID]*nodeRecord) {
+	keepers := make(map[string]NodeID)
+	for id, node := range nodes {
+		if node == nil {
+			continue
+		}
+		class := w.classes[node.class]
+		if class == nil || !class.spec.SingleNode {
+			continue
+		}
+		if keep, ok := keepers[node.class]; !ok || id < keep {
+			keepers[node.class] = id
+		}
+	}
+	for id, node := range nodes {
+		if node == nil {
+			continue
+		}
+		class := w.classes[node.class]
+		if class == nil || !class.spec.SingleNode {
+			continue
+		}
+		if keep := keepers[node.class]; keep != 0 && id != keep {
+			delete(nodes, id)
+		}
 	}
 }
 

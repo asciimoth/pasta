@@ -27,7 +27,7 @@ frontend can build on top of.
 - Directed links from output ports to input ports, with DAG validation, endpoint
   validation, input multiplicity checks, and type compatibility checks.
 - Application-defined libraries and node classes with default state, typed ports,
-  metadata, and optional runtime factories.
+  metadata, optional single-node cardinality, and optional runtime factories.
 - Runtime lifecycle hooks for node initialization, link attach/detach,
   inactivation, deletion, private-state import/export, and runtime-provided link
   objects.
@@ -45,6 +45,11 @@ Pasta intentionally does not decide whether a graph is push-based, pull-based, o
 mixed. Link objects and node runtimes are application-owned Go values, so a
 library can implement callbacks, channels, interface contracts, shared objects,
 or any other communication model appropriate for its domain.
+
+Classes can opt into single-node cardinality with `ClassSpec.SingleNode`.
+Workspaces then allow zero or one node of that class, reject create and paste
+operations that would add another node with `ErrMultiplicity`, and restore only
+the lowest-ID persisted node before running initialization hooks.
 
 ## Repository Contents
 - `pasta/`: the Go framework package.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/asciimoth/pasta/pasta"
@@ -174,6 +175,30 @@ func TestStringNodeMessageButtons(t *testing.T) {
 	}
 	if got := w.NodeMessages(node); len(got) != 0 {
 		t.Fatalf("NodeMessages() after clear = %#v, want none", got)
+	}
+}
+
+func TestSingleDemoClassAllowsOnlyOneNode(t *testing.T) {
+	w := pasta.NewWorkspace()
+	if err := w.RegisterLibrary(StringLibrary{}); err != nil {
+		t.Fatalf("RegisterLibrary() error = %v", err)
+	}
+	first, err := w.CreateNode(SingleDemoClass, pasta.NodeOptions{})
+	if err != nil {
+		t.Fatalf("CreateNode(SingleDemo) error = %v", err)
+	}
+	if _, err := w.CreateNode(SingleDemoClass, pasta.NodeOptions{}); !errors.Is(err, pasta.ErrMultiplicity) {
+		t.Fatalf("second CreateNode(SingleDemo) error = %v, want multiplicity", err)
+	}
+	snap, ok := w.Node(first)
+	if !ok {
+		t.Fatal("single demo node missing")
+	}
+	if snap.Dynamic.Metadata["palette"] != "strings" {
+		t.Fatalf("single demo metadata = %#v", snap.Dynamic.Metadata)
+	}
+	if got := stringStateFromAny(snap.Dynamic.Private).Value; got != "only one allowed" {
+		t.Fatalf("single demo value = %q", got)
 	}
 }
 
