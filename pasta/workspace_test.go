@@ -182,6 +182,180 @@ func TestSingleNodeClasses(t *testing.T) {
 	}
 }
 
+func TestKeyNodeAccessTracksActiveConnectivity(t *testing.T) {
+	const (
+		keyClass     = "example.com/Key"
+		regularClass = "example.com/Regular"
+	)
+	hooks := &keyAccessHooks{events: map[NodeID][]bool{}}
+	keySpec := keyAccessClass(keyClass, true, hooks)
+	regularSpec := keyAccessClass(regularClass, false, hooks)
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{keySpec, regularSpec}}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := w.CreateNode(keyClass, NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	middle, err := w.CreateNode(regularClass, NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := w.CreateNode(regularClass, NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKeyAccess(t, w, map[NodeID]bool{key: true, middle: false, leaf: false})
+	if got := hooks.nodeEvents(key); len(got) != 1 || !got[0] {
+		t.Fatalf("key hook events = %#v, want [true]", got)
+	}
+	if got := hooks.nodeEvents(middle); len(got) != 0 {
+		t.Fatalf("unconnected regular hook events = %#v, want none", got)
+	}
+
+	linkToKey, err := w.CreateLink(
+		FullPortID{Node: middle, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: key, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{Type: testType},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CreateLink(
+		FullPortID{Node: leaf, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: middle, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{Type: testType},
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertKeyAccess(t, w, map[NodeID]bool{key: true, middle: true, leaf: true})
+	if got := hooks.nodeEvents(middle); len(got) != 1 || !got[0] {
+		t.Fatalf("middle hook events = %#v, want [true]", got)
+	}
+	if got := hooks.nodeEvents(leaf); len(got) != 1 || !got[0] {
+		t.Fatalf("leaf hook events = %#v, want [true]", got)
+	}
+
+	if err := w.DeleteLink(linkToKey); err != nil {
+		t.Fatal(err)
+	}
+	assertKeyAccess(t, w, map[NodeID]bool{key: true, middle: false, leaf: false})
+	if got := hooks.nodeEvents(middle); len(got) != 2 || got[1] {
+		t.Fatalf("middle hook events after detach = %#v, want trailing false", got)
+	}
+	if got := hooks.nodeEvents(leaf); len(got) != 2 || got[1] {
+		t.Fatalf("leaf hook events after detach = %#v, want trailing false", got)
+	}
+}
+
+func TestKeyNodeAccessRestoreAfterSingleNodeDedup(t *testing.T) {
+	const (
+		keyClass     = "example.com/Key"
+		regularClass = "example.com/Regular"
+	)
+	hooks := &keyAccessHooks{events: map[NodeID][]bool{}}
+	w := NewWorkspace()
+	if err := w.RegisterLibrary(StaticLibrary{LibraryName: "example.com", Classes: []ClassSpec{
+		func() ClassSpec {
+			spec := keyAccessClass(keyClass, true, hooks)
+			spec.SingleNode = true
+			return spec
+		}(),
+		keyAccessClass(regularClass, false, hooks),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(SaveData{
+		Nodes: []SaveNode{
+			{ID: "2N", Class: keyClass},
+			{ID: "1N", Class: keyClass},
+			{ID: "3N", Class: regularClass},
+		},
+		Links: []SaveLink{{
+			Name: FullLinkName{
+				Link:   1,
+				Input:  FullPortID{Node: 3, Port: PortID{Number: 1, Kind: InputPort}},
+				Output: FullPortID{Node: 2, Port: PortID{Number: 1, Kind: OutputPort}},
+			}.String(),
+			Type: testType,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.Node(2); ok {
+		t.Fatal("duplicate single-node key should be pruned before reachability")
+	}
+	assertKeyAccess(t, w, map[NodeID]bool{1: true, 3: false})
+	if got := hooks.nodeEvents(1); len(got) != 1 || !got[0] {
+		t.Fatalf("restored key hook events = %#v, want [true]", got)
+	}
+	if got := hooks.nodeEvents(3); len(got) != 0 {
+		t.Fatalf("regular linked only to pruned key hook events = %#v, want none", got)
+	}
+}
+
+type keyAccessHooks struct {
+	mu     sync.Mutex
+	events map[NodeID][]bool
+}
+
+func (h *keyAccessHooks) add(id NodeID, access bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.events[id] = append(h.events[id], access)
+}
+
+func (h *keyAccessHooks) nodeEvents(id NodeID) []bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]bool(nil), h.events[id]...)
+}
+
+type keyAccessRuntime struct {
+	id    NodeID
+	hooks *keyAccessHooks
+}
+
+func (r keyAccessRuntime) HasKeyNodeAccess(access bool) {
+	r.hooks.add(r.id, access)
+}
+
+func keyAccessClass(name string, key bool, hooks *keyAccessHooks) ClassSpec {
+	return ClassSpec{
+		Name:    name,
+		KeyNode: key,
+		Inputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: InputPort},
+			Name:      "in",
+			Direction: InputPort,
+			FixedType: testType,
+		}},
+		Outputs: []PortSpec{{
+			ID:        PortID{Number: 1, Kind: OutputPort},
+			Name:      "out",
+			Direction: OutputPort,
+			FixedType: testType,
+		}},
+		Runtime: nodeClassFunc(func(ctx NodeContext, _ NodeState, _ InitMode) (NodeRuntime, error) {
+			return keyAccessRuntime{id: ctx.ID, hooks: hooks}, nil
+		}),
+	}
+}
+
+func assertKeyAccess(t *testing.T, w *Workspace, want map[NodeID]bool) {
+	t.Helper()
+	for id, access := range want {
+		snap, ok := w.Node(id)
+		if !ok {
+			t.Fatalf("Node(%s) missing", id)
+		}
+		if snap.HasKeyNodeAccess != access {
+			t.Fatalf("Node(%s).HasKeyNodeAccess = %v, want %v", id, snap.HasKeyNodeAccess, access)
+		}
+	}
+}
+
 type panicLibrary struct{}
 
 func (panicLibrary) Name() string { return "example.com" }
@@ -4431,18 +4605,18 @@ func TestCoveragePrivateHelpersAndCorruptStateBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.links[pending.link.id] = pending.link
-	if err := w.commitPreparedLinkLocked(pending); !errors.Is(err, ErrDuplicate) {
+	if _, err := w.commitPreparedLinkLocked(pending); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("duplicate commit error = %v, want duplicate", err)
 	}
 	delete(w.links, pending.link.id)
 	pending.link.typ = "example.com/float"
-	if err := w.commitPreparedLinkLocked(pending); !errors.Is(err, ErrTypeMismatch) {
+	if _, err := w.commitPreparedLinkLocked(pending); !errors.Is(err, ErrTypeMismatch) {
 		t.Fatalf("type-changing commit error = %v, want type mismatch", err)
 	}
 	delete(w.links, pending.link.id)
 	w.nextLink = pending.link.id
 	pending.link.typ = testType
-	if err := w.commitPreparedLinkLocked(pending); err != nil {
+	if _, err := w.commitPreparedLinkLocked(pending); err != nil {
 		t.Fatal(err)
 	}
 	if w.nextLink != pending.link.id+1 {
@@ -4983,7 +5157,7 @@ func TestCoverageFinalReachableBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending.link.typ = ""
-	if err := commitWorkspace.commitPreparedLinkLocked(pending); !errors.Is(err, ErrTypeMismatch) {
+	if _, err := commitWorkspace.commitPreparedLinkLocked(pending); !errors.Is(err, ErrTypeMismatch) {
 		t.Fatalf("commit changed implicit type = %v, want type mismatch", err)
 	}
 	commitWorkspace.closed = true
@@ -4994,7 +5168,7 @@ func TestCoverageFinalReachableBranches(t *testing.T) {
 	); !errors.Is(err, ErrClosed) {
 		t.Fatalf("prepare link closed = %v, want closed", err)
 	}
-	if err := commitWorkspace.commitPreparedLinkLocked(pending); !errors.Is(err, ErrClosed) {
+	if _, err := commitWorkspace.commitPreparedLinkLocked(pending); !errors.Is(err, ErrClosed) {
 		t.Fatalf("commit link closed = %v, want closed", err)
 	}
 

@@ -41,15 +41,16 @@ type classRecord struct {
 }
 
 type nodeRecord struct {
-	id      NodeID
-	class   string
-	library string
-	state   ObjectState
-	dynamic NodeState
-	inputs  []PortSpec
-	outputs []PortSpec
-	runtime NodeRuntime
-	menu    *NodeMenu
+	id        NodeID
+	class     string
+	library   string
+	state     ObjectState
+	keyAccess bool
+	dynamic   NodeState
+	inputs    []PortSpec
+	outputs   []PortSpec
+	runtime   NodeRuntime
+	menu      *NodeMenu
 }
 
 type linkRecord struct {
@@ -304,13 +305,15 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		}
 	}()
 	var detachEvents []linkDetachEvent
-	scope := &libraryScope{w: w, library: name, detachEvents: &detachEvents, cleanupRuntimes: cleanupRuntimes, registering: true}
+	var keyEvents []nodeKeyAccessEvent
+	scope := &libraryScope{w: w, library: name, detachEvents: &detachEvents, keyEvents: &keyEvents, cleanupRuntimes: cleanupRuntimes, registering: true}
 	if err := lib.DefineClasses(scope); err != nil {
 		w.logError("register library hook", err)
 		return errors.Join(opErr("register library", "hook", err), rollback())
 	}
 	scope.registering = false
 	w.callAfterLinkDetachEvents(detachEvents)
+	w.callNodeKeyAccessEvents(keyEvents)
 	return nil
 }
 
@@ -351,9 +354,10 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 			class.active = false
 		}
 	}
-	w.refreshActivityLocked()
+	keyEvents := w.refreshActivityLocked()
 	w.clearInactiveRuntimesLocked()
 	w.mu.Unlock()
+	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveLibraryUnregister)
 	w.callLinkInactiveEvents(linkEvents, InactiveLibraryUnregister)
 	if err := w.callCloseEvents(nodeEvents); err != nil {
@@ -368,17 +372,17 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 // set, removes links whose endpoints or types are now broken, and reactivates
 // preserved inactive nodes when their endpoints remain valid.
 func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
-	return w.defineClass(library, spec, nil, nil)
+	return w.defineClass(library, spec, nil, nil, nil)
 }
 
-func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent, cleanupRuntimes map[NodeID]NodeRuntime) error {
+func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent, deferKeyEvents *[]nodeKeyAccessEvent, cleanupRuntimes map[NodeID]NodeRuntime) error {
 	w.mu.Lock()
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
 	oldLinks := cloneLinkRecords(w.links)
 	oldMessages := cloneMessageRecords(w.messages)
 	oldNextMessage := w.nextMessage
-	detachEvents, err := w.defineClassLocked(library, spec)
+	detachEvents, keyEvents, err := w.defineClassLocked(library, spec)
 	if err != nil {
 		w.mu.Unlock()
 		return err
@@ -434,11 +438,21 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 			cleanupRuntimes[id] = runtime
 		}
 	}
+	initIDs := make([]NodeID, 0, len(runtimes))
+	for id := range runtimes {
+		initIDs = append(initIDs, id)
+	}
+	keyEvents = append(keyEvents, w.keyAccessEventsForNodesLocked(initIDs)...)
 	w.mu.Unlock()
 	if deferDetachEvents != nil {
 		*deferDetachEvents = append(*deferDetachEvents, detachEvents...)
 	} else {
 		w.callAfterLinkDetachEvents(detachEvents)
+	}
+	if deferKeyEvents != nil {
+		*deferKeyEvents = append(*deferKeyEvents, keyEvents...)
+	} else {
+		w.callNodeKeyAccessEvents(keyEvents)
 	}
 	return nil
 }
@@ -485,9 +499,10 @@ func (w *Workspace) RecallClass(library, className string) error {
 		return opErr("recall class", "validate", ErrOwnership)
 	}
 	rec.active = false
-	w.refreshActivityLocked()
+	keyEvents := w.refreshActivityLocked()
 	w.clearInactiveRuntimesLocked()
 	w.mu.Unlock()
+	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveClassRecall)
 	w.callLinkInactiveEvents(linkEvents, InactiveClassRecall)
 	if err := w.callCloseEvents(nodeEvents); err != nil {
@@ -533,11 +548,12 @@ func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, erro
 		w.mu.Unlock()
 		return 0, opErr("create node", "validate", ErrInactive)
 	}
-	w.commitPreparedNodeLocked(id, rec, runtime)
+	keyEvents := w.commitPreparedNodeLocked(id, rec, runtime)
 	if scope != nil {
 		scope.finishInit()
 	}
 	w.mu.Unlock()
+	w.callNodeKeyAccessEvents(keyEvents)
 	return id, nil
 }
 
@@ -581,11 +597,13 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 			delete(w.links, linkID)
 		}
 	}
+	keyEvents := w.refreshActivityLocked()
 	watchers := w.messageWatchersLocked()
 	menuWatchers := w.menuWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, messageEvents)
 	w.notifyMenuWatchers(menuWatchers, menuEvents)
+	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterDelete(runtime)
 	if err := w.callNodeClose(runtime); err != nil {
 		return opErr("delete node", "hook", err)
@@ -1028,7 +1046,7 @@ func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (Link
 		return 0, opErr("create link", "hook", err)
 	}
 	w.mu.Lock()
-	err = w.commitPreparedLinkLocked(pending)
+	keyEvents, err := w.commitPreparedLinkLocked(pending)
 	w.mu.Unlock()
 	if err != nil {
 		w.mu.Lock()
@@ -1038,6 +1056,7 @@ func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (Link
 	}
 	w.callAfterLinkAttach(pending.inputRuntime, pending.inputEndpoint, object)
 	w.callAfterLinkAttach(pending.outputRuntime, pending.outputEndpoint, object)
+	w.callNodeKeyAccessEvents(keyEvents)
 	return pending.link.id, nil
 }
 
@@ -1068,9 +1087,11 @@ func (w *Workspace) DeleteLink(id LinkID) error {
 		return opErr("delete link", "validate", ErrNotFound)
 	}
 	delete(w.links, id)
+	keyEvents := w.refreshActivityLocked()
 	w.mu.Unlock()
 	w.callAfterLinkDetach(inputRuntime, inputEndpoint)
 	w.callAfterLinkDetach(outputRuntime, outputEndpoint)
+	w.callNodeKeyAccessEvents(keyEvents)
 	return nil
 }
 
@@ -1203,11 +1224,12 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 			w.mu.Unlock()
 			return nil, nil, opErr("paste", "validate", ErrInactive)
 		}
-		w.commitPreparedNodeLocked(id, rec, runtime)
+		keyEvents := w.commitPreparedNodeLocked(id, rec, runtime)
 		if scope != nil {
 			scope.finishInit()
 		}
 		w.mu.Unlock()
+		w.callNodeKeyAccessEvents(keyEvents)
 		nodeMap[oldID] = id
 		newNodes = append(newNodes, id)
 	}
@@ -1231,8 +1253,9 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		newLinks = append(newLinks, id)
 	}
 	w.mu.Lock()
-	w.refreshActivityLocked()
+	keyEvents := w.refreshActivityLocked()
 	w.mu.Unlock()
+	w.callNodeKeyAccessEvents(keyEvents)
 	return newNodes, newLinks, nil
 }
 
@@ -1394,27 +1417,27 @@ func (w *Workspace) NodeMenu(id NodeID) (NodeMenu, bool) {
 	return cloneNodeMenu(*node.menu), true
 }
 
-func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDetachEvent, error) {
+func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDetachEvent, []nodeKeyAccessEvent, error) {
 	if err := w.checkOpenLocked("define class"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, ok := w.libraries[library]; !ok {
-		return nil, opErr("define class", "validate", ErrNotFound)
+		return nil, nil, opErr("define class", "validate", ErrNotFound)
 	}
 	if !ValidClassName(library, spec.Name) {
-		return nil, opErr("define class", "validate", ErrInvalidName)
+		return nil, nil, opErr("define class", "validate", ErrInvalidName)
 	}
 	if err := validatePorts(spec.Inputs, InputPort); err != nil {
-		return nil, opErr("define class", "validate", err)
+		return nil, nil, opErr("define class", "validate", err)
 	}
 	if err := validatePorts(spec.Outputs, OutputPort); err != nil {
-		return nil, opErr("define class", "validate", err)
+		return nil, nil, opErr("define class", "validate", err)
 	}
 	if spec.SingleNode {
 		keep := w.lowestNodeOfClassLocked(spec.Name)
 		for id, node := range w.nodes {
 			if node.class == spec.Name && id != keep && (node.state == StateActive || node.runtime != nil) {
-				return nil, opErr("define class", "validate", ErrMultiplicity)
+				return nil, nil, opErr("define class", "validate", ErrMultiplicity)
 			}
 		}
 	}
@@ -1428,8 +1451,8 @@ func (w *Workspace) defineClassLocked(library string, spec ClassSpec) ([]linkDet
 	}
 	w.pruneSingleNodeClassDuplicatesLocked(w.nodes)
 	detachEvents := w.removeBrokenLinksLocked()
-	w.refreshActivityLocked()
-	return detachEvents, nil
+	keyEvents := w.refreshActivityLocked()
+	return detachEvents, keyEvents, nil
 }
 
 func (w *Workspace) reactivatedInitNodesLocked(className string, oldNodes map[NodeID]*nodeRecord) []restoreInitNode {
@@ -1511,10 +1534,11 @@ func (w *Workspace) rollbackPreparedNodeLocked(id NodeID) {
 	}
 }
 
-func (w *Workspace) commitPreparedNodeLocked(id NodeID, rec *nodeRecord, runtime NodeRuntime) {
+func (w *Workspace) commitPreparedNodeLocked(id NodeID, rec *nodeRecord, runtime NodeRuntime) []nodeKeyAccessEvent {
 	rec.runtime = runtime
 	w.nodes[id] = rec
 	delete(w.pendingNodes, id)
+	return w.refreshActivityLocked()
 }
 
 func (w *Workspace) hasNodeOfClassLocked(className string) bool {
@@ -1624,26 +1648,25 @@ func (w *Workspace) rollbackPreparedLinkLocked(id LinkID) {
 	}
 }
 
-func (w *Workspace) commitPreparedLinkLocked(pending pendingLinkCreate) error {
+func (w *Workspace) commitPreparedLinkLocked(pending pendingLinkCreate) ([]nodeKeyAccessEvent, error) {
 	if err := w.checkOpenLocked("create link"); err != nil {
-		return err
+		return nil, err
 	}
 	if _, exists := w.links[pending.link.id]; exists {
-		return opErr("create link", "validate", ErrDuplicate)
+		return nil, opErr("create link", "validate", ErrDuplicate)
 	}
 	typ, err := w.validateLinkLocked(pending.link.input, pending.link.output, pending.link.typ, 0)
 	if err != nil {
-		return opErr("create link", "validate", err)
+		return nil, opErr("create link", "validate", err)
 	}
 	if typ != pending.link.typ {
-		return opErr("create link", "validate", ErrTypeMismatch)
+		return nil, opErr("create link", "validate", ErrTypeMismatch)
 	}
 	if w.nextLink <= pending.link.id {
 		w.nextLink = pending.link.id + 1
 	}
 	w.links[pending.link.id] = pending.link
-	w.refreshActivityLocked()
-	return nil
+	return w.refreshActivityLocked(), nil
 }
 
 func (w *Workspace) validateLinkLocked(input, output FullPortID, requested string, ignore LinkID) (string, error) {
@@ -1794,7 +1817,11 @@ func (w *Workspace) pathExistsLocked(from, to NodeID, ignore LinkID) bool {
 	return walk(from)
 }
 
-func (w *Workspace) refreshActivityLocked() {
+func (w *Workspace) refreshActivityLocked() []nodeKeyAccessEvent {
+	oldAccess := make(map[NodeID]bool, len(w.nodes))
+	for id, node := range w.nodes {
+		oldAccess[id] = node.keyAccess
+	}
 	for _, node := range w.nodes {
 		class := w.classes[node.class]
 		if class != nil && class.active {
@@ -1813,6 +1840,76 @@ func (w *Workspace) refreshActivityLocked() {
 			link.state = StateInactive
 		}
 	}
+	access := w.keyAccessLocked()
+	events := make([]nodeKeyAccessEvent, 0)
+	for id, node := range w.nodes {
+		node.keyAccess = access[id]
+		if oldAccess[id] == node.keyAccess {
+			continue
+		}
+		events = append(events, nodeKeyAccessEvent{id: id, runtime: node.runtime, hasAccess: node.keyAccess})
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].id < events[j].id })
+	return events
+}
+
+func (w *Workspace) keyAccessLocked() map[NodeID]bool {
+	access := make(map[NodeID]bool, len(w.nodes))
+	queue := make([]NodeID, 0)
+	for id, node := range w.nodes {
+		if node.state != StateActive {
+			continue
+		}
+		class := w.classes[node.class]
+		if class == nil || !class.active || !class.spec.KeyNode {
+			continue
+		}
+		access[id] = true
+		queue = append(queue, id)
+	}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, link := range w.links {
+			if link.state != StateActive {
+				continue
+			}
+			var peer NodeID
+			switch id {
+			case link.input.Node:
+				peer = link.output.Node
+			case link.output.Node:
+				peer = link.input.Node
+			default:
+				continue
+			}
+			node := w.nodes[peer]
+			if node == nil || node.state != StateActive || access[peer] {
+				continue
+			}
+			access[peer] = true
+			queue = append(queue, peer)
+		}
+	}
+	return access
+}
+
+func (w *Workspace) keyAccessEventsForNodesLocked(ids []NodeID) []nodeKeyAccessEvent {
+	events := make([]nodeKeyAccessEvent, 0, len(ids))
+	seen := make(map[NodeID]bool, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		node := w.nodes[id]
+		if node == nil || !node.keyAccess {
+			continue
+		}
+		events = append(events, nodeKeyAccessEvent{id: id, runtime: node.runtime, hasAccess: true})
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].id < events[j].id })
+	return events
 }
 
 func (w *Workspace) clearInactiveRuntimesLocked() {
@@ -1920,13 +2017,14 @@ func snapshotClass(class *classRecord) ClassSnapshot {
 
 func snapshotNode(node *nodeRecord) NodeSnapshot {
 	snap := NodeSnapshot{
-		ID:      node.id,
-		Class:   node.class,
-		Library: node.library,
-		State:   node.state,
-		Dynamic: cloneNodeState(node.dynamic),
-		Inputs:  clonePorts(node.inputs),
-		Outputs: clonePorts(node.outputs),
+		ID:               node.id,
+		Class:            node.class,
+		Library:          node.library,
+		State:            node.state,
+		HasKeyNodeAccess: node.keyAccess,
+		Dynamic:          cloneNodeState(node.dynamic),
+		Inputs:           clonePorts(node.inputs),
+		Outputs:          clonePorts(node.outputs),
 	}
 	if node.menu != nil {
 		menu := cloneNodeMenu(*node.menu)
@@ -2135,12 +2233,13 @@ type libraryScope struct {
 	w               *Workspace
 	library         string
 	detachEvents    *[]linkDetachEvent
+	keyEvents       *[]nodeKeyAccessEvent
 	cleanupRuntimes map[NodeID]NodeRuntime
 	registering     bool
 }
 
 func (s *libraryScope) DefineClass(spec ClassSpec) error {
-	return s.w.defineClass(s.library, spec, s.detachEvents, s.cleanupRuntimes)
+	return s.w.defineClass(s.library, spec, s.detachEvents, s.keyEvents, s.cleanupRuntimes)
 }
 
 func (s *libraryScope) RecallClass(className string) error {

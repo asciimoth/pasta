@@ -42,6 +42,7 @@ type classDTO struct {
 	DisplayName string    `json:"displayName"`
 	Description string    `json:"description"`
 	SingleNode  bool      `json:"singleNode,omitempty"`
+	KeyNode     bool      `json:"keyNode,omitempty"`
 	Inputs      []portDTO `json:"inputs"`
 	Outputs     []portDTO `json:"outputs"`
 }
@@ -53,6 +54,7 @@ type nodeDTO struct {
 	ShortClass  string          `json:"shortClass"`
 	DisplayName string          `json:"displayName"`
 	State       string          `json:"state"`
+	KeyAccess   bool            `json:"keyAccess"`
 	PrimaryType string          `json:"primaryType"`
 	Value       float64         `json:"value"`
 	Text        string          `json:"text"`
@@ -638,8 +640,8 @@ func (a *appState) snapshot() snapshotDTO {
 		out.Classes = append(out.Classes, classDTO{
 			Name: class.Spec.Name, ShortName: shortClass(class.Spec.Name),
 			DisplayName: class.Spec.DisplayName, Description: class.Spec.Description,
-			SingleNode: class.Spec.SingleNode,
-			Inputs:     portsDTO(class.Spec.Inputs), Outputs: portsDTO(class.Spec.Outputs),
+			SingleNode: class.Spec.SingleNode, KeyNode: class.Spec.KeyNode,
+			Inputs: portsDTO(class.Spec.Inputs), Outputs: portsDTO(class.Spec.Outputs),
 		})
 	}
 	for _, node := range s.Nodes {
@@ -647,7 +649,7 @@ func (a *appState) snapshot() snapshotDTO {
 		out.Nodes = append(out.Nodes, nodeDTO{
 			ID: node.ID.String(), Number: int64(node.ID), Class: node.Class,
 			ShortClass: shortClass(node.Class), DisplayName: node.Dynamic.DisplayName,
-			State: string(node.State), PrimaryType: node.Dynamic.PrimaryType,
+			State: string(node.State), KeyAccess: node.HasKeyNodeAccess, PrimaryType: node.Dynamic.PrimaryType,
 			Value: numberValue(node.Dynamic.Private), Text: textValue(node.Dynamic.Private),
 			Coordinate: [2]float64{x, y}, Inputs: portsDTO(node.Inputs),
 			Outputs: portsDTO(node.Outputs), Messages: messagesDTO(node.Messages), Menu: node.Menu,

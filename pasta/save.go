@@ -320,12 +320,18 @@ func (w *Workspace) Restore(data SaveData) error {
 			scope.finishInit()
 		}
 	}
+	initIDs := make([]NodeID, 0, len(runtimes))
+	for id := range runtimes {
+		initIDs = append(initIDs, id)
+	}
+	keyEvents := w.keyAccessEventsForNodesLocked(initIDs)
 	watchers := w.messageWatchersLocked()
 	menuWatchers := w.menuWatchersLocked()
 	w.mu.Unlock()
 	locked = false
 	w.notifyMessageWatchers(watchers, restoreMessageEvents)
 	w.notifyMenuWatchers(menuWatchers, restoreMenuEvents)
+	w.callNodeKeyAccessEvents(keyEvents)
 	return nil
 }
 

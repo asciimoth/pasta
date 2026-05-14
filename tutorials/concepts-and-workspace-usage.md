@@ -14,13 +14,15 @@ The tested reference code for this tutorial is:
 A Pasta `Workspace` owns the model:
 
 - libraries and node classes;
-- node instances with public state, private state, coordinates, metadata, ports, messages, and menus;
+- node instances with public state, private state, coordinates, metadata, ports, key-node access, messages, and menus;
 - directed links from output ports to input ports;
 - ID generation for nodes, links, ports, messages, and persisted link names.
 
 Applications own behavior. Pasta stores values such as private state and link objects, but it does not interpret calculator numbers, strings, streams, RPC handles, or editor coordinates.
 
 The graph is a DAG. Link creation validates endpoint existence, port direction, type compatibility, input multiplicity, scoped ownership, and cycle safety before committing.
+
+Some classes are key nodes. Active key nodes mark graph regions that are meaningful for application work. A node has key-node access when it is itself an active key node or is connected to one through active links. Nodes outside those regions may be present in the editor but should usually be treated as idle by their runtime.
 
 ## 2. Register Existing Libraries
 
@@ -98,6 +100,7 @@ for _, node := range s.Nodes {
 		Class:       node.Class,
 		DisplayName: node.Dynamic.DisplayName,
 		State:       string(node.State),
+		HasKeyNodeAccess: node.HasKeyNodeAccess,
 		Inputs:      portsDTO(node.Inputs),
 		Outputs:     portsDTO(node.Outputs),
 		Messages:    messagesDTO(node.Messages),

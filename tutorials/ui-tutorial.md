@@ -67,6 +67,10 @@ for _, link := range s.Links {
 
 Snapshots include inactive nodes and inactive links when their endpoints still exist. Render them as recoverable but disabled. Broken links are removed by the workspace and should disappear from the next snapshot.
 
+Node snapshots also include `HasKeyNodeAccess`.
+A node without key-node access is still an editable graph object, but its runtime may be idle because it is not connected to any active key node.
+UI controls can show that state as "not currently used" without deleting or disabling the node.
+
 ## 3. Parse External IDs At The Boundary
 
 When a UI sends IDs back, parse the canonical strings with the helpers in `ids.go`.
@@ -259,7 +263,7 @@ Messages are not persisted. Do not include them in undo state or saved files unl
 
 ## 8. Poll Or Subscribe Carefully
 
-Periodic UI updates may be needed because nodes can initiate state changes from internal workers. Demo stream nodes update menus and private state while worker goroutines run.
+Periodic UI updates may be needed because nodes can initiate state changes from internal workers. Demo stream nodes update menus and private state while worker goroutines run, and they only run those workers while connected to active key nodes.
 
 Polling guidance:
 

@@ -70,6 +70,10 @@ type NodeState struct {
 // Paste skips duplicated single-node class nodes while preserving other pasted
 // nodes. Restore preserves only the lowest-ID persisted node for a single-node
 // class and discards the rest before runtime initialization.
+// KeyNode marks active nodes of this class as meaningful application roots.
+// Active nodes have key-node access when they are key nodes themselves or are
+// connected to at least one active key node through active links. Inactive nodes
+// are never treated as key nodes.
 // Runtime is optional; when it is non-nil, the workspace calls InitNode for
 // each active node instance and stores the returned NodeRuntime for later
 // lifecycle hooks.
@@ -82,6 +86,7 @@ type ClassSpec struct {
 	Outputs     []PortSpec
 	Metadata    map[string]string
 	SingleNode  bool
+	KeyNode     bool
 	Runtime     NodeClass `json:"-"`
 }
 
@@ -172,6 +177,16 @@ type NodeContext struct {
 // workspace never type-checks link contract values beyond calling those hooks;
 // nodes should validate any link object they receive before accepting it.
 type NodeRuntime any
+
+// NodeKeyAccessHook observes key-node reachability changes.
+//
+// HasKeyNodeAccess is called after a graph mutation commits and the workspace
+// has recomputed whether the node is a key node or is connected to one through
+// active links. Runtimes that own background workers can start work when access
+// becomes true and stop or wind down work when it becomes false.
+type NodeKeyAccessHook interface {
+	HasKeyNodeAccess(bool)
+}
 
 // NodeScope is the mutation surface for one node implementation.
 //
@@ -430,15 +445,16 @@ type ClassSnapshot struct {
 // when the node's class or library is unavailable so editors can present
 // recoverable model state.
 type NodeSnapshot struct {
-	ID       NodeID
-	Class    string
-	Library  string
-	State    ObjectState
-	Dynamic  NodeState
-	Inputs   []PortSpec
-	Outputs  []PortSpec
-	Messages []NodeMessage
-	Menu     *NodeMenu
+	ID               NodeID
+	Class            string
+	Library          string
+	State            ObjectState
+	HasKeyNodeAccess bool
+	Dynamic          NodeState
+	Inputs           []PortSpec
+	Outputs          []PortSpec
+	Messages         []NodeMessage
+	Menu             *NodeMenu
 }
 
 // LinkSnapshot is a read-only link record.

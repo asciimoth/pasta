@@ -83,6 +83,11 @@ such as a singleton inspector or demo-only global control. Pasta rejects direct
 creation when one already exists, while paste drops duplicate single-node
 entries and keeps the rest of the clipboard.
 
+Set `KeyNode: true` for classes that are observable or meaningful application
+roots. Nodes of other classes have key-node access only while connected to at
+least one active key node. Inactive nodes are not treated as key nodes, even
+when their class is marked key.
+
 Keep port definitions small and explicit:
 
 ```go
@@ -207,28 +212,39 @@ func (n *calculatorNode) Push(value float64) {
 }
 ```
 
-Stream/pull with workers: demo stream nodes start goroutines after link attach and cancel them on detach, inactive, delete, and close.
+Stream/pull with workers: demo stream nodes mark sinks as key nodes. Sink
+runtimes keep link objects after attach, but only launch pull goroutines while
+`HasKeyNodeAccess(true)` is in effect. They stop those workers on lost access,
+detach, inactive, delete, and close.
 
 ```go
-func (n *streamNode) AfterLinkAttach(endpoint pasta.LinkEndpoint, object any) {
-	if endpoint.Direction != pasta.OutputPort {
-		return
-	}
-	wire, ok := object.(*streamWire)
-	if !ok {
-		return
-	}
-	if n.kind == "sink" {
-		ctx, cancel := context.WithCancel(n.runCtx)
-		n.mu.Lock()
-		n.pullCancels[endpoint.Link] = cancel
+func (n *streamNode) HasKeyNodeAccess(access bool) {
+	n.mu.Lock()
+	if n.keyAccess == access {
 		n.mu.Unlock()
-		go n.pullSink(ctx, endpoint.Link, wire)
+		return
 	}
+	n.keyAccess = access
+	if !access {
+		cancels := n.pullCancels
+		n.pullCancels = make(map[pasta.LinkID]context.CancelFunc)
+		n.mu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
+		return
+	}
+	for link, wire := range n.pullWires {
+		n.startPullLocked(link, wire)
+	}
+	n.mu.Unlock()
 }
 ```
 
-For long-lived work, keep your own cancellation primitive. Pasta will notify lifecycle hooks but will not stop goroutines for you.
+For long-lived work, keep your own cancellation primitive. Pasta will notify
+lifecycle and key-node access hooks but will not stop goroutines for you. Some
+nodes may intentionally delay shutdown after losing key-node access, for example
+to avoid thrashing workers while a user is rewiring a graph.
 
 ## 7. Store Private State
 

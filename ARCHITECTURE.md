@@ -52,9 +52,10 @@ workspace mutation API.
 
 Libraries define classes under their own qualified-name prefix. A class provides
 default node state, default ports, metadata, optional single-node cardinality,
-and the optional runtime factory used to initialize each active node instance.
-Nodes keep a stable ID, class name, owning library name, active/inactive state,
-dynamic public/private state, ports, and an optional runtime value.
+optional key-node status, and the optional runtime factory used to initialize
+each active node instance. Nodes keep a stable ID, class name, owning library
+name, active/inactive state, key-node access state, dynamic public/private
+state, ports, and an optional runtime value.
 
 Single-node classes set `ClassSpec.SingleNode` and may have zero or one node in
 the workspace. `CanCreateNode` and `CreateNode` reject attempts to add another
@@ -65,6 +66,18 @@ preserves the node with the lowest `NodeID` and discards the others before link
 validation and before any node initialization or private-state import hooks run.
 Links attached to discarded nodes are treated as broken persisted links and are
 skipped.
+
+Key-node classes set `ClassSpec.KeyNode`. Active nodes of those classes are
+application roots: they are observable or otherwise meaningful by themselves.
+An active node has key-node access when it is a key node or when it is connected
+to one or more active key nodes through active links, regardless of link
+direction. Inactive nodes are never treated as key nodes. The workspace
+recomputes key-node access after restore, class activity changes, node
+creation/deletion, link creation/deletion, and link validity repairs. Restore
+deduplicates single-node classes before key-node access is computed, so pruned
+duplicate key nodes cannot keep other nodes meaningful. Access changes are
+exposed in `NodeSnapshot.HasKeyNodeAccess` and delivered to runtimes that
+implement `NodeKeyAccessHook`.
 
 Links connect one output `FullPortID` to one input `FullPortID`, carry one fixed
 type name, and may store opaque waypoint strings for editors. Link endpoints are
@@ -156,11 +169,17 @@ through the workspace lock.
 
 Nodes and links can be deleted or inactivated while a long-lived inter-node call
 is in flight. The workspace notifies affected runtimes through deletion,
-detachment, inactivation, broken-link, and close hooks. The runtime or link
-contract is responsible for unblocking ongoing work, typically through an error,
-closed channel, context, callback, or another type-specific mechanism. Pasta
-does not require a built-in cancellation primitive and does not try to stop
-runtime goroutines directly.
+detachment, inactivation, broken-link, key-node access, and close hooks. The
+runtime or link contract is responsible for unblocking ongoing work, typically
+through an error, closed channel, context, callback, or another type-specific
+mechanism. Pasta does not require a built-in cancellation primitive and does
+not try to stop runtime goroutines directly.
+
+`NodeKeyAccessHook.HasKeyNodeAccess` runs outside the workspace lock after a
+committed mutation changes whether a runtime is itself a key node or connected
+to one. Runtimes may use the notification to start background workers only when
+their node has key-node access and to stop or gradually wind down workers after
+access is lost.
 
 Link deletion calls input then output `BeforeLinkDetach` hooks outside the lock,
 removes the link, and then calls input then output `AfterLinkDetach` hooks.

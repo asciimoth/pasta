@@ -27,10 +27,11 @@ frontend can build on top of.
 - Directed links from output ports to input ports, with DAG validation, endpoint
   validation, input multiplicity checks, and type compatibility checks.
 - Application-defined libraries and node classes with default state, typed ports,
-  metadata, optional single-node cardinality, and optional runtime factories.
+  metadata, optional single-node cardinality, optional key-node status, and
+  optional runtime factories.
 - Runtime lifecycle hooks for node initialization, link attach/detach,
-  inactivation, deletion, private-state import/export, and runtime-provided link
-  objects.
+  key-node access, inactivation, deletion, private-state import/export, and
+  runtime-provided link objects.
 - Persistent graph model data through `Save`, `Restore`, config-backed save
   helpers, and clipboard-oriented `Copy`/`Paste`.
 - Opaque editor values for node coordinates and link waypoints, so each UI can
@@ -51,6 +52,12 @@ Workspaces then allow zero or one node of that class. `CreateNode` rejects
 additional nodes with `ErrMultiplicity`, `Paste` skips duplicated single-node
 class nodes while preserving the rest of the clipboard, and restore only keeps
 the lowest-ID persisted node before running initialization hooks.
+
+Classes can opt into key-node status with `ClassSpec.KeyNode`. Active key nodes
+mark graph regions that are meaningful for application work; active nodes expose
+`HasKeyNodeAccess` when they are key nodes or connected to one through active
+links. Runtimes can implement `NodeKeyAccessHook` to start or stop background
+workers based on that access.
 
 ## Repository Contents
 - `pasta/`: the Go framework package.

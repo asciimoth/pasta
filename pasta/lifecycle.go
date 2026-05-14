@@ -163,6 +163,17 @@ func (w *Workspace) callAfterInactive(runtime NodeRuntime, reason InactiveReason
 	})
 }
 
+func (w *Workspace) callNodeKeyAccess(runtime NodeRuntime, hasAccess bool) {
+	hook, ok := runtime.(NodeKeyAccessHook)
+	if !ok {
+		return
+	}
+	_ = w.recoverHook("key node access", func() error {
+		hook.HasKeyNodeAccess(hasAccess)
+		return nil
+	})
+}
+
 func (w *Workspace) callBeforeDelete(runtime NodeRuntime) error {
 	hook, ok := runtime.(NodeDeleteHook)
 	if !ok {
@@ -211,6 +222,12 @@ func (w *Workspace) callAfterLinkDetachEvents(events []linkDetachEvent) {
 		}
 		w.callAfterLinkDetach(event.inputRuntime, event.inputEndpoint)
 		w.callAfterLinkDetach(event.outputRuntime, event.outputEndpoint)
+	}
+}
+
+func (w *Workspace) callNodeKeyAccessEvents(events []nodeKeyAccessEvent) {
+	for _, event := range events {
+		w.callNodeKeyAccess(event.runtime, event.hasAccess)
 	}
 }
 
@@ -316,6 +333,12 @@ func linkEndpoints(link *linkRecord) (LinkEndpoint, LinkEndpoint) {
 type nodeInactiveEvent struct {
 	id      NodeID
 	runtime NodeRuntime
+}
+
+type nodeKeyAccessEvent struct {
+	id        NodeID
+	runtime   NodeRuntime
+	hasAccess bool
 }
 
 type linkInactiveEvent struct {

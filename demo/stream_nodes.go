@@ -67,6 +67,7 @@ func StreamClasses() []pasta.ClassSpec {
 			Description: "Output-side consumer that pulls stream chunks from nodes to its right.",
 			Default:     streamDefault("Stream Sink", streamState{Value: "waiting"}),
 			Outputs:     []pasta.PortSpec{streamOutput(StreamOutput, "pull")},
+			KeyNode:     true,
 			Runtime:     streamNodeClass{kind: "sink"},
 		},
 		{
@@ -140,6 +141,7 @@ func (c streamNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState, 
 		kind:        c.kind,
 		state:       streamStateFromAny(state.Private),
 		sources:     make(map[pasta.LinkID]*streamSource),
+		pullWires:   make(map[pasta.LinkID]*streamWire),
 		pullCancels: make(map[pasta.LinkID]context.CancelFunc),
 		sourceWake:  make(chan struct{}),
 	}
@@ -168,8 +170,10 @@ type streamNode struct {
 	state       streamState
 	msgs        []pasta.MessageID
 	sources     map[pasta.LinkID]*streamSource
+	pullWires   map[pasta.LinkID]*streamWire
 	pullCancels map[pasta.LinkID]context.CancelFunc
 	sourceWake  chan struct{}
+	keyAccess   bool
 }
 
 type streamState struct {
@@ -202,11 +206,10 @@ func (n *streamNode) AfterLinkAttach(endpoint pasta.LinkEndpoint, object any) {
 		return
 	}
 	if n.kind == "sink" {
-		ctx, cancel := context.WithCancel(n.runCtx)
 		n.mu.Lock()
-		n.pullCancels[endpoint.Link] = cancel
+		n.pullWires[endpoint.Link] = wire
+		n.startPullLocked(endpoint.Link, wire)
 		n.mu.Unlock()
-		go n.pullSink(ctx, endpoint.Link, wire)
 		return
 	}
 	ctx, cancel := context.WithCancel(n.runCtx)
@@ -227,6 +230,32 @@ func (n *streamNode) AfterLinkDetach(endpoint pasta.LinkEndpoint) {
 
 func (n *streamNode) AfterLinkInactive(endpoint pasta.LinkEndpoint, _ pasta.InactiveReason) {
 	n.closeLink(endpoint.Link)
+}
+
+func (n *streamNode) HasKeyNodeAccess(access bool) {
+	n.mu.Lock()
+	if n.keyAccess == access {
+		n.mu.Unlock()
+		return
+	}
+	n.keyAccess = access
+	if n.kind != "sink" {
+		n.mu.Unlock()
+		return
+	}
+	if !access {
+		cancels := n.pullCancels
+		n.pullCancels = make(map[pasta.LinkID]context.CancelFunc)
+		n.mu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
+		return
+	}
+	for link, wire := range n.pullWires {
+		n.startPullLocked(link, wire)
+	}
+	n.mu.Unlock()
 }
 
 func (n *streamNode) BeforeInactive(pasta.InactiveReason) error { return nil }
@@ -446,6 +475,7 @@ func (n *streamNode) closeLink(link pasta.LinkID) {
 	n.mu.Lock()
 	source := n.sources[link]
 	delete(n.sources, link)
+	delete(n.pullWires, link)
 	cancel := n.pullCancels[link]
 	delete(n.pullCancels, link)
 	if source != nil {
@@ -466,6 +496,7 @@ func (n *streamNode) closeAll() {
 	sources := n.sources
 	cancels := n.pullCancels
 	n.sources = make(map[pasta.LinkID]*streamSource)
+	n.pullWires = make(map[pasta.LinkID]*streamWire)
 	n.pullCancels = make(map[pasta.LinkID]context.CancelFunc)
 	n.wakeSourcesLocked()
 	n.mu.Unlock()
@@ -475,6 +506,15 @@ func (n *streamNode) closeAll() {
 	for _, cancel := range cancels {
 		cancel()
 	}
+}
+
+func (n *streamNode) startPullLocked(link pasta.LinkID, wire *streamWire) {
+	if !n.keyAccess || n.pullCancels[link] != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(n.runCtx)
+	n.pullCancels[link] = cancel
+	go n.pullSink(ctx, link, wire)
 }
 
 func (n *streamNode) wakeSourcesLocked() {

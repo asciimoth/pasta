@@ -41,7 +41,7 @@ const typeStyles = {
 const nodeMetrics = {
   minWidth: 210,
   maxWidth: 420,
-  minHeight: 86,
+  minHeight: 106,
   portRowHeight: 20,
   titleFont: "14px Arial",
   bodyFont: "13px sans-serif",
@@ -265,11 +265,9 @@ function registerClasses(classes) {
       resizeGraphNode(this, snap);
       ctx.fillStyle = "#dce5e8";
       ctx.font = "13px sans-serif";
-      ctx.fillText(valueLabel(snap), 12, this.size[1] - 16);
-      if (snap.state !== "active") {
-        ctx.fillStyle = "#d45b5b";
-        ctx.fillText(snap.state, 130, this.size[1] - 16);
-      }
+      ctx.fillText(valueLabel(snap), 12, this.size[1] - 34);
+      ctx.fillStyle = snap.keyAccess ? "#5ee0a0" : "#a9b1b8";
+      ctx.fillText(nodeStatusLabel(snap), 12, this.size[1] - 16);
       drawNodeMessages(ctx, this, snap);
     };
     PastaNode.prototype.onConnectionsChange = async function (type, slot, connected, linkInfo) {
@@ -398,8 +396,8 @@ function renderMenu() {
   els.menu.replaceChildren();
   const node = state.selectedBackendId ? findNode(state.selectedBackendId) : null;
   els.menu.dataset.nodeId = node ? node.id : "";
-  if (!node || !node.menu) {
-    els.menu.textContent = node ? "This node has no menu." : "Select a node.";
+  if (!node) {
+    els.menu.textContent = "Select a node.";
     els.menu.className = "panelText";
     return;
   }
@@ -409,6 +407,8 @@ function renderMenu() {
   title.dataset.role = "menu-title";
   title.textContent = `${node.shortClass} ${node.id}`;
   els.menu.appendChild(title);
+
+  els.menu.appendChild(renderNodeStatus(node));
 
   if (node.messages && node.messages.length) {
     els.menu.appendChild(renderNodeMessages(node.messages));
@@ -428,6 +428,14 @@ function renderMenu() {
   });
   nameWrap.append(nameLabel, nameInput);
   els.menu.appendChild(nameWrap);
+
+  if (!node.menu) {
+    const empty = document.createElement("div");
+    empty.className = "panelText";
+    empty.textContent = "This node has no menu.";
+    els.menu.appendChild(empty);
+    return;
+  }
 
   for (const block of node.menu.blocks || []) {
     const blockEl = document.createElement("div");
@@ -485,7 +493,7 @@ function renderMenu() {
 
 function patchMenu() {
   const node = state.selectedBackendId ? findNode(state.selectedBackendId) : null;
-  if (!node || !node.menu || els.menu.dataset.nodeId !== node.id) {
+  if (!node || els.menu.dataset.nodeId !== node.id) {
     renderMenu();
     return;
   }
@@ -498,6 +506,7 @@ function patchMenu() {
   const titleText = `${node.shortClass} ${node.id}`;
   if (title.textContent !== titleText) title.textContent = titleText;
 
+  patchNodeStatus(node);
   patchMessages(node.messages || []);
 
   const nameInput = els.menu.querySelector('[data-role="name-input"]');
@@ -506,6 +515,8 @@ function patchMenu() {
     return;
   }
   patchInputValue(nameInput, node.displayName || node.shortClass);
+
+  if (!node.menu) return;
 
   for (const block of node.menu.blocks || []) {
     if (!els.menu.querySelector(`.menuBlock[data-block="${cssEscape(block.id)}"]`)) {
@@ -594,6 +605,56 @@ function renderNodeMessages(messages) {
     wrap.appendChild(item);
   }
   return wrap;
+}
+
+function renderNodeStatus(node) {
+  const status = document.createElement("div");
+  status.className = "nodeStatus";
+  status.dataset.role = "node-status";
+
+  const keyAccess = document.createElement("div");
+  keyAccess.className = `accessBadge ${node.keyAccess ? "on" : "off"}`;
+  keyAccess.dataset.role = "key-access";
+  keyAccess.textContent = keyAccessText(node);
+  status.appendChild(keyAccess);
+
+  if (node.state !== "active") {
+    const nodeState = document.createElement("div");
+    nodeState.className = "stateBadge";
+    nodeState.dataset.role = "node-state";
+    nodeState.textContent = `state: ${node.state}`;
+    status.appendChild(nodeState);
+  }
+
+  return status;
+}
+
+function patchNodeStatus(node) {
+  const status = els.menu.querySelector('[data-role="node-status"]');
+  if (!status) {
+    renderMenu();
+    return;
+  }
+  const keyAccess = status.querySelector('[data-role="key-access"]');
+  if (!keyAccess) {
+    renderMenu();
+    return;
+  }
+  keyAccess.className = `accessBadge ${node.keyAccess ? "on" : "off"}`;
+  const text = keyAccessText(node);
+  if (keyAccess.textContent !== text) keyAccess.textContent = text;
+
+  const nodeState = status.querySelector('[data-role="node-state"]');
+  if (node.state === "active") {
+    if (nodeState) nodeState.remove();
+    return;
+  }
+  if (!nodeState) {
+    renderMenu();
+    return;
+  }
+  const stateText = `state: ${node.state}`;
+  if (nodeState.textContent !== stateText) nodeState.textContent = stateText;
 }
 
 function patchInputValue(input, value) {
@@ -737,6 +798,7 @@ function nodeSizeForSnapshot(snap) {
   const labels = [
     nodeTitle(snap),
     valueLabel(snap),
+    nodeStatusLabel(snap),
     ...(snap.inputs || []).map((port) => port.name || port.id),
     ...(snap.outputs || []).map((port) => port.name || port.id),
   ];
@@ -746,7 +808,7 @@ function nodeSizeForSnapshot(snap) {
     width = Math.max(width, Math.ceil(ctx.measureText(String(labels[i])).width + 64));
   }
   const rows = Math.max((snap.inputs || []).length, (snap.outputs || []).length, 1);
-  const height = Math.max(nodeMetrics.minHeight, 64 + rows * nodeMetrics.portRowHeight);
+  const height = Math.max(nodeMetrics.minHeight, 84 + rows * nodeMetrics.portRowHeight);
   return [Math.min(nodeMetrics.maxWidth, width), height];
 }
 
@@ -810,6 +872,16 @@ function findGraphLink(output, input, outSlot, inSlot) {
 function nodeTitle(node) {
   const name = (node.displayName || node.shortClass || "").trim();
   return `${name || node.shortClass} ${node.id}`;
+}
+
+function nodeStatusLabel(node) {
+  const parts = [keyAccessText(node)];
+  if (node.state !== "active") parts.push(`state: ${node.state}`);
+  return parts.join(" | ");
+}
+
+function keyAccessText(node) {
+  return `HasKeyNodeAccess: ${node.keyAccess ? "yes" : "no"}`;
 }
 
 function drawNodeMessages(ctx, graphNode, snap) {

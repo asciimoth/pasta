@@ -218,6 +218,36 @@ pre {
   font-size: 12px;
 }
 
+.nodeStatus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.accessBadge,
+.stateBadge {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #171a1d;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.accessBadge.on {
+  border-color: #2b9a68;
+  color: #5ee0a0;
+}
+
+.accessBadge.off {
+  color: var(--muted);
+}
+
+.stateBadge {
+  border-color: var(--danger);
+  color: #ff9c9c;
+}
+
 @media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;

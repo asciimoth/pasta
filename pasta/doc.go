@@ -29,4 +29,8 @@
 // additional nodes of those classes, paste skips duplicate single-node class
 // nodes, and restore keeps only the lowest-ID duplicate before initialization
 // hooks run.
+// Classes may also opt into key-node status. Active key nodes mark the graph
+// regions that are meaningful to application work; active nodes connected to at
+// least one active key node expose HasKeyNodeAccess and can receive runtime
+// access-change notifications.
 package pasta
