@@ -186,6 +186,7 @@ func (s errNodeScope) ReadOnly() pasta.WorkspaceRO {
 	return nil
 }
 func (s errNodeScope) Snapshot() (pasta.NodeSnapshot, bool) { return pasta.NodeSnapshot{}, false }
+func (s errNodeScope) NotifyChanged() error                 { return nil }
 func (s errNodeScope) AddMessage(pasta.MessageType, string) (pasta.MessageID, error) {
 	return 0, nil
 }

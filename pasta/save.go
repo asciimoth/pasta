@@ -327,10 +327,12 @@ func (w *Workspace) Restore(data SaveData) error {
 	keyEvents := w.keyAccessEventsForNodesLocked(initIDs)
 	watchers := w.messageWatchersLocked()
 	menuWatchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	locked = false
 	w.notifyMessageWatchers(watchers, restoreMessageEvents)
 	w.notifyMenuWatchers(menuWatchers, restoreMenuEvents)
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	return nil
 }

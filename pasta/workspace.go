@@ -24,14 +24,15 @@ type Workspace struct {
 	nextLink    LinkID
 	nextMessage MessageID
 
-	libraries    map[string]Library
-	classes      map[string]*classRecord
-	nodes        map[NodeID]*nodeRecord
-	pendingNodes map[NodeID]string
-	links        map[LinkID]*linkRecord
-	messages     map[MessageID]*messageRecord
-	watchers     map[*MessageSubscription]bool
-	menuWatchers map[*MenuSubscription]bool
+	libraries         map[string]Library
+	classes           map[string]*classRecord
+	nodes             map[NodeID]*nodeRecord
+	pendingNodes      map[NodeID]string
+	links             map[LinkID]*linkRecord
+	messages          map[MessageID]*messageRecord
+	watchers          map[*MessageSubscription]bool
+	menuWatchers      map[*MenuSubscription]bool
+	workspaceWatchers map[*WorkspaceSubscription]bool
 }
 
 type classRecord struct {
@@ -84,6 +85,55 @@ type MenuSubscription struct {
 	mu     sync.Mutex
 	ch     chan MenuEvent
 	closed bool
+}
+
+// WorkspaceSubscription receives broad workspace change events.
+type WorkspaceSubscription struct {
+	w      *Workspace
+	mu     sync.Mutex
+	ch     chan WorkspaceEvent
+	closed bool
+}
+
+// Events returns the channel carrying workspace events.
+func (s *WorkspaceSubscription) Events() <-chan WorkspaceEvent {
+	if s == nil {
+		return nil
+	}
+	return s.ch
+}
+
+// Close unsubscribes and closes the event channel.
+func (s *WorkspaceSubscription) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	close(s.ch)
+	w := s.w
+	s.mu.Unlock()
+	if w != nil {
+		w.mu.Lock()
+		delete(w.workspaceWatchers, s)
+		w.mu.Unlock()
+	}
+}
+
+func (s *WorkspaceSubscription) send(event WorkspaceEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.ch <- event:
+	default:
+	}
 }
 
 // Events returns the channel carrying menu events.
@@ -185,17 +235,18 @@ func WithLogger(logger Logger) WorkspaceOption {
 // at 1. Register one or more libraries before creating nodes.
 func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 	w := &Workspace{
-		nextNode:     1,
-		nextLink:     1,
-		nextMessage:  1,
-		libraries:    make(map[string]Library),
-		classes:      make(map[string]*classRecord),
-		nodes:        make(map[NodeID]*nodeRecord),
-		pendingNodes: make(map[NodeID]string),
-		links:        make(map[LinkID]*linkRecord),
-		messages:     make(map[MessageID]*messageRecord),
-		watchers:     make(map[*MessageSubscription]bool),
-		menuWatchers: make(map[*MenuSubscription]bool),
+		nextNode:          1,
+		nextLink:          1,
+		nextMessage:       1,
+		libraries:         make(map[string]Library),
+		classes:           make(map[string]*classRecord),
+		nodes:             make(map[NodeID]*nodeRecord),
+		pendingNodes:      make(map[NodeID]string),
+		links:             make(map[LinkID]*linkRecord),
+		messages:          make(map[MessageID]*messageRecord),
+		watchers:          make(map[*MessageSubscription]bool),
+		menuWatchers:      make(map[*MenuSubscription]bool),
+		workspaceWatchers: make(map[*WorkspaceSubscription]bool),
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -243,9 +294,11 @@ func (w *Workspace) Close() error {
 	w.nextMessage = 1
 	watchers := w.messageWatchersLocked()
 	menuWatchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, messageEvents)
 	w.notifyMenuWatchers(menuWatchers, menuEvents)
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged}})
 	w.callAfterInactiveEvents(nodeEvents, InactiveWorkspaceClose)
 	w.callLinkInactiveEvents(linkEvents, InactiveWorkspaceClose)
 	if err := w.callCloseEvents(nodeEvents); err != nil {
@@ -314,6 +367,10 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 	scope.registering = false
 	w.callAfterLinkDetachEvents(detachEvents)
 	w.callNodeKeyAccessEvents(keyEvents)
+	w.mu.RLock()
+	workspaceWatchers := w.workspaceWatchersLocked()
+	w.mu.RUnlock()
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Library: name}})
 	return nil
 }
 
@@ -356,7 +413,9 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 	}
 	keyEvents := w.refreshActivityLocked()
 	w.clearInactiveRuntimesLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Library: name}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveLibraryUnregister)
 	w.callLinkInactiveEvents(linkEvents, InactiveLibraryUnregister)
@@ -443,7 +502,12 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 		initIDs = append(initIDs, id)
 	}
 	keyEvents = append(keyEvents, w.keyAccessEventsForNodesLocked(initIDs)...)
+	var workspaceWatchers []*WorkspaceSubscription
+	if deferDetachEvents == nil && deferKeyEvents == nil {
+		workspaceWatchers = w.workspaceWatchersLocked()
+	}
 	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Class: spec.Name, Library: library}})
 	if deferDetachEvents != nil {
 		*deferDetachEvents = append(*deferDetachEvents, detachEvents...)
 	} else {
@@ -501,7 +565,9 @@ func (w *Workspace) RecallClass(library, className string) error {
 	rec.active = false
 	keyEvents := w.refreshActivityLocked()
 	w.clearInactiveRuntimesLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Class: className, Library: library}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveClassRecall)
 	w.callLinkInactiveEvents(linkEvents, InactiveClassRecall)
@@ -552,7 +618,9 @@ func (w *Workspace) CreateNode(className string, opts NodeOptions) (NodeID, erro
 	if scope != nil {
 		scope.finishInit()
 	}
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id, Class: className}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	return id, nil
 }
@@ -600,9 +668,11 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 	keyEvents := w.refreshActivityLocked()
 	watchers := w.messageWatchersLocked()
 	menuWatchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, messageEvents)
 	w.notifyMenuWatchers(menuWatchers, menuEvents)
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterDelete(runtime)
 	if err := w.callNodeClose(runtime); err != nil {
@@ -614,66 +684,82 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 // SetNodeCoordinate stores an opaque coordinate string on a node.
 func (w *Workspace) SetNodeCoordinate(id NodeID, coordinate string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set node coordinate"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	node, ok := w.nodes[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("set node coordinate", "validate", ErrNotFound)
 	}
 	node.dynamic.Coordinate = coordinate
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
 // SetNodeMetadata replaces editable public metadata on a node.
 func (w *Workspace) SetNodeMetadata(id NodeID, metadata map[string]string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set node metadata"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	node, ok := w.nodes[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("set node metadata", "validate", ErrNotFound)
 	}
 	node.dynamic.Metadata = cloneStringMap(metadata)
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
 // SetNodeMetadataValue sets one editable public metadata value on a node.
 func (w *Workspace) SetNodeMetadataValue(id NodeID, key, value string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set node metadata value"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	node, ok := w.nodes[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("set node metadata value", "validate", ErrNotFound)
 	}
 	if node.dynamic.Metadata == nil {
 		node.dynamic.Metadata = make(map[string]string, 1)
 	}
 	node.dynamic.Metadata[key] = value
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
 // DeleteNodeMetadataValue removes one editable public metadata value from a node.
 func (w *Workspace) DeleteNodeMetadataValue(id NodeID, key string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("delete node metadata value"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	node, ok := w.nodes[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("delete node metadata value", "validate", ErrNotFound)
 	}
 	delete(node.dynamic.Metadata, key)
 	if len(node.dynamic.Metadata) == 0 {
 		node.dynamic.Metadata = nil
 	}
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
@@ -698,8 +784,10 @@ func (w *Workspace) AddNodeMessage(id NodeID, typ MessageType, text string) (Mes
 	w.messages[messageID] = rec
 	event := MessageEvent{Kind: MessageAdded, Message: snapshotMessage(rec)}
 	watchers := w.messageWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, []MessageEvent{event})
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return messageID, nil
 }
 
@@ -722,8 +810,10 @@ func (w *Workspace) RemoveNodeMessage(nodeID NodeID, messageID MessageID) error 
 	event := MessageEvent{Kind: MessageRemoved, Message: snapshotMessage(rec)}
 	delete(w.messages, messageID)
 	watchers := w.messageWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMessageWatchers(watchers, []MessageEvent{event})
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: nodeID}})
 	return nil
 }
 
@@ -770,8 +860,10 @@ func (w *Workspace) SetNodeMenu(id NodeID, menu NodeMenu) error {
 	node.menu = &normalized
 	event := MenuEvent{Kind: MenuReplaced, Node: id, Menu: menuPointer(normalized)}
 	watchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMenuWatchers(watchers, []MenuEvent{event})
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
@@ -788,8 +880,12 @@ func (w *Workspace) ClearNodeMenu(id NodeID) error {
 	}
 	events := w.clearNodeMenuLocked(id)
 	watchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMenuWatchers(watchers, events)
+	if len(events) > 0 {
+		w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
+	}
 	return nil
 }
 
@@ -858,8 +954,10 @@ func (w *Workspace) UpdateNodeMenuState(id NodeID, update MenuStateUpdate) (Node
 	node.menu = &next
 	event := MenuEvent{Kind: MenuStateChanged, Node: id, Menu: menuPointer(next), Update: applied}
 	watchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMenuWatchers(watchers, []MenuEvent{event})
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return cloneNodeMenu(next), nil
 }
 
@@ -891,8 +989,10 @@ func (w *Workspace) updateNodeMenuStateDirect(id NodeID, update MenuStateUpdate)
 	node.menu = &next
 	event := MenuEvent{Kind: MenuStateChanged, Node: id, Menu: menuPointer(next), Update: update}
 	watchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.notifyMenuWatchers(watchers, []MenuEvent{event})
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return cloneNodeMenu(next), nil
 }
 
@@ -942,8 +1042,10 @@ func (w *Workspace) TriggerNodeMenuButton(id NodeID, ref MenuButtonRef) error {
 	}
 	current := cloneNodeMenu(*node.menu)
 	watchers := w.menuWatchersLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.RUnlock()
 	w.notifyMenuWatchers(watchers, []MenuEvent{{Kind: MenuButtonTriggered, Node: id, Menu: menuPointer(current), Button: ref}})
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
@@ -962,49 +1064,100 @@ func (w *Workspace) WatchMenus(buffer int) *MenuSubscription {
 	return sub
 }
 
+// WatchWorkspace subscribes to broad user-observable workspace changes.
+//
+// The returned subscription only receives changes made after subscription. Use
+// Snapshot and targeted read methods to read current state. Events are dropped
+// when the subscription buffer is full, so subscribers should treat each event
+// as a prompt to refresh or patch from snapshots rather than as an exhaustive
+// mutation log.
+func (w *Workspace) WatchWorkspace(buffer int) *WorkspaceSubscription {
+	if buffer < 0 {
+		buffer = 0
+	}
+	sub := &WorkspaceSubscription{w: w, ch: make(chan WorkspaceEvent, buffer)}
+	w.mu.Lock()
+	if w.workspaceWatchers == nil {
+		w.workspaceWatchers = make(map[*WorkspaceSubscription]bool)
+	}
+	w.workspaceWatchers[sub] = true
+	w.mu.Unlock()
+	return sub
+}
+
+// NotifyNodeChanged emits a broad workspace change event for node-owned
+// observable state that changed outside a workspace mutation.
+func (w *Workspace) NotifyNodeChanged(id NodeID) error {
+	w.mu.RLock()
+	if err := w.checkOpenLocked("notify node changed"); err != nil {
+		w.mu.RUnlock()
+		return err
+	}
+	if _, ok := w.nodes[id]; !ok {
+		w.mu.RUnlock()
+		return opErr("notify node changed", "validate", ErrNotFound)
+	}
+	watchers := w.workspaceWatchersLocked()
+	w.mu.RUnlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
+	return nil
+}
+
 // SetNodeState replaces editable public/private node state while preserving class and ports.
 func (w *Workspace) SetNodeState(id NodeID, state NodeState) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set node state"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	node, ok := w.nodes[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("set node state", "validate", ErrNotFound)
 	}
 	state.Metadata = cloneStringMap(state.Metadata)
 	node.dynamic = state
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
 // SetNodePrivate replaces the application-owned private state for a node.
 func (w *Workspace) SetNodePrivate(id NodeID, private any) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set node private"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	node, ok := w.nodes[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("set node private", "validate", ErrNotFound)
 	}
 	node.dynamic.Private = private
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
 // SetNodePorts replaces a node's public ports if every existing link remains valid.
 func (w *Workspace) SetNodePorts(id NodeID, inputs, outputs []PortSpec) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set node ports"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	if err := w.canSetNodePortsLocked(id, inputs, outputs); err != nil {
+		w.mu.Unlock()
 		return opErr("set node ports", "validate", err)
 	}
 	node := w.nodes[id]
 	node.inputs, node.outputs = clonePorts(inputs), clonePorts(outputs)
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	return nil
 }
 
@@ -1047,6 +1200,7 @@ func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (Link
 	}
 	w.mu.Lock()
 	keyEvents, err := w.commitPreparedLinkLocked(pending)
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	if err != nil {
 		w.mu.Lock()
@@ -1056,6 +1210,7 @@ func (w *Workspace) CreateLink(input, output FullPortID, opts LinkOptions) (Link
 	}
 	w.callAfterLinkAttach(pending.inputRuntime, pending.inputEndpoint, object)
 	w.callAfterLinkAttach(pending.outputRuntime, pending.outputEndpoint, object)
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Link: pending.link.id}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	return pending.link.id, nil
 }
@@ -1088,9 +1243,11 @@ func (w *Workspace) DeleteLink(id LinkID) error {
 	}
 	delete(w.links, id)
 	keyEvents := w.refreshActivityLocked()
+	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.callAfterLinkDetach(inputRuntime, inputEndpoint)
 	w.callAfterLinkDetach(outputRuntime, outputEndpoint)
+	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Link: id}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	return nil
 }
@@ -1098,15 +1255,19 @@ func (w *Workspace) DeleteLink(id LinkID) error {
 // SetLinkWaypoints replaces the opaque waypoint coordinate array on a link.
 func (w *Workspace) SetLinkWaypoints(id LinkID, waypoints []string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if err := w.checkOpenLocked("set link waypoints"); err != nil {
+		w.mu.Unlock()
 		return err
 	}
 	link, ok := w.links[id]
 	if !ok {
+		w.mu.Unlock()
 		return opErr("set link waypoints", "validate", ErrNotFound)
 	}
 	link.waypoints = append([]string(nil), waypoints...)
+	watchers := w.workspaceWatchersLocked()
+	w.mu.Unlock()
+	w.notifyWorkspaceWatchers(watchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Link: id}})
 	return nil
 }
 
@@ -1228,7 +1389,9 @@ func (w *Workspace) Paste(clip Clipboard) ([]NodeID, []LinkID, error) {
 		if scope != nil {
 			scope.finishInit()
 		}
+		workspaceWatchers := w.workspaceWatchersLocked()
 		w.mu.Unlock()
+		w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id, Class: saved.Class}})
 		w.callNodeKeyAccessEvents(keyEvents)
 		nodeMap[oldID] = id
 		newNodes = append(newNodes, id)
@@ -2158,6 +2321,25 @@ func (w *Workspace) notifyMenuWatchers(watchers []*MenuSubscription, events []Me
 	}
 }
 
+func (w *Workspace) workspaceWatchersLocked() []*WorkspaceSubscription {
+	watchers := make([]*WorkspaceSubscription, 0, len(w.workspaceWatchers))
+	for watcher := range w.workspaceWatchers {
+		watchers = append(watchers, watcher)
+	}
+	return watchers
+}
+
+func (w *Workspace) notifyWorkspaceWatchers(watchers []*WorkspaceSubscription, events []WorkspaceEvent) {
+	if len(watchers) == 0 || len(events) == 0 {
+		return
+	}
+	for _, event := range events {
+		for _, watcher := range watchers {
+			watcher.send(event)
+		}
+	}
+}
+
 func menuPointer(menu NodeMenu) *NodeMenu {
 	cloned := cloneNodeMenu(menu)
 	return &cloned
@@ -2542,6 +2724,13 @@ func (s *nodeScope) Snapshot() (NodeSnapshot, bool) {
 		return NodeSnapshot{}, false
 	}
 	return snapshotNode(s.initRec), true
+}
+
+func (s *nodeScope) NotifyChanged() error {
+	if s.initializing() {
+		return opErr("node scope notify changed", "validate", ErrNotFound)
+	}
+	return s.w.NotifyNodeChanged(s.id)
 }
 
 func (s *nodeScope) AddMessage(typ MessageType, text string) (MessageID, error) {

@@ -193,11 +193,14 @@ type NodeKeyAccessHook interface {
 // Methods are concurrent-safe and mutate only the node named by ID. They may be
 // used during InitNode to update the pending node record before it is committed.
 // After deletion they return ErrNotFound, and after workspace close they return
-// ErrClosed.
+// ErrClosed. Methods that change workspace-owned observable state notify
+// workspace watchers automatically. NotifyChanged is for user-observable state
+// changes that do not otherwise pass through a NodeScope mutation.
 type NodeScope interface {
 	ID() NodeID
 	ReadOnly() WorkspaceRO
 	Snapshot() (NodeSnapshot, bool)
+	NotifyChanged() error
 	AddMessage(MessageType, string) (MessageID, error)
 	RemoveMessage(MessageID) error
 	SetMenu(NodeMenu) error
@@ -537,4 +540,24 @@ type MenuEvent struct {
 	Menu   *NodeMenu
 	Update MenuStateUpdate
 	Button MenuButtonRef
+}
+
+// WorkspaceEventKind describes a broad workspace watcher event.
+type WorkspaceEventKind string
+
+const (
+	// WorkspaceChanged means user-observable workspace state changed.
+	WorkspaceChanged WorkspaceEventKind = "changed"
+)
+
+// WorkspaceEvent is delivered to workspace subscriptions after observable
+// state changes. The optional ID fields identify the primary object involved
+// when there is one, but subscribers should treat the event as a signal to
+// refresh or patch from read-only snapshots.
+type WorkspaceEvent struct {
+	Kind    WorkspaceEventKind
+	Node    NodeID
+	Link    LinkID
+	Class   string
+	Library string
 }

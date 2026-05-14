@@ -23,6 +23,14 @@ Node metadata can be replaced as a whole map or edited one key at a time through
 the workspace, library-scoped, and node-scoped mutation APIs. Snapshots and
 persistence always receive defensive metadata copies.
 
+Workspace change watchers subscribe through `WatchWorkspace` to broad
+user-observable change events. The event stream is a notification signal, not a
+lossless mutation log: subscribers should refresh or patch from defensive
+snapshots, and reconnecting views should start from `Snapshot`. Successful
+workspace mutations emit these events automatically. Node runtimes can also call
+`NodeScope.NotifyChanged` for user-observable state changes that do not otherwise
+go through a workspace mutation.
+
 Ephemeral node messages are transient text notifications of type `note`, `warn`,
 or `err`. They can be attached through the full workspace API, through the
 owning library scope, or by the node runtime through `NodeScope`, and can be
@@ -207,6 +215,11 @@ Workspace-owned state is protected by an `RWMutex`. Snapshot and lookup methods
 return copies rather than internal slices or maps. Public mutation methods are
 the intended synchronization boundary for editors, controllers, scoped library
 access, and node-scoped runtime updates.
+
+Any node runtime that changes user-observable state from internal goroutines
+must publish that change through the node-scoped mutation API or
+`NodeScope.NotifyChanged`. This keeps UI controllers reactive without polling
+while preserving `Snapshot` as the authoritative recovery and rendering source.
 
 Node initialization and link lifecycle hooks run outside the workspace lock, then
 mutations revalidate before commit. The implementation recovers panics from

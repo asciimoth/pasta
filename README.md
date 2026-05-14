@@ -36,6 +36,8 @@ frontend can build on top of.
   helpers, and clipboard-oriented `Copy`/`Paste`.
 - Opaque editor values for node coordinates and link waypoints, so each UI can
   use its own layout and routing format.
+- Workspace change notifications for reactive UIs that refresh from snapshots
+  instead of polling.
 - Ephemeral node menus and messages for GUI controls, popups, diagnostics, and
   other transient frontend state.
 - Preservation of inactive nodes and links when their model endpoints still

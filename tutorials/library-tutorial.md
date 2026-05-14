@@ -248,7 +248,7 @@ to avoid thrashing workers while a user is rewiring a graph.
 
 ## 7. Store Private State
 
-`NodeState.Private` is application-owned state. Use `NodeScope.SetPrivate` when runtime changes should be visible in snapshots and `Save`.
+`NodeState.Private` is application-owned state. Use `NodeScope.SetPrivate` when runtime changes should be visible in snapshots and `Save`. Node-scoped mutation methods notify workspace watchers automatically.
 
 ```go
 func (n *calculatorNode) setValueWithoutMenu(value float64) {
@@ -258,6 +258,10 @@ func (n *calculatorNode) setValueWithoutMenu(value float64) {
 	_ = n.ctx.Node.SetPrivate(value)
 }
 ```
+
+If a runtime changes user-observable state that is not stored through a
+workspace mutation, call `NodeScope.NotifyChanged` so reactive UIs know to
+refresh from a snapshot.
 
 If the runtime owns fresher volatile state, implement export/import hooks:
 
@@ -399,7 +403,7 @@ func (n *stringNode) TriggerMenuButton(ref pasta.MenuButtonRef) error {
 
 ## 9. Send Messages
 
-Messages are ephemeral node notifications. They appear in snapshots and watcher events, but they are not saved or copied.
+Messages are ephemeral node notifications. They appear in snapshots and watcher events, and adding or removing them also notifies workspace watchers, but they are not saved or copied.
 
 ```go
 func (n *stringNode) addMessage(typ pasta.MessageType, text string) error {

@@ -12,8 +12,10 @@ Pasta owns workspace state. LiteGraph is the editable view.
 ```
 
 All model changes go through the Go backend, then the frontend redraws from a
-fresh backend snapshot. This keeps validation, locking, menus, copy/paste, and
-save/restore on the same API paths a real app would use.
+fresh backend snapshot. Background node changes reach the browser through
+workspace notifications, so the UI does not poll. This keeps validation,
+locking, menus, copy/paste, and save/restore on the same API paths a real app
+would use.
 
 ## Run
 
@@ -45,8 +47,8 @@ Git.
 ## Files
 
 - `main.go`: WASM backend. It owns a `pasta.Workspace`, registers the demo
-  libraries, exposes `window.pastaDemoCall(method, json)`, and returns JSON
-  responses.
+  libraries, exposes `window.pastaDemoCall(method, json)` and
+  `window.pastaDemoSubscribe(callback)`, and returns JSON responses.
 - `string_nodes.go`: demo-local string node library using push-style data flow.
 - `main_stub.go`: host build stub so `go test ./...` works outside `GOOS=js
   GOARCH=wasm`.
@@ -63,6 +65,16 @@ The frontend calls:
 ```js
 window.pastaDemoCall(method, JSON.stringify(payload))
 ```
+
+It also subscribes once:
+
+```js
+window.pastaDemoSubscribe(() => refreshFromSnapshot())
+```
+
+The callback is a broad invalidation signal from `WatchWorkspace`; the browser
+fetches a fresh `snapshot` instead of treating events as a complete mutation
+log.
 
 The backend returns:
 

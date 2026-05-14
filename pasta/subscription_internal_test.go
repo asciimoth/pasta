@@ -3,6 +3,7 @@ package pasta
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestSubscriptionNilAndCloseBranches(t *testing.T) {
@@ -18,10 +19,17 @@ func TestSubscriptionNilAndCloseBranches(t *testing.T) {
 	}
 	menuSub.Close()
 
+	var workspaceSub *WorkspaceSubscription
+	if workspaceSub.Events() != nil {
+		t.Fatal("nil workspace subscription returned non-nil events")
+	}
+	workspaceSub.Close()
+
 	w, _ := testWorkspace(t)
 	w.mu.Lock()
 	w.watchers = nil
 	w.menuWatchers = nil
+	w.workspaceWatchers = nil
 	w.mu.Unlock()
 	msg := w.WatchMessages(-1)
 	msg.Close()
@@ -32,6 +40,61 @@ func TestSubscriptionNilAndCloseBranches(t *testing.T) {
 	menu.Close()
 	menu.Close()
 	menu.send(MenuEvent{})
+
+	workspace := w.WatchWorkspace(-1)
+	workspace.Close()
+	workspace.Close()
+	workspace.send(WorkspaceEvent{})
+}
+
+func TestWorkspaceSubscriptionObservesMutationsAndNodeNotifications(t *testing.T) {
+	w, _ := testWorkspace(t)
+	node, err := w.CreateNode("example.com/Source", NodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := w.WatchWorkspace(8)
+	defer sub.Close()
+
+	if err := w.SetNodePrivate(node, "visible"); err != nil {
+		t.Fatal(err)
+	}
+	event := receiveWorkspaceEvent(t, sub)
+	if event.Kind != WorkspaceChanged || event.Node != node {
+		t.Fatalf("SetNodePrivate event = %#v, want changed node %s", event, node)
+	}
+
+	if err := w.SetNodeMenu(node, NodeMenu{Blocks: []MenuBlock{{ID: "main"}}}); err != nil {
+		t.Fatal(err)
+	}
+	event = receiveWorkspaceEvent(t, sub)
+	if event.Kind != WorkspaceChanged || event.Node != node {
+		t.Fatalf("SetNodeMenu event = %#v, want changed node %s", event, node)
+	}
+
+	scope := &nodeScope{w: w, id: node}
+	if err := scope.NotifyChanged(); err != nil {
+		t.Fatal(err)
+	}
+	event = receiveWorkspaceEvent(t, sub)
+	if event.Kind != WorkspaceChanged || event.Node != node {
+		t.Fatalf("NotifyChanged event = %#v, want changed node %s", event, node)
+	}
+
+	if err := w.NotifyNodeChanged(999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("NotifyNodeChanged missing node error = %v, want not found", err)
+	}
+}
+
+func receiveWorkspaceEvent(t *testing.T, sub *WorkspaceSubscription) WorkspaceEvent {
+	t.Helper()
+	select {
+	case event := <-sub.Events():
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for workspace event")
+		return WorkspaceEvent{}
+	}
 }
 
 func TestMessageAndMenuWorkspaceErrorBranches(t *testing.T) {

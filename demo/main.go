@@ -17,10 +17,13 @@ import (
 )
 
 type appState struct {
-	mu        sync.Mutex
-	workspace *pasta.Workspace
-	logs      []string
-	clip      pasta.Clipboard
+	mu          sync.Mutex
+	workspace   *pasta.Workspace
+	sub         *pasta.WorkspaceSubscription
+	subCallback js.Value
+	hasCallback bool
+	logs        []string
+	clip        pasta.Clipboard
 }
 
 type response struct {
@@ -115,12 +118,22 @@ func main() {
 		}
 		return app.call(method, raw)
 	}))
+	js.Global().Set("pastaDemoSubscribe", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 || args[0].Type() != js.TypeFunction {
+			return app.fail(fmt.Errorf("missing subscription callback"))
+		}
+		return app.subscribe(args[0])
+	}))
 	select {}
 }
 
 func (a *appState) reset() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.sub != nil {
+		a.sub.Close()
+		a.sub = nil
+	}
 	if a.workspace != nil {
 		_ = a.workspace.Close()
 	}
@@ -129,7 +142,36 @@ func (a *appState) reset() {
 	a.must(a.workspace.RegisterLibrary(examples.CalculatorLibrary{}), "register calculator library")
 	a.must(a.workspace.RegisterLibrary(StringLibrary{}), "register string library")
 	a.must(a.workspace.RegisterLibrary(StreamLibrary{}), "register stream library")
+	a.subscribeLocked()
 	a.log("workspace initialized and demo classes registered")
+}
+
+func (a *appState) subscribe(callback js.Value) string {
+	a.mu.Lock()
+	a.subCallback = callback
+	a.hasCallback = true
+	a.subscribeLocked()
+	a.log("workspace notifications subscribed")
+	logs := append([]string(nil), a.logs...)
+	a.mu.Unlock()
+	return a.encode(response{OK: true, Logs: logs})
+}
+
+func (a *appState) subscribeLocked() {
+	if !a.hasCallback || a.workspace == nil {
+		return
+	}
+	if a.sub != nil {
+		a.sub.Close()
+	}
+	sub := a.workspace.WatchWorkspace(64)
+	callback := a.subCallback
+	a.sub = sub
+	go func() {
+		for range sub.Events() {
+			callback.Invoke()
+		}
+	}()
 }
 
 func (a *appState) call(method, raw string) string {
@@ -604,6 +646,7 @@ func (a *appState) restoreLocked(data pasta.SaveData) error {
 	if err := a.workspace.RegisterLibrary(StreamLibrary{}); err != nil {
 		return err
 	}
+	a.subscribeLocked()
 	if err := a.workspace.Restore(data); err != nil {
 		return err
 	}

@@ -121,6 +121,11 @@ return floatFromAny(snap.Dynamic.Private)
 
 Always handle `ok == false`; a node or link can disappear between UI actions and backend calls.
 
+For reactive frontends, subscribe with `WatchWorkspace` and treat each event as
+a prompt to refresh or patch from snapshots. Events can be dropped when the
+subscription buffer is full, so snapshots remain the authoritative recovery
+path.
+
 ## 6. Use Node Menus
 
 Node menus are ephemeral JSON-serializable control documents. They are exposed in snapshots but are not saved, copied, pasted, or restored as model state.

@@ -11,7 +11,8 @@ const state = {
   classRegistry: new Set(),
   pasteOffset: 30,
   flushingPositions: false,
-  polling: false,
+  reactiveRefresh: false,
+  reactiveQueued: false,
 };
 
 const typeStyles = {
@@ -68,8 +69,8 @@ window.addEventListener("load", async () => {
   await startWASM();
   setupGraph();
   bindUI();
+  startNotifications();
   await refresh(await call("seed"));
-  startPolling();
 });
 
 async function startWASM() {
@@ -192,23 +193,40 @@ async function refresh(res) {
   updateLogs(res.logs);
 }
 
-function startPolling() {
-  window.setInterval(async () => {
-    if (!state.snapshot || state.syncing || state.flushingPositions || state.polling) return;
-    state.polling = true;
-    try {
-      const res = await rawCall("snapshot");
-      applyPolledSnapshot(res.data);
-      updateLogs(res.logs);
-    } catch (_) {
-      // rawCall already reports the backend error in the log panel.
-    } finally {
-      state.polling = false;
-    }
-  }, 500);
+function startNotifications() {
+  const res = JSON.parse(window.pastaDemoSubscribe(() => scheduleReactiveRefresh()));
+  updateLogs(res.logs);
+  if (!res.ok) flashError(res.error);
 }
 
-function applyPolledSnapshot(snapshot) {
+function scheduleReactiveRefresh() {
+  if (state.reactiveQueued) return;
+  state.reactiveQueued = true;
+  window.queueMicrotask(() => {
+    state.reactiveQueued = false;
+    refreshFromNotification().catch(() => {
+      // rawCall already reports the backend error in the log panel.
+    });
+  });
+}
+
+async function refreshFromNotification() {
+  if (!state.snapshot) return;
+  if (state.syncing || state.flushingPositions || state.reactiveRefresh) {
+    window.setTimeout(scheduleReactiveRefresh, 50);
+    return;
+  }
+  state.reactiveRefresh = true;
+  try {
+    const res = await rawCall("snapshot");
+    applyReactiveSnapshot(res.data);
+    updateLogs(res.logs);
+  } finally {
+    state.reactiveRefresh = false;
+  }
+}
+
+function applyReactiveSnapshot(snapshot) {
   if (!sameTopology(state.snapshot, snapshot)) {
     state.snapshot = snapshot;
     registerClasses(snapshot.classes);

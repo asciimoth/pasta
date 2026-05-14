@@ -261,16 +261,27 @@ They can also be watched with `WatchMessages`. Watchers are useful for popups or
 
 Messages are not persisted. Do not include them in undo state or saved files unless your application intentionally stores its own separate notification log.
 
-## 8. Poll Or Subscribe Carefully
+## 8. Subscribe To Changes
 
-Periodic UI updates may be needed because nodes can initiate state changes from internal workers. Demo stream nodes update menus and private state while worker goroutines run, and they only run those workers while connected to active key nodes.
+Nodes can initiate state changes from internal workers. Demo stream nodes update menus and private state while worker goroutines run, and they only run those workers while connected to active key nodes.
 
-Polling guidance:
+Use `WatchWorkspace` as the broad invalidation signal for a reactive UI:
 
-- Poll only while a workspace view / app window is visible or active.
-- Use a moderate interval; avoid high-frequency polling for inactive tabs.
-- Prefer event subscriptions for menus/messages when they fit your transport.
-- Reconcile from `Snapshot` periodically even when using events.
+```go
+sub := w.WatchWorkspace(64)
+defer sub.Close()
+
+for range sub.Events() {
+	render(w.Snapshot())
+}
+```
+
+Event guidance:
+
+- Treat workspace events as invalidations, not a lossless edit log.
+- Start every connected view from `Snapshot`.
+- Refresh from `Snapshot` when events arrive or when a view reconnects.
+- Use `WatchMessages` or `WatchMenus` only when you need specialized popup, toast, or menu-event behavior.
 - Never overwrite a focused input with refreshed menu state unless the committed field changed under the user in a way you must surface.
 
 For GUI frameworks, keep an explicit "editing" or "dirty local value" state for menu fields.
