@@ -52,6 +52,14 @@ Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects
 without interpreting application-specific behavior.
 
+The workspace also owns an ephemeral resource tracker for application objects
+whose lifetime is tied to graph topology. Runtimes can register any comparable
+Go value with a destructor and a set of related active nodes and links. If any
+related node or link becomes inactive or is removed, the workspace removes the
+tracking record and calls the destructor outside the workspace lock. Runtimes
+can explicitly untrack a resource that has already been closed so the workspace
+does not retain references.
+
 The core deliberately does not implement undo/redo. Higher layers such as
 editors or controllers can build command histories around the validated
 workspace mutation API.
@@ -175,13 +183,23 @@ The framework does not define whether a link is push-based, pull-based, or
 mixed; those call patterns happen directly between runtimes and are not forced
 through the workspace lock.
 
+Resource tracking uses normal Go equality for resource identity. Registering a
+nil value or a value whose dynamic type is not comparable returns
+`ErrInvalidResource` instead of panicking. Registering a comparable resource
+again merges the new node/link relations into the existing record and replaces
+the destructor without calling the old destructor. Registration with missing or
+inactive relations does not store the resource; the workspace calls the supplied
+destructor immediately after releasing the lock. Because link IDs are reserved
+before a link is committed, resources that are related to the new link should be
+registered from `AfterLinkAttach`, not from `LinkObject`.
+
 Nodes and links can be deleted or inactivated while a long-lived inter-node call
 is in flight. The workspace notifies affected runtimes through deletion,
 detachment, inactivation, broken-link, key-node access, and close hooks. The
 runtime or link contract is responsible for unblocking ongoing work, typically
-through an error, closed channel, context, callback, or another type-specific
-mechanism. Pasta does not require a built-in cancellation primitive and does
-not try to stop runtime goroutines directly.
+through the resource tracker, an error, closed channel, context, callback, or
+another type-specific mechanism. Pasta does not try to stop runtime goroutines
+directly.
 
 `NodeKeyAccessHook.HasKeyNodeAccess` runs outside the workspace lock after a
 committed mutation changes whether a runtime is itself a key node or connected
@@ -196,6 +214,8 @@ link deletion path, removes the node, then calls `AfterDelete` and `Close`.
 Links pruned during invariant repair, such as links made invalid by class
 redefinition, cannot veto removal; after the repair commits, the workspace calls
 their `AfterLinkDetach` hooks as deletion/broken-link notifications.
+Resource destructors for removed links or nodes run only after the removal has
+committed and never while the workspace lock is held.
 
 Class recall, library unregister, and workspace close gather affected active
 node and link events under the lock, call `BeforeInactive` hooks outside the
@@ -227,6 +247,12 @@ library registration and node lifecycle hooks. Library registration snapshots
 the workspace model before class-definition hooks and restores it if the hook
 returns an error or panics, so partial class reactivation does not leak into the
 workspace.
+
+Resource destructors are also invoked outside the workspace lock after the
+tracking record has been removed. A destructor may call back into workspace,
+library, or node-scoped APIs without deadlocking. If a destructor returns an
+error or panics, the graph mutation remains committed and the error is reported
+from the operation that triggered destruction.
 
 `NodeCloseHook` is the runtime shutdown hook. It runs outside the workspace lock
 after a node is deleted, after a node becomes inactive through class recall or

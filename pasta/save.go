@@ -216,6 +216,7 @@ func (w *Workspace) Restore(data SaveData) error {
 	w.pruneSingleNodeClassDuplicatesLocked(nodes)
 	oldNodes, oldLinks, oldMessages := w.nodes, w.links, cloneMessageRecords(w.messages)
 	oldNextNode, oldNextLink, oldNextMessage := w.nextNode, w.nextLink, w.nextMessage
+	resourceEvents := w.collectAllResourceEventsLocked()
 	restoreMessageEvents := w.removeAllMessagesLocked()
 	restoreMenuEvents := w.removeAllMenusLocked()
 	w.nextMessage = 1
@@ -334,6 +335,9 @@ func (w *Workspace) Restore(data SaveData) error {
 	w.notifyMenuWatchers(menuWatchers, restoreMenuEvents)
 	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged}})
 	w.callNodeKeyAccessEvents(keyEvents)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("restore", "hook", err)
+	}
 	return nil
 }
 

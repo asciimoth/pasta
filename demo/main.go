@@ -142,6 +142,7 @@ func (a *appState) reset() {
 	a.must(a.workspace.RegisterLibrary(examples.CalculatorLibrary{}), "register calculator library")
 	a.must(a.workspace.RegisterLibrary(StringLibrary{}), "register string library")
 	a.must(a.workspace.RegisterLibrary(StreamLibrary{}), "register stream library")
+	a.must(a.workspace.RegisterLibrary(NetworkLibrary{}), "register network library")
 	a.subscribeLocked()
 	a.log("workspace initialized and demo classes registered")
 }
@@ -424,6 +425,10 @@ func (a *appState) deleteNode(raw string) error {
 	if err != nil {
 		return err
 	}
+	if _, ok := a.workspace.Node(id); !ok {
+		a.log("node %s already deleted", id)
+		return nil
+	}
 	a.log("deleting node %s", id)
 	return a.workspace.DeleteNode(id)
 }
@@ -646,6 +651,9 @@ func (a *appState) restoreLocked(data pasta.SaveData) error {
 	if err := a.workspace.RegisterLibrary(StreamLibrary{}); err != nil {
 		return err
 	}
+	if err := a.workspace.RegisterLibrary(NetworkLibrary{}); err != nil {
+		return err
+	}
 	a.subscribeLocked()
 	if err := a.workspace.Restore(data); err != nil {
 		return err
@@ -675,9 +683,13 @@ func (a *appState) rehydrateLinks() error {
 
 func (a *appState) snapshot() snapshotDTO {
 	s := a.workspace.Snapshot()
-	out := snapshotDTO{}
+	out := snapshotDTO{
+		Classes: []classDTO{},
+		Nodes:   []nodeDTO{},
+		Links:   []linkDTO{},
+	}
 	for _, class := range s.Classes {
-		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName) {
+		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName && class.Library != NetworkLibraryName) {
 			continue
 		}
 		out.Classes = append(out.Classes, classDTO{

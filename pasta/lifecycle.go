@@ -385,6 +385,28 @@ func (w *Workspace) inactiveEventsForNodesLocked(nodes map[NodeID]bool) ([]nodeI
 	return nodeEvents, linkEvents
 }
 
+func linkIDsFromInactiveEvents(events []linkInactiveEvent) map[LinkID]bool {
+	if len(events) == 0 {
+		return nil
+	}
+	links := make(map[LinkID]bool, len(events))
+	for _, event := range events {
+		links[event.id] = true
+	}
+	return links
+}
+
+func linkIDsFromDetachEvents(events []linkDetachEvent) map[LinkID]bool {
+	if len(events) == 0 {
+		return nil
+	}
+	links := make(map[LinkID]bool, len(events))
+	for _, event := range events {
+		links[event.id] = true
+	}
+	return links
+}
+
 func (w *Workspace) linkDetachEventLocked(link *linkRecord) linkDetachEvent {
 	inputRuntime, outputRuntime := w.linkRuntimesLocked(link)
 	inputEndpoint, outputEndpoint := linkEndpoints(link)

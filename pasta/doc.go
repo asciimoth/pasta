@@ -14,12 +14,16 @@
 // stored and handed back to application code as contract values. Link objects
 // are provided by the input-side runtime or by the caller during link creation,
 // then passed to both endpoints through lifecycle hooks.
+// Long-lived application objects can be registered with the workspace resource
+// tracker. A tracked resource is released when any related active node or link
+// becomes inactive or is removed.
 //
 // Runtime callbacks run outside the workspace lock. They may call back into
 // Workspace, LibraryScope, NodeScope, or WorkspaceRO according to the scope they
 // were given. Before hooks can reject an operation and leave the graph
-// unchanged; after hooks observe a committed state change. Panics from external
-// library, class, or node code are recovered and logged through Logger.
+// unchanged; after hooks and resource destructors observe a committed state
+// change. Panics from external library, class, or node code are recovered and
+// logged through Logger.
 //
 // Inactive nodes and links are preserved when their endpoint model objects still
 // exist, which lets editors display and recover graphs after a class recall,

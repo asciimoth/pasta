@@ -13,6 +13,8 @@ const state = {
   flushingPositions: false,
   reactiveRefresh: false,
   reactiveQueued: false,
+  deletingNodes: new Set(),
+  pendingMenuUpdates: new Map(),
 };
 
 const typeStyles = {
@@ -36,6 +38,13 @@ const typeStyles = {
     bg: "#173226",
     border: "#2b9a68",
     portOff: "#2d6248",
+  },
+  "network.pasta.demo/network": {
+    name: "network",
+    color: "#f06f6c",
+    bg: "#331d22",
+    border: "#b84f58",
+    portOff: "#73333a",
   },
 };
 
@@ -132,7 +141,7 @@ function bindUI() {
     }
     if ((event.key === "Delete" || event.key === "Backspace") && state.selectedBackendId) {
       event.preventDefault();
-      await refresh(await call("deleteNode", { id: state.selectedBackendId }));
+      await deleteNodeById(state.selectedBackendId);
     }
   });
 }
@@ -185,7 +194,7 @@ async function flushNodePositions() {
 }
 
 async function refresh(res) {
-  state.snapshot = res.data;
+  state.snapshot = normalizeSnapshot(res.data);
   registerClasses(state.snapshot.classes);
   renderPalette(state.snapshot.classes);
   syncGraph(state.snapshot);
@@ -227,6 +236,7 @@ async function refreshFromNotification() {
 }
 
 function applyReactiveSnapshot(snapshot) {
+  snapshot = normalizeSnapshot(snapshot);
   if (!sameTopology(state.snapshot, snapshot)) {
     state.snapshot = snapshot;
     registerClasses(snapshot.classes);
@@ -247,6 +257,8 @@ function applyReactiveSnapshot(snapshot) {
 }
 
 function sameTopology(a, b) {
+  a = normalizeSnapshot(a);
+  b = normalizeSnapshot(b);
   if (!a || !b || a.nodes.length !== b.nodes.length || a.links.length !== b.links.length) return false;
   const nodeIDs = new Set(a.nodes.map((node) => node.id));
   for (const node of b.nodes) {
@@ -266,8 +278,8 @@ function registerClasses(classes) {
     function PastaNode() {
       this.title = cls.displayName || cls.shortName;
       this.size = defaultNodeSize(cls);
-      for (const input of cls.inputs) this.addInput(input.name, liteGraphType(input.fixedType));
-      for (const output of cls.outputs) this.addOutput(output.name, liteGraphType(output.fixedType));
+      for (const input of cls.inputs) addPastaInput(this, input);
+      for (const output of cls.outputs) addPastaOutput(this, output);
       this.properties = { backendId: "" };
     }
     PastaNode.title = cls.displayName || cls.shortName;
@@ -307,9 +319,14 @@ function registerClasses(classes) {
         await refresh(await call("snapshot"));
       }
     };
+    PastaNode.prototype.onBeforeConnectInput = function (slot) {
+      const input = this.inputs && this.inputs[slot];
+      if (!input || !input.pastaMultiple || input.link == null) return slot;
+      return addVirtualInputSlot(this, input);
+    };
     PastaNode.prototype.onRemoved = async function () {
       if (!state.syncing && this.backendId) {
-        await refresh(await call("deleteNode", { id: this.backendId }));
+        await deleteNodeById(this.backendId);
       }
     };
     PastaNode.prototype.getExtraMenuOptions = function () {
@@ -326,7 +343,7 @@ function registerClasses(classes) {
         null,
         {
           content: "Delete node",
-          callback: async () => refresh(await call("deleteNode", { id: node.backendId })),
+          callback: async () => deleteNodeById(node.backendId),
         },
       ];
       const snap = findNode(node.backendId);
@@ -373,7 +390,29 @@ function renderPalette(classes) {
   }
 }
 
+async function deleteNodeById(id) {
+  if (!id || state.deletingNodes.has(id)) return;
+  state.deletingNodes.add(id);
+  if (state.selectedBackendId === id) state.selectedBackendId = null;
+  try {
+    await refresh(await call("deleteNode", { id }));
+  } catch (_) {
+    await refresh(await call("snapshot"));
+  } finally {
+    state.deletingNodes.delete(id);
+  }
+}
+
+function normalizeSnapshot(snapshot) {
+  if (!snapshot) return snapshot;
+  snapshot.classes = Array.isArray(snapshot.classes) ? snapshot.classes : [];
+  snapshot.nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
+  snapshot.links = Array.isArray(snapshot.links) ? snapshot.links : [];
+  return snapshot;
+}
+
 function syncGraph(snapshot) {
+  snapshot = normalizeSnapshot(snapshot);
   state.syncing = true;
   state.graph.clear();
   state.backendToLG.clear();
@@ -386,8 +425,7 @@ function syncGraph(snapshot) {
     node.properties.backendId = snap.id;
     node.pos = [snap.coordinate[0], snap.coordinate[1]];
     applyNodeTypeStyle(node, snap.primaryType);
-    for (let i = 0; i < snap.inputs.length; i++) node.inputs[i].pastaPort = snap.inputs[i].id;
-    for (let i = 0; i < snap.outputs.length; i++) node.outputs[i].pastaPort = snap.outputs[i].id;
+    applySnapshotPortMetadata(node, snap);
     resizeGraphNode(node, snap);
     state.graph.add(node);
     state.backendToLG.set(snap.id, node.id);
@@ -399,7 +437,7 @@ function syncGraph(snapshot) {
     const input = graphNode(link.input.node);
     if (!output || !input) continue;
     const outSlot = slotForPort(output.outputs, link.output.port);
-    const inSlot = slotForPort(input.inputs, link.input.port);
+    const inSlot = inputSlotForLink(input, link.input.port);
     if (outSlot >= 0 && inSlot >= 0) {
       output.connect(outSlot, input, inSlot);
       applyLinkTypeStyle(output, input, outSlot, inSlot, link);
@@ -480,14 +518,7 @@ function renderMenu() {
         input.value = field.value ?? "";
         input.addEventListener("change", async () => {
           const value = input.type === "number" ? Number(input.value) : input.value;
-          const currentNode = findNode(node.id);
-          await refresh(await call("updateMenuField", {
-            node: node.id,
-            version: currentNode && currentNode.menu ? currentNode.menu.version : node.menu.version,
-            block: block.id,
-            field: field.id,
-            value,
-          }));
+          await updateMenuField(node.id, block.id, field.id, value);
         });
         wrap.appendChild(input);
       }
@@ -501,12 +532,39 @@ function renderMenu() {
       button.disabled = !!buttonSpec.disabled;
       button.textContent = buttonSpec.label || buttonSpec.id;
       button.addEventListener("click", async () => {
+        await waitForMenuUpdates(node.id);
         await refresh(await call("triggerMenuButton", { node: node.id, block: block.id, button: buttonSpec.id }));
       });
       blockEl.appendChild(button);
     }
     els.menu.appendChild(blockEl);
   }
+}
+
+async function updateMenuField(nodeId, blockId, fieldId, value) {
+  const previous = state.pendingMenuUpdates.get(nodeId) || Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    await refresh(await call("updateMenuField", {
+      node: nodeId,
+      version: 0,
+      block: blockId,
+      field: fieldId,
+      value,
+    }));
+  });
+  state.pendingMenuUpdates.set(nodeId, task);
+  try {
+    await task;
+  } finally {
+    if (state.pendingMenuUpdates.get(nodeId) === task) {
+      state.pendingMenuUpdates.delete(nodeId);
+    }
+  }
+}
+
+async function waitForMenuUpdates(nodeId) {
+  const pending = state.pendingMenuUpdates.get(nodeId);
+  if (pending) await pending;
 }
 
 function patchMenu() {
@@ -718,6 +776,12 @@ function selectedBackendIds() {
 }
 
 function findLinkByLiteInfo(info) {
+  const backendID = backendLinkIDForLiteInfo(info);
+  if (backendID && state.snapshot) {
+    const link = state.snapshot.links.find((candidate) => candidate.id === backendID);
+    if (link) return link;
+  }
+
   const outputNode = backendIdForLG(info.origin_id);
   const inputNode = backendIdForLG(info.target_id);
   if (!outputNode || !inputNode || !state.snapshot) return null;
@@ -729,6 +793,13 @@ function findLinkByLiteInfo(info) {
     link.input.node === inputNode &&
     link.input.port === inputPort
   );
+}
+
+function backendLinkIDForLiteInfo(info) {
+  if (!info) return "";
+  if (info.backendId) return info.backendId;
+  const graphLink = state.graph && info.id != null ? state.graph.links[info.id] : null;
+  return graphLink && graphLink.backendId ? graphLink.backendId : "";
 }
 
 function graphNode(backendId) {
@@ -757,6 +828,67 @@ function portForSlot(backendId, kind, slot) {
 
 function slotForPort(slots, port) {
   return (slots || []).findIndex((slot) => slot.pastaPort === port);
+}
+
+function inputSlotForLink(node, port) {
+  const slots = node.inputs || [];
+  let fallback = -1;
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    if (slot.pastaPort !== port) continue;
+    if (fallback < 0) fallback = i;
+    if (slot.link == null) return i;
+  }
+  if (fallback < 0 || !slots[fallback].pastaMultiple) return fallback;
+  return addVirtualInputSlot(node, slots[fallback]);
+}
+
+function addPastaInput(node, port) {
+  node.addInput(port.name, liteGraphType(port.fixedType), {
+    pastaPort: port.id,
+    pastaMultiple: !!port.multiple,
+    pastaName: port.name,
+    pastaType: liteGraphType(port.fixedType),
+  });
+}
+
+function addPastaOutput(node, port) {
+  node.addOutput(port.name, liteGraphType(port.fixedType), {
+    pastaPort: port.id,
+    pastaName: port.name,
+    pastaType: liteGraphType(port.fixedType),
+  });
+}
+
+function addVirtualInputSlot(node, source) {
+  const input = node.addInput(source.pastaName || source.name, source.pastaType || source.type, {
+    pastaPort: source.pastaPort,
+    pastaMultiple: true,
+    pastaName: source.pastaName || source.name,
+    pastaType: source.pastaType || source.type,
+    pastaVirtual: true,
+  });
+  return node.inputs.indexOf(input);
+}
+
+function applySnapshotPortMetadata(node, snap) {
+  for (const port of snap.inputs || []) {
+    const slots = (node.inputs || []).filter((slot) => slot.pastaPort === port.id);
+    for (const slot of slots) {
+      slot.pastaPort = port.id;
+      slot.pastaMultiple = !!port.multiple;
+      slot.pastaName = port.name;
+      slot.pastaType = liteGraphType(port.fixedType);
+    }
+  }
+  for (const port of snap.outputs || []) {
+    const slots = (node.outputs || []).filter((slot) => slot.pastaPort === port.id);
+    for (const slot of slots) {
+      slot.pastaPort = port.id;
+      slot.pastaName = port.name;
+      slot.pastaType = liteGraphType(port.fixedType);
+    }
+  }
 }
 
 function nodeType(cls) {

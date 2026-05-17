@@ -29,6 +29,8 @@ type Workspace struct {
 	nodes             map[NodeID]*nodeRecord
 	pendingNodes      map[NodeID]string
 	links             map[LinkID]*linkRecord
+	resources         map[resourceKey]*resourceRecord
+	nextResource      int64
 	messages          map[MessageID]*messageRecord
 	watchers          map[*MessageSubscription]bool
 	menuWatchers      map[*MenuSubscription]bool
@@ -243,6 +245,7 @@ func NewWorkspace(opts ...WorkspaceOption) *Workspace {
 		nodes:             make(map[NodeID]*nodeRecord),
 		pendingNodes:      make(map[NodeID]string),
 		links:             make(map[LinkID]*linkRecord),
+		resources:         make(map[resourceKey]*resourceRecord),
 		messages:          make(map[MessageID]*messageRecord),
 		watchers:          make(map[*MessageSubscription]bool),
 		menuWatchers:      make(map[*MenuSubscription]bool),
@@ -282,6 +285,7 @@ func (w *Workspace) Close() error {
 		return nil
 	}
 	w.closed = true
+	resourceEvents := w.collectAllResourceEventsLocked()
 	for _, n := range w.nodes {
 		n.state = StateInactive
 		n.runtime = nil
@@ -301,6 +305,9 @@ func (w *Workspace) Close() error {
 	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged}})
 	w.callAfterInactiveEvents(nodeEvents, InactiveWorkspaceClose)
 	w.callLinkInactiveEvents(linkEvents, InactiveWorkspaceClose)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("close workspace", "hook", err)
+	}
 	if err := w.callCloseEvents(nodeEvents); err != nil {
 		return opErr("close workspace", "hook", err)
 	}
@@ -358,14 +365,18 @@ func (w *Workspace) RegisterLibrary(lib Library) (err error) {
 		}
 	}()
 	var detachEvents []linkDetachEvent
+	var resourceEvents []resourceDestroyEvent
 	var keyEvents []nodeKeyAccessEvent
-	scope := &libraryScope{w: w, library: name, detachEvents: &detachEvents, keyEvents: &keyEvents, cleanupRuntimes: cleanupRuntimes, registering: true}
+	scope := &libraryScope{w: w, library: name, detachEvents: &detachEvents, resourceEvents: &resourceEvents, keyEvents: &keyEvents, cleanupRuntimes: cleanupRuntimes, registering: true}
 	if err := lib.DefineClasses(scope); err != nil {
 		w.logError("register library hook", err)
 		return errors.Join(opErr("register library", "hook", err), rollback())
 	}
 	scope.registering = false
 	w.callAfterLinkDetachEvents(detachEvents)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("register library", "hook", err)
+	}
 	w.callNodeKeyAccessEvents(keyEvents)
 	w.mu.RLock()
 	workspaceWatchers := w.workspaceWatchersLocked()
@@ -412,6 +423,7 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 		}
 	}
 	keyEvents := w.refreshActivityLocked()
+	resourceEvents := w.collectResourceEventsLocked(inactiveNodes, linkIDsFromInactiveEvents(linkEvents))
 	w.clearInactiveRuntimesLocked()
 	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
@@ -419,6 +431,9 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveLibraryUnregister)
 	w.callLinkInactiveEvents(linkEvents, InactiveLibraryUnregister)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("unregister library", "hook", err)
+	}
 	if err := w.callCloseEvents(nodeEvents); err != nil {
 		return opErr("unregister library", "hook", err)
 	}
@@ -431,10 +446,10 @@ func (w *Workspace) UnregisterLibrary(name string) error {
 // set, removes links whose endpoints or types are now broken, and reactivates
 // preserved inactive nodes when their endpoints remain valid.
 func (w *Workspace) DefineClass(library string, spec ClassSpec) error {
-	return w.defineClass(library, spec, nil, nil, nil)
+	return w.defineClass(library, spec, nil, nil, nil, nil)
 }
 
-func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent, deferKeyEvents *[]nodeKeyAccessEvent, cleanupRuntimes map[NodeID]NodeRuntime) error {
+func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvents *[]linkDetachEvent, deferResourceEvents *[]resourceDestroyEvent, deferKeyEvents *[]nodeKeyAccessEvent, cleanupRuntimes map[NodeID]NodeRuntime) error {
 	w.mu.Lock()
 	oldClasses := cloneClassRecords(w.classes)
 	oldNodes := cloneNodeRecords(w.nodes)
@@ -446,6 +461,7 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 		w.mu.Unlock()
 		return err
 	}
+	resourceEvents := w.collectResourceEventsLocked(nil, linkIDsFromDetachEvents(detachEvents))
 	initNodes := w.reactivatedInitNodesLocked(spec.Name, oldNodes)
 	w.mu.Unlock()
 
@@ -513,6 +529,11 @@ func (w *Workspace) defineClass(library string, spec ClassSpec, deferDetachEvent
 	} else {
 		w.callAfterLinkDetachEvents(detachEvents)
 	}
+	if deferResourceEvents != nil {
+		*deferResourceEvents = append(*deferResourceEvents, resourceEvents...)
+	} else if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("define class", "hook", err)
+	}
 	if deferKeyEvents != nil {
 		*deferKeyEvents = append(*deferKeyEvents, keyEvents...)
 	} else {
@@ -564,6 +585,7 @@ func (w *Workspace) RecallClass(library, className string) error {
 	}
 	rec.active = false
 	keyEvents := w.refreshActivityLocked()
+	resourceEvents := w.collectResourceEventsLocked(inactiveNodes, linkIDsFromInactiveEvents(linkEvents))
 	w.clearInactiveRuntimesLocked()
 	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
@@ -571,6 +593,9 @@ func (w *Workspace) RecallClass(library, className string) error {
 	w.callNodeKeyAccessEvents(keyEvents)
 	w.callAfterInactiveEvents(nodeEvents, InactiveClassRecall)
 	w.callLinkInactiveEvents(linkEvents, InactiveClassRecall)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("recall class", "hook", err)
+	}
 	if err := w.callCloseEvents(nodeEvents); err != nil {
 		return opErr("recall class", "hook", err)
 	}
@@ -659,9 +684,11 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 	}
 	messageEvents := w.removeNodeMessagesLocked(id)
 	menuEvents := w.clearNodeMenuLocked(id)
+	resourceEvents := w.collectResourceEventsLocked(map[NodeID]bool{id: true}, nil)
 	delete(w.nodes, id)
 	for linkID, link := range w.links {
 		if link.input.Node == id || link.output.Node == id {
+			resourceEvents = append(resourceEvents, w.collectResourceEventsLocked(nil, map[LinkID]bool{linkID: true})...)
 			delete(w.links, linkID)
 		}
 	}
@@ -674,6 +701,9 @@ func (w *Workspace) DeleteNode(id NodeID) error {
 	w.notifyMenuWatchers(menuWatchers, menuEvents)
 	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Node: id}})
 	w.callNodeKeyAccessEvents(keyEvents)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("delete node", "hook", err)
+	}
 	w.callAfterDelete(runtime)
 	if err := w.callNodeClose(runtime); err != nil {
 		return opErr("delete node", "hook", err)
@@ -1241,12 +1271,16 @@ func (w *Workspace) DeleteLink(id LinkID) error {
 		w.mu.Unlock()
 		return opErr("delete link", "validate", ErrNotFound)
 	}
+	resourceEvents := w.collectResourceEventsLocked(nil, map[LinkID]bool{id: true})
 	delete(w.links, id)
 	keyEvents := w.refreshActivityLocked()
 	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	w.callAfterLinkDetach(inputRuntime, inputEndpoint)
 	w.callAfterLinkDetach(outputRuntime, outputEndpoint)
+	if err := w.callResourceDestroyEvents(resourceEvents); err != nil {
+		return opErr("delete link", "hook", err)
+	}
 	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged, Link: id}})
 	w.callNodeKeyAccessEvents(keyEvents)
 	return nil
@@ -2415,13 +2449,14 @@ type libraryScope struct {
 	w               *Workspace
 	library         string
 	detachEvents    *[]linkDetachEvent
+	resourceEvents  *[]resourceDestroyEvent
 	keyEvents       *[]nodeKeyAccessEvent
 	cleanupRuntimes map[NodeID]NodeRuntime
 	registering     bool
 }
 
 func (s *libraryScope) DefineClass(spec ClassSpec) error {
-	return s.w.defineClass(s.library, spec, s.detachEvents, s.keyEvents, s.cleanupRuntimes)
+	return s.w.defineClass(s.library, spec, s.detachEvents, s.resourceEvents, s.keyEvents, s.cleanupRuntimes)
 }
 
 func (s *libraryScope) RecallClass(className string) error {

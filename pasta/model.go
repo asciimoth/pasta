@@ -171,6 +171,25 @@ type NodeContext struct {
 	Node     NodeScope
 }
 
+// ResourceDestructor releases a tracked resource.
+//
+// The workspace calls the destructor outside the workspace lock when any
+// related node or link becomes inactive or is removed. The resource is already
+// untracked before the destructor runs, so the callback may call workspace APIs
+// or UntrackResource without deadlocking.
+type ResourceDestructor func(resource any) error
+
+// ResourceRelations names the nodes and links whose lifetime protects a resource.
+//
+// Registration succeeds only when every referenced node and link exists and is
+// active. If any relation is missing or inactive, registration does not store
+// the resource and instead calls the destructor immediately after releasing the
+// workspace lock.
+type ResourceRelations struct {
+	Nodes []NodeID
+	Links []LinkID
+}
+
 // NodeRuntime is the application-owned runtime object for a node.
 //
 // Runtime values can implement any of the optional hook interfaces below. The
@@ -213,6 +232,8 @@ type NodeScope interface {
 	SetMetadataValue(string, string) error
 	DeleteMetadataValue(string) error
 	SetPorts(inputs, outputs []PortSpec) error
+	TrackResource(resource any, links []LinkID, destructor ResourceDestructor) error
+	UntrackResource(resource any) error
 }
 
 // LinkEndpoint describes one node's directional view of a link.
