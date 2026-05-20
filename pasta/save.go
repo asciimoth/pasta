@@ -456,6 +456,7 @@ func (w *Workspace) Restore(data SaveData) error {
 			scope.finishInit()
 		}
 	}
+	restoreLinks := w.restoreLinkAttachEventsLocked()
 	initIDs := make([]NodeID, 0, len(runtimes))
 	for id := range runtimes {
 		initIDs = append(initIDs, id)
@@ -466,6 +467,17 @@ func (w *Workspace) Restore(data SaveData) error {
 	workspaceWatchers := w.workspaceWatchersLocked()
 	w.mu.Unlock()
 	locked = false
+	if err := w.callRestoreLinkAttachEvents(restoreLinks); err != nil {
+		cleanupErr := w.cleanupInitializedRuntimes(runtimes, scopes)
+		w.mu.Lock()
+		locked = true
+		w.nodes, w.links = oldNodes, oldLinks
+		w.messages = oldMessages
+		w.nextNode, w.nextLink, w.nextMessage = oldNextNode, oldNextLink, oldNextMessage
+		w.mu.Unlock()
+		locked = false
+		return errors.Join(opErr("restore", "hook", err), cleanupErr)
+	}
 	w.notifyMessageWatchers(watchers, restoreMessageEvents)
 	w.notifyMenuWatchers(menuWatchers, restoreMenuEvents)
 	w.notifyWorkspaceWatchers(workspaceWatchers, []WorkspaceEvent{{Kind: WorkspaceChanged}})
@@ -486,6 +498,56 @@ func (w *Workspace) RestoreConfig(cfg configer.Config) error {
 		return opErr("restore config", "unmarshal", err)
 	}
 	return w.Restore(data)
+}
+
+func (w *Workspace) restoreLinkAttachEventsLocked() []pendingLinkCreate {
+	links := make([]*linkRecord, 0, len(w.links))
+	for _, link := range w.links {
+		if link != nil && link.state == StateActive {
+			links = append(links, link)
+		}
+	}
+	sort.Slice(links, func(i, j int) bool { return links[i].id < links[j].id })
+	events := make([]pendingLinkCreate, 0, len(links))
+	for _, link := range links {
+		inputRuntime, outputRuntime := w.linkRuntimesLocked(link)
+		inputEndpoint, outputEndpoint := linkEndpoints(link)
+		events = append(events, pendingLinkCreate{
+			link:           link,
+			inputRuntime:   inputRuntime,
+			outputRuntime:  outputRuntime,
+			inputEndpoint:  inputEndpoint,
+			outputEndpoint: outputEndpoint,
+		})
+	}
+	return events
+}
+
+func (w *Workspace) callRestoreLinkAttachEvents(events []pendingLinkCreate) error {
+	for _, event := range events {
+		object := event.link.object
+		var err error
+		if object == nil {
+			object, err = w.callLinkObject(event.inputRuntime, event.inputEndpoint)
+			if err != nil {
+				return err
+			}
+			w.mu.Lock()
+			if link := w.links[event.link.id]; link != nil && link.state == StateActive {
+				link.object = object
+			}
+			w.mu.Unlock()
+		}
+		if err := w.callBeforeLinkAttach(event.inputRuntime, event.inputEndpoint, object); err != nil {
+			return err
+		}
+		if err := w.callBeforeLinkAttach(event.outputRuntime, event.outputEndpoint, object); err != nil {
+			return err
+		}
+		w.callAfterLinkAttach(event.inputRuntime, event.inputEndpoint, object)
+		w.callAfterLinkAttach(event.outputRuntime, event.outputEndpoint, object)
+	}
+	return nil
 }
 
 type configSaveData struct {

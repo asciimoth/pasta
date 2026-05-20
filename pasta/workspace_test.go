@@ -3496,7 +3496,15 @@ func TestLifecycleRestoreInitializesActiveNodesAsRestore(t *testing.T) {
 	if err := restored.Restore(saved); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"init:restore", "init:restore"}
+	want := []string{
+		"init:restore",
+		"init:restore",
+		"object",
+		"before:input:object:example.com/int",
+		"before:output:object:example.com/int",
+		"after:input:1:object:example.com/int",
+		"after:output:1:object:example.com/int",
+	}
 	if fmt.Sprint(*log) != fmt.Sprint(want) {
 		t.Fatalf("log = %#v, want %#v", *log, want)
 	}

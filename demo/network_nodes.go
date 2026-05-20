@@ -153,13 +153,17 @@ type networkNodeClass struct {
 
 func (c networkNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState, _ pasta.InitMode) (pasta.NodeRuntime, error) {
 	runCtx, cancel := context.WithCancel(context.Background())
+
+	base := gonnect.NewLoopbackNetwok()
+	base.AllowAnyHost = true
+
 	node := &networkNode{
 		ctx:       ctx,
 		runCtx:    runCtx,
 		cancel:    cancel,
 		kind:      c.kind,
 		state:     networkStateFromAny(state.Private),
-		base:      gonnect.NewLoopbackNetwok(),
+		base:      base,
 		reattach:  make(chan struct{}),
 		requestCh: make(chan struct{}, 1),
 	}

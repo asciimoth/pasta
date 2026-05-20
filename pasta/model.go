@@ -232,6 +232,7 @@ type NodeScope interface {
 	SetMetadataValue(string, string) error
 	DeleteMetadataValue(string) error
 	SetPorts(inputs, outputs []PortSpec) error
+	DeleteLink(LinkID) error
 	TrackResource(resource any, links []LinkID, destructor ResourceDestructor) error
 	UntrackResource(resource any) error
 }

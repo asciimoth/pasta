@@ -2924,6 +2924,25 @@ func (s *nodeScope) SetPorts(inputs, outputs []PortSpec) error {
 	})
 }
 
+func (s *nodeScope) DeleteLink(id LinkID) error {
+	s.w.mu.Lock()
+	if err := s.w.checkOpenLocked("scope delete link"); err != nil {
+		s.w.mu.Unlock()
+		return err
+	}
+	link := s.w.links[id]
+	if link == nil || link.state != StateActive {
+		s.w.mu.Unlock()
+		return opErr("scope delete link", "validate", ErrNotFound)
+	}
+	if link.input.Node != s.id && link.output.Node != s.id {
+		s.w.mu.Unlock()
+		return opErr("scope delete link", "validate", ErrOwnership)
+	}
+	s.w.mu.Unlock()
+	return s.w.DeleteLink(id)
+}
+
 func (s *nodeScope) updateInitRecord(fn func(*nodeRecord) error) error {
 	s.initMu.Lock()
 	defer s.initMu.Unlock()

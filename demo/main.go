@@ -144,6 +144,7 @@ func (a *appState) reset() {
 	a.must(a.workspace.RegisterLibrary(StringLibrary{}), "register string library")
 	a.must(a.workspace.RegisterLibrary(StreamLibrary{}), "register stream library")
 	a.must(a.workspace.RegisterLibrary(NetworkLibrary{}), "register network library")
+	a.must(a.workspace.RegisterLibrary(TunLibrary{}), "register tun library")
 	a.must(a.workspace.RegisterLibrary(MenuLibrary{}), "register menu library")
 	a.subscribeLocked()
 	a.log("workspace initialized and demo classes registered")
@@ -390,7 +391,7 @@ func (a *appState) seed() error {
 	if err != nil {
 		return err
 	}
-	serverB, err := a.newNode(NetworkServerClass, 80, 2180, 0)
+	serverB, err := a.newNode(NetworkServerClass, 984.1538487000003, 1994.7435855, 0)
 	if err != nil {
 		return err
 	}
@@ -402,7 +403,7 @@ func (a *appState) seed() error {
 	if err != nil {
 		return err
 	}
-	networkB, err := a.newNode(NetworkLoopbackClass, 1000, 2180, 0)
+	networkB, err := a.newNode(NetworkLoopbackClass, 1261.3845721000005, 2268.487170999999, 0)
 	if err != nil {
 		return err
 	}
@@ -448,7 +449,110 @@ func (a *appState) seed() error {
 	if _, err := a.workspace.CreateLink(full(networkB, NetworkInput), full(router, networkRouterOutput(2)), pasta.LinkOptions{Type: NetworkType}); err != nil {
 		return err
 	}
-	a.log("seeded calculator graph, string push graph, stream pull graph, menu demos, and network router demo")
+	tunServer, err := a.newNode(NetworkServerClass, 80, 2480, 0)
+	if err != nil {
+		return err
+	}
+	tunClient, err := a.newNode(NetworkClientClass, 80, 2700, 0)
+	if err != nil {
+		return err
+	}
+	tunLoopback, err := a.newNode(NetworkLoopbackClass, 1247.1333454700002, 2479.748674069999, 0)
+	if err != nil {
+		return err
+	}
+	tunSpoofer, err := a.newNode(TunSpooferClass, 792.6999999999999, 2674.600000000001, 0)
+	if err != nil {
+		return err
+	}
+	tunVTun, err := a.newNode(TunVTunClass, 479.91805328000055, 2696.3718126100002, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(tunServer, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "10.80.0.10:8080"},
+		{Block: "main", Field: "response", Value: "vtun spoofer response"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(tunClient, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "http://10.80.0.10:8080/"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(tunVTun, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "localAddrs", Value: "10.80.0.2"},
+		{Block: "main", Field: "dnsServers", Value: "10.80.0.1"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(tunLoopback, NetworkInput), full(tunServer, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(tunVTun, NetworkInput), full(tunClient, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(tunSpoofer, TunInputA), full(tunVTun, TunOutput), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(tunLoopback, NetworkInput), full(tunSpoofer, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	copyServer, err := a.newNode(NetworkServerClass, 103.28197320000008, 3199.384770699998, 0)
+	if err != nil {
+		return err
+	}
+	copyClient, err := a.newNode(NetworkClientClass, 106.28203940000004, 3003.256513800002, 0)
+	if err != nil {
+		return err
+	}
+	copyServerVTun, err := a.newNode(TunVTunClass, 524.3076643, 3193.2052309000014, 0)
+	if err != nil {
+		return err
+	}
+	copyClientVTun, err := a.newNode(TunVTunClass, 530.2564145000005, 3012.0000993000012, 0)
+	if err != nil {
+		return err
+	}
+	copyNode, err := a.newNode(TunCopyClass, 1000, 3130, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(copyServer, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "10.81.0.10:8080"},
+		{Block: "main", Field: "response", Value: "vtun copy response"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(copyClient, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "http://10.81.0.10:8080/"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(copyServerVTun, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "localAddrs", Value: "10.81.0.10"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(copyClientVTun, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "localAddrs", Value: "10.81.0.20"},
+		{Block: "main", Field: "dnsServers", Value: "10.81.0.10"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(copyServerVTun, NetworkInput), full(copyServer, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(copyClientVTun, NetworkInput), full(copyClient, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(copyNode, TunInputA), full(copyClientVTun, TunOutput), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(copyNode, TunInputB), full(copyServerVTun, TunOutput), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	a.log("seeded calculator graph, string push graph, stream pull graph, menu demos, network router demo, and tun demos")
 	return nil
 }
 
@@ -769,6 +873,9 @@ func (a *appState) restoreWorkspace(restore func(*pasta.Workspace) error) error 
 	if err := a.workspace.RegisterLibrary(NetworkLibrary{}); err != nil {
 		return err
 	}
+	if err := a.workspace.RegisterLibrary(TunLibrary{}); err != nil {
+		return err
+	}
 	if err := a.workspace.RegisterLibrary(MenuLibrary{}); err != nil {
 		return err
 	}
@@ -807,7 +914,7 @@ func (a *appState) snapshot() snapshotDTO {
 		Links:   []linkDTO{},
 	}
 	for _, class := range s.Classes {
-		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName && class.Library != NetworkLibraryName && class.Library != MenuLibraryName) {
+		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName && class.Library != NetworkLibraryName && class.Library != TunLibraryName && class.Library != MenuLibraryName) {
 			continue
 		}
 		out.Classes = append(out.Classes, classDTO{

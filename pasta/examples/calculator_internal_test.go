@@ -203,6 +203,7 @@ func (s errNodeScope) SetMetadata(map[string]string) error               { retur
 func (s errNodeScope) SetMetadataValue(string, string) error             { return nil }
 func (s errNodeScope) DeleteMetadataValue(string) error                  { return nil }
 func (s errNodeScope) SetPorts([]pasta.PortSpec, []pasta.PortSpec) error { return nil }
+func (s errNodeScope) DeleteLink(pasta.LinkID) error                     { return nil }
 func (s errNodeScope) TrackResource(any, []pasta.LinkID, pasta.ResourceDestructor) error {
 	return nil
 }

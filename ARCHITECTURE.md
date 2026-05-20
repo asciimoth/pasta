@@ -293,7 +293,10 @@ workspace back to its previous state.
 
 Restore initializes active nodes in deterministic DAG order: nodes without
 outgoing links to still-uncreated nodes come first, with node ID as the tie
-breaker.
+breaker. After active runtimes are installed, restore rehydrates active link
+objects from input runtimes and runs input then output attach hooks for restored
+links in link ID order. Link-object or before-attach failures roll the restore
+back; after-attach panics are logged like normal link creation after-hooks.
 
 The persistence DTO is intentionally small:
 
