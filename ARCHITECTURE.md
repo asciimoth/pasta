@@ -41,12 +41,16 @@ not model state for save, copy, paste, or restore.
 Ephemeral node menus are JSON-serializable control documents that combine a
 simple UI schema with current state. They support blocks, scalar fields,
 read-only fields, fixed value lists, checkboxes, buttons, and repeatable item
-templates. Menus can be replaced or cleared by the workspace, owning library, or
-node scope. External state updates are validated against the current schema and
-may be accepted, rejected, or normalized by an optional runtime hook before
-commit. Menu watchers observe replacement, clearing, accepted state changes, and
-button triggers. Menus are exposed in current snapshots, but are not model state
-for save, copy, paste, or restore.
+templates. Buttons use `Disabled` for unclickable actions. Menus may set
+`Committable` to ask GUI layers to hold user edits locally and submit them only
+through a GUI-owned Apply control; GUI layers should also provide Cancel to drop
+uncommitted local edits. Nodes may still replace or update their menus while
+those local drafts exist. Menus can be replaced or cleared by the workspace,
+owning library, or node scope. External state updates are validated against the
+current schema and may be accepted, rejected, or normalized by an optional
+runtime hook before commit. Menu watchers observe replacement, clearing,
+accepted state changes, and button triggers. Menus are exposed in current
+snapshots, but are not model state for save, copy, paste, or restore.
 
 Applications provide node behavior and type contracts. The core package stores
 public metadata, private state values, coordinates, waypoints, and link objects

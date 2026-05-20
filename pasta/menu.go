@@ -36,11 +36,14 @@ const (
 // NodeMenu is an ephemeral, JSON-serializable node control surface.
 //
 // Version is assigned by the workspace and increments on replacement or
-// accepted state updates. Blocks defaults to one "default" block when omitted.
+// accepted state updates. Committable asks GUI layers to stage user edits until
+// an Apply control owned by the GUI is used. Blocks defaults to one "default"
+// block when omitted.
 type NodeMenu struct {
-	Version  int64             `json:"version"`
-	Blocks   []MenuBlock       `json:"blocks"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Version     int64             `json:"version"`
+	Committable bool              `json:"committable,omitempty"`
+	Blocks      []MenuBlock       `json:"blocks"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // MenuBlock groups fields, buttons, and repeatable groups under one optional title.
@@ -72,7 +75,8 @@ type MenuOption struct {
 	Disabled bool   `json:"disabled,omitempty"`
 }
 
-// MenuButton is an ephemeral action exposed by a node menu.
+// MenuButton is an ephemeral action exposed by a node menu. Disabled buttons
+// are visible but unclickable.
 type MenuButton struct {
 	ID       string            `json:"id"`
 	Label    string            `json:"label,omitempty"`
@@ -538,9 +542,10 @@ func findMenuButton(menu NodeMenu, ref MenuButtonRef) (MenuButton, bool) {
 
 func cloneNodeMenu(menu NodeMenu) NodeMenu {
 	out := NodeMenu{
-		Version:  menu.Version,
-		Blocks:   make([]MenuBlock, len(menu.Blocks)),
-		Metadata: cloneStringMap(menu.Metadata),
+		Version:     menu.Version,
+		Committable: menu.Committable,
+		Blocks:      make([]MenuBlock, len(menu.Blocks)),
+		Metadata:    cloneStringMap(menu.Metadata),
 	}
 	for i, block := range menu.Blocks {
 		out.Blocks[i] = cloneMenuBlock(block)

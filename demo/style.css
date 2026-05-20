@@ -26,6 +26,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -41,6 +42,11 @@ button {
 
 button:hover {
   border-color: var(--accent);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .app {
@@ -142,6 +148,62 @@ button:hover {
   gap: 8px;
 }
 
+.menuBlockTitle {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.menuActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.menuRepeat {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #1a1d20;
+  padding: 8px;
+}
+
+.menuRepeatHeader,
+.menuRepeatItemHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.menuRepeatTitle,
+.menuRepeatItemTitle {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.menuRepeatItem {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.menuRepeatAdd,
+.menuRepeatRemove {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
 .nodeMessages {
   display: grid;
   gap: 6px;
@@ -173,13 +235,20 @@ button:hover {
   font-size: 12px;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #151719;
   color: var(--text);
   padding: 7px 8px;
+}
+
+.field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }
 
 .readonly {

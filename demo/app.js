@@ -15,6 +15,7 @@ const state = {
   reactiveQueued: false,
   deletingNodes: new Set(),
   pendingMenuUpdates: new Map(),
+  menuDrafts: new Map(),
 };
 
 const typeStyles = {
@@ -452,6 +453,7 @@ function renderMenu() {
   els.menu.replaceChildren();
   const node = state.selectedBackendId ? findNode(state.selectedBackendId) : null;
   els.menu.dataset.nodeId = node ? node.id : "";
+  els.menu.dataset.menuKey = node && node.menu ? menuStructureKey(node.menu) : "";
   if (!node) {
     els.menu.textContent = "Select a node.";
     els.menu.className = "panelText";
@@ -497,32 +499,17 @@ function renderMenu() {
     const blockEl = document.createElement("div");
     blockEl.className = "menuBlock";
     blockEl.dataset.block = block.id;
+    if (block.title) {
+      const heading = document.createElement("div");
+      heading.className = "menuBlockTitle";
+      heading.textContent = block.title;
+      blockEl.appendChild(heading);
+    }
     for (const field of block.fields || []) {
-      const wrap = document.createElement("div");
-      wrap.className = "field";
-      wrap.dataset.block = block.id;
-      wrap.dataset.field = field.id;
-      const label = document.createElement("label");
-      label.textContent = field.label || field.id;
-      wrap.appendChild(label);
-      if (field.readOnly || field.kind === "read-only") {
-        const value = document.createElement("div");
-        value.className = "readonly";
-        value.dataset.role = "field-value";
-        value.textContent = formatAny(field.value);
-        wrap.appendChild(value);
-      } else {
-        const input = document.createElement("input");
-        input.type = field.kind === "float64" || field.kind === "int64" ? "number" : "text";
-        input.dataset.role = "field-input";
-        input.value = field.value ?? "";
-        input.addEventListener("change", async () => {
-          const value = input.type === "number" ? Number(input.value) : input.value;
-          await updateMenuField(node.id, block.id, field.id, value);
-        });
-        wrap.appendChild(input);
-      }
-      blockEl.appendChild(wrap);
+      blockEl.appendChild(renderMenuField(node, block.id, field));
+    }
+    for (const repeat of block.repeats || []) {
+      blockEl.appendChild(renderMenuRepeat(node, block.id, repeat));
     }
     for (const buttonSpec of block.buttons || []) {
       const button = document.createElement("button");
@@ -533,11 +520,293 @@ function renderMenu() {
       button.textContent = buttonSpec.label || buttonSpec.id;
       button.addEventListener("click", async () => {
         await waitForMenuUpdates(node.id);
-        await refresh(await call("triggerMenuButton", { node: node.id, block: block.id, button: buttonSpec.id }));
+        const current = findNode(node.id) || node;
+        await refresh(await call("triggerMenuButton", { node: current.id, block: block.id, button: buttonSpec.id }));
       });
       blockEl.appendChild(button);
     }
     els.menu.appendChild(blockEl);
+  }
+  if (node.menu.committable) {
+    const actions = document.createElement("div");
+    actions.className = "menuActions";
+    const apply = document.createElement("button");
+    apply.type = "button";
+    apply.dataset.role = "menu-apply";
+    apply.textContent = "Apply";
+    apply.disabled = !hasMenuDraft(node.id);
+    apply.addEventListener("click", async () => applyMenuDraft(node.id));
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.dataset.role = "menu-cancel";
+    cancel.textContent = "Cancel";
+    cancel.disabled = !hasMenuDraft(node.id);
+    cancel.addEventListener("click", () => {
+      state.menuDrafts.delete(node.id);
+      renderMenu();
+    });
+    actions.append(apply, cancel);
+    els.menu.appendChild(actions);
+  }
+}
+
+function renderMenuField(node, blockId, field) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  wrap.dataset.block = blockId;
+  wrap.dataset.field = field.id;
+  const label = document.createElement("label");
+  label.textContent = field.label || field.id;
+  wrap.appendChild(label);
+
+  if (field.readOnly || field.kind === "read-only") {
+    const value = document.createElement("div");
+    value.className = "readonly";
+    value.dataset.role = "field-value";
+    value.textContent = formatAny(field.value);
+    wrap.appendChild(value);
+    return wrap;
+  }
+
+  const input = createMenuInput(field);
+  input.dataset.role = "field-input";
+  input.dataset.kind = field.kind;
+  setMenuInputValue(input, menuFieldDisplayValue(node, blockId, field));
+  input.addEventListener("change", async () => {
+    const value = readMenuInputValue(input, field.kind);
+    if (node.menu && node.menu.committable) {
+      setMenuDraftValue(node.id, blockId, field.id, value);
+      patchMenuActions(node.id);
+      return;
+    }
+    await updateMenuField(node.id, blockId, field.id, value);
+  });
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function renderMenuRepeat(node, blockId, repeat) {
+  const wrap = document.createElement("div");
+  wrap.className = "menuRepeat";
+  wrap.dataset.block = blockId;
+  wrap.dataset.repeat = repeat.id;
+
+  const header = document.createElement("div");
+  header.className = "menuRepeatHeader";
+  const title = document.createElement("div");
+  title.className = "menuRepeatTitle";
+  title.textContent = repeat.title || repeat.id;
+  header.appendChild(title);
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "menuRepeatAdd";
+  add.textContent = "Add";
+  add.addEventListener("click", async () => {
+    const items = cloneRepeatItems(menuRepeatDisplayItems(node, blockId, repeat));
+    items.push(defaultRepeatItem(repeat, items.length + 1));
+    await commitRepeatItems(node, blockId, repeat, items);
+  });
+  header.appendChild(add);
+  wrap.appendChild(header);
+
+  const items = menuRepeatDisplayItems(node, blockId, repeat);
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "panelText";
+    empty.textContent = "No items.";
+    wrap.appendChild(empty);
+  }
+  for (const item of items) {
+    wrap.appendChild(renderMenuRepeatItem(node, blockId, repeat, item));
+  }
+  return wrap;
+}
+
+function renderMenuRepeatItem(node, blockId, repeat, item) {
+  const itemEl = document.createElement("div");
+  itemEl.className = "menuRepeatItem";
+  itemEl.dataset.item = item.id;
+
+  const header = document.createElement("div");
+  header.className = "menuRepeatItemHeader";
+  const title = document.createElement("div");
+  title.className = "menuRepeatItemTitle";
+  title.textContent = item.title || item.id;
+  header.appendChild(title);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "menuRepeatRemove";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", async () => {
+    const items = cloneRepeatItems(menuRepeatDisplayItems(node, blockId, repeat)).filter((candidate) => candidate.id !== item.id);
+    await commitRepeatItems(node, blockId, repeat, items);
+  });
+  header.appendChild(remove);
+  itemEl.appendChild(header);
+
+  for (const field of item.fields || []) {
+    itemEl.appendChild(renderMenuRepeatField(node, blockId, repeat, item, field));
+  }
+  return itemEl;
+}
+
+function renderMenuRepeatField(node, blockId, repeat, item, field) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  wrap.dataset.block = blockId;
+  wrap.dataset.repeat = repeat.id;
+  wrap.dataset.item = item.id;
+  wrap.dataset.field = field.id;
+  const label = document.createElement("label");
+  label.textContent = field.label || field.id;
+  wrap.appendChild(label);
+
+  if (field.readOnly || field.kind === "read-only") {
+    const value = document.createElement("div");
+    value.className = "readonly";
+    value.dataset.role = "repeat-field-value";
+    value.textContent = formatAny(field.value);
+    wrap.appendChild(value);
+    return wrap;
+  }
+
+  const input = createMenuInput(field);
+  input.dataset.role = "repeat-field-input";
+  input.dataset.kind = field.kind;
+  setMenuInputValue(input, field.value);
+  input.addEventListener("change", async () => {
+    const value = readMenuInputValue(input, field.kind);
+    const items = cloneRepeatItems(menuRepeatDisplayItems(node, blockId, repeat));
+    const target = items.find((candidate) => candidate.id === item.id);
+    if (!target) return;
+    const targetField = (target.fields || []).find((candidate) => candidate.id === field.id);
+    if (!targetField) return;
+    targetField.value = value;
+    await commitRepeatItems(node, blockId, repeat, items);
+  });
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function createMenuInput(field) {
+  if (field.options && field.options.length) {
+    const select = document.createElement("select");
+    for (const optionSpec of field.options) {
+      const option = document.createElement("option");
+      option.value = JSON.stringify(optionSpec.value);
+      option.textContent = optionSpec.label || formatAny(optionSpec.value);
+      option.disabled = !!optionSpec.disabled;
+      select.appendChild(option);
+    }
+    return select;
+  }
+  if (field.kind === "bool") {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    return input;
+  }
+  const input = document.createElement("input");
+  input.type = field.kind === "float64" || field.kind === "int64" ? "number" : "text";
+  return input;
+}
+
+function menuFieldDisplayValue(node, blockId, field) {
+  if (!node.menu || !node.menu.committable) return field.value;
+  const draft = state.menuDrafts.get(node.id);
+  const key = menuDraftKey(blockId, field.id);
+  if (draft && draft.values.has(key)) return draft.values.get(key);
+  return field.value;
+}
+
+function setMenuInputValue(input, value) {
+  if (input.type === "checkbox") {
+    input.checked = !!value;
+    return;
+  }
+  const text = input.tagName === "SELECT" ? JSON.stringify(value) : String(value ?? "");
+  if (input.value !== text) input.value = text;
+}
+
+function readMenuInputValue(input, kind) {
+  if (input.type === "checkbox") return input.checked;
+  if (input.tagName === "SELECT") {
+    try {
+      return JSON.parse(input.value);
+    } catch (_) {
+      return input.value;
+    }
+  }
+  if (kind === "float64" || kind === "int64") return Number(input.value);
+  return input.value;
+}
+
+function menuDraftKey(blockId, fieldId) {
+  return `${blockId}\u0000${fieldId}`;
+}
+
+function menuRepeatDraftKey(blockId, repeatId) {
+  return `${blockId}\u0000${repeatId}`;
+}
+
+function setMenuDraftValue(nodeId, blockId, fieldId, value) {
+  let draft = state.menuDrafts.get(nodeId);
+  if (!draft) {
+    draft = newMenuDraft();
+    state.menuDrafts.set(nodeId, draft);
+  }
+  draft.values.set(menuDraftKey(blockId, fieldId), value);
+}
+
+function setMenuDraftRepeat(nodeId, blockId, repeatId, items) {
+  let draft = state.menuDrafts.get(nodeId);
+  if (!draft) {
+    draft = newMenuDraft();
+    state.menuDrafts.set(nodeId, draft);
+  }
+  draft.repeats.set(menuRepeatDraftKey(blockId, repeatId), { block: blockId, repeat: repeatId, items: repeatItemsToState(items) });
+}
+
+function newMenuDraft() {
+  return { values: new Map(), repeats: new Map() };
+}
+
+function hasMenuDraft(nodeId) {
+  const draft = state.menuDrafts.get(nodeId);
+  return !!draft && (draft.values.size > 0 || draft.repeats.size > 0);
+}
+
+async function applyMenuDraft(nodeId) {
+  const draft = state.menuDrafts.get(nodeId);
+  if (!hasMenuDraft(nodeId)) return;
+  const fields = [];
+  for (const [key, value] of draft.values) {
+    const [block, field] = key.split("\u0000");
+    fields.push({ block, field, value });
+  }
+  const repeats = Array.from(draft.repeats.values());
+  await waitForMenuUpdates(nodeId);
+  state.menuDrafts.delete(nodeId);
+  try {
+    await refresh(await call("updateMenuState", {
+      node: nodeId,
+      version: 0,
+      fields,
+      repeats,
+    }));
+    await refresh(await call("snapshot"));
+  } catch (err) {
+    state.menuDrafts.set(nodeId, draft);
+    patchMenuActions(nodeId);
+    throw err;
+  }
+}
+
+function patchMenuActions(nodeId) {
+  const disabled = !hasMenuDraft(nodeId);
+  for (const action of els.menu.querySelectorAll('[data-role="menu-apply"], [data-role="menu-cancel"]')) {
+    action.disabled = disabled;
   }
 }
 
@@ -592,7 +861,14 @@ function patchMenu() {
   }
   patchInputValue(nameInput, node.displayName || node.shortClass);
 
-  if (!node.menu) return;
+  if (!node.menu) {
+    renderMenu();
+    return;
+  }
+  if (els.menu.dataset.menuKey !== menuStructureKey(node.menu)) {
+    renderMenu();
+    return;
+  }
 
   for (const block of node.menu.blocks || []) {
     if (!els.menu.querySelector(`.menuBlock[data-block="${cssEscape(block.id)}"]`)) {
@@ -600,7 +876,7 @@ function patchMenu() {
       return;
     }
     for (const field of block.fields || []) {
-      const wrap = els.menu.querySelector(`.field[data-block="${cssEscape(block.id)}"][data-field="${cssEscape(field.id)}"]`);
+      const wrap = els.menu.querySelector(`.field[data-block="${cssEscape(block.id)}"][data-field="${cssEscape(field.id)}"]:not([data-repeat])`);
       if (!wrap) {
         renderMenu();
         return;
@@ -625,12 +901,17 @@ function patchMenu() {
           renderMenu();
           return;
         }
-        const type = field.kind === "float64" || field.kind === "int64" ? "number" : "text";
-        if (input.type !== type) {
+        if (!menuInputMatchesField(input, field)) {
           renderMenu();
           return;
         }
-        patchInputValue(input, field.value ?? "");
+        patchMenuInputValue(input, menuFieldDisplayValue(node, block.id, field));
+      }
+    }
+    for (const repeat of block.repeats || []) {
+      if (!patchMenuRepeat(node, block.id, repeat)) {
+        renderMenu();
+        return;
       }
     }
     for (const buttonSpec of block.buttons || []) {
@@ -644,6 +925,224 @@ function patchMenu() {
       if (button.textContent !== text) button.textContent = text;
     }
   }
+  patchMenuActions(node.id);
+}
+
+function patchMenuRepeat(node, blockId, repeat) {
+  const repeatEl = els.menu.querySelector(`.menuRepeat[data-block="${cssEscape(blockId)}"][data-repeat="${cssEscape(repeat.id)}"]`);
+  if (!repeatEl) return false;
+  const title = repeatEl.querySelector(".menuRepeatTitle");
+  const titleText = repeat.title || repeat.id;
+  if (!title || title.textContent !== titleText) return false;
+
+  const items = menuRepeatDisplayItems(node, blockId, repeat);
+  const renderedItems = Array.from(repeatEl.querySelectorAll(":scope > .menuRepeatItem"));
+  if (items.length !== renderedItems.length) return false;
+  for (const item of items) {
+    const itemEl = repeatEl.querySelector(`:scope > .menuRepeatItem[data-item="${cssEscape(item.id)}"]`);
+    if (!itemEl) return false;
+    const itemTitle = itemEl.querySelector(".menuRepeatItemTitle");
+    const itemTitleText = item.title || item.id;
+    if (!itemTitle || itemTitle.textContent !== itemTitleText) return false;
+
+    for (const field of item.fields || []) {
+      const wrap = itemEl.querySelector(`.field[data-field="${cssEscape(field.id)}"]`);
+      if (!wrap) return false;
+      const label = wrap.querySelector("label");
+      const labelText = field.label || field.id;
+      if (!label || label.textContent !== labelText) return false;
+      if (field.readOnly || field.kind === "read-only") {
+        const value = wrap.querySelector('[data-role="repeat-field-value"]');
+        if (!value) return false;
+        const text = formatAny(field.value);
+        if (value.textContent !== text) value.textContent = text;
+      } else {
+        const input = wrap.querySelector('[data-role="repeat-field-input"]');
+        if (!input || !menuInputMatchesField(input, field)) return false;
+        patchMenuInputValue(input, field.value);
+      }
+    }
+  }
+  return true;
+}
+
+function menuStructureKey(menu) {
+  return JSON.stringify({
+    committable: !!menu.committable,
+    blocks: (menu.blocks || []).map((block) => ({
+      id: block.id,
+      title: block.title || "",
+      fields: (block.fields || []).map((field) => ({
+        id: field.id,
+        label: field.label || "",
+        kind: field.kind,
+        readOnly: !!field.readOnly,
+        render: field.render || "",
+        options: (field.options || []).map((option) => ({
+          value: option.value,
+          label: option.label || "",
+          disabled: !!option.disabled,
+        })),
+      })),
+      buttons: (block.buttons || []).map((button) => ({
+        id: button.id,
+        label: button.label || "",
+      })),
+      repeats: (block.repeats || []).map((repeat) => ({
+        id: repeat.id,
+        title: repeat.title || "",
+        template: (repeat.template || []).map((field) => menuFieldStructure(field)),
+        items: (repeat.items || []).map((item) => ({
+          id: item.id,
+          title: item.title || "",
+          fields: (item.fields || []).map((field) => menuFieldStructure(field)),
+        })),
+      })),
+    })),
+  });
+}
+
+function menuFieldStructure(field) {
+  return {
+    id: field.id,
+    label: field.label || "",
+    kind: field.kind,
+    readOnly: !!field.readOnly,
+    render: field.render || "",
+    options: (field.options || []).map((option) => ({
+      value: option.value,
+      label: option.label || "",
+      disabled: !!option.disabled,
+    })),
+  };
+}
+
+function menuRepeatDisplayItems(node, blockId, repeat) {
+  if (!node.menu || !node.menu.committable) return repeat.items || [];
+  const draft = state.menuDrafts.get(node.id);
+  const key = menuRepeatDraftKey(blockId, repeat.id);
+  if (draft && draft.repeats && draft.repeats.has(key)) {
+    return repeatStateToItems(repeat, draft.repeats.get(key).items || []);
+  }
+  return repeat.items || [];
+}
+
+async function commitRepeatItems(node, blockId, repeat, items) {
+  if (node.menu && node.menu.committable) {
+    setMenuDraftRepeat(node.id, blockId, repeat.id, items);
+    renderMenu();
+    return;
+  }
+  await updateMenuRepeat(node.id, blockId, repeat.id, items);
+}
+
+async function updateMenuRepeat(nodeId, blockId, repeatId, items) {
+  const previous = state.pendingMenuUpdates.get(nodeId) || Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    await refresh(await call("updateMenuState", {
+      node: nodeId,
+      version: 0,
+      repeats: [{ block: blockId, repeat: repeatId, items: repeatItemsToState(items) }],
+    }));
+  });
+  state.pendingMenuUpdates.set(nodeId, task);
+  try {
+    await task;
+  } finally {
+    if (state.pendingMenuUpdates.get(nodeId) === task) {
+      state.pendingMenuUpdates.delete(nodeId);
+    }
+  }
+}
+
+function repeatItemsToState(items) {
+  return (items || []).map((item) => {
+    const fields = {};
+    for (const field of item.fields || []) {
+      if (field.readOnly || field.kind === "read-only") continue;
+      fields[field.id] = field.value;
+    }
+    return {
+      id: item.id,
+      title: item.title || "",
+      fields,
+    };
+  });
+}
+
+function repeatStateToItems(repeat, states) {
+  const originalItems = new Map((repeat.items || []).map((item) => [item.id, item]));
+  return (states || []).map((stateItem) => {
+    const values = stateItem.fields || {};
+    const originalFields = new Map(((originalItems.get(stateItem.id) || {}).fields || []).map((field) => [field.id, field]));
+    return {
+      id: stateItem.id,
+      title: stateItem.title || stateItem.id,
+      fields: (repeat.template || []).map((template) => {
+        const original = originalFields.get(template.id);
+        return {
+          ...template,
+          value: Object.prototype.hasOwnProperty.call(values, template.id) ? values[template.id] : original ? original.value : defaultMenuValue(template),
+        };
+      }),
+    };
+  });
+}
+
+function cloneRepeatItems(items) {
+  return (items || []).map((item) => ({
+    id: item.id,
+    title: item.title || "",
+    fields: (item.fields || []).map((field) => ({
+      ...field,
+      options: (field.options || []).map((option) => ({ ...option })),
+      metadata: field.metadata ? { ...field.metadata } : undefined,
+    })),
+    metadata: item.metadata ? { ...item.metadata } : undefined,
+  }));
+}
+
+function defaultRepeatItem(repeat, ordinal) {
+  const id = uniqueRepeatItemId(repeat, ordinal);
+  return {
+    id,
+    title: `Row ${ordinal}`,
+    fields: (repeat.template || []).map((field) => ({
+      ...field,
+      value: defaultMenuValue(field),
+    })),
+  };
+}
+
+function uniqueRepeatItemId(repeat, ordinal) {
+  const existing = new Set((repeat.items || []).map((item) => item.id));
+  let id = `row${ordinal}`;
+  while (existing.has(id)) {
+    ordinal += 1;
+    id = `row${ordinal}`;
+  }
+  return id;
+}
+
+function defaultMenuValue(field) {
+  if (field.value !== undefined) return field.value;
+  if (field.options && field.options.length) return field.options[0].value;
+  if (field.kind === "bool") return false;
+  if (field.kind === "float64" || field.kind === "int64") return 0;
+  if (field.kind === "read-only") return "";
+  return "";
+}
+
+function menuInputMatchesField(input, field) {
+  if (field.options && field.options.length) return input.tagName === "SELECT";
+  if (field.kind === "bool") return input.type === "checkbox";
+  const type = field.kind === "float64" || field.kind === "int64" ? "number" : "text";
+  return input.tagName === "INPUT" && input.type === type;
+}
+
+function patchMenuInputValue(input, value) {
+  if (document.activeElement === input) return;
+  setMenuInputValue(input, value);
 }
 
 function patchMessages(messages) {

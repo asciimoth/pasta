@@ -166,9 +166,14 @@ A menu is a JSON-serializable schema plus state. Render blocks, scalar fields, o
 The renderer should understand this schema:
 
 - `NodeMenu.Version`: send it back with updates. A stale version returns `ErrStaleMenu`.
+- `NodeMenu.Committable`: when true, keep user edits as local GUI drafts and send
+  them only from a GUI-owned Apply control. Interfaces should also offer Cancel
+  to discard those uncommitted drafts. Continue accepting menu refreshes from the
+  node, preserving dirty local values where the referenced controls still exist.
 - `NodeMenu.Blocks`: render each `MenuBlock` as a section or inspector group.
 - `MenuBlock.Fields`: scalar controls.
-- `MenuBlock.Buttons`: actions that call `TriggerNodeMenuButton`.
+- `MenuBlock.Buttons`: actions that call `TriggerNodeMenuButton`; disabled
+  buttons are the unclickable button state.
 - `MenuBlock.Repeats`: lists/arrays of structured items.
 - `Metadata`: opaque hints for your frontend. Pasta stores and copies it but does not interpret it.
 

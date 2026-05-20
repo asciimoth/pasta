@@ -289,15 +289,15 @@ Menus are the generic control surface for node-specific UI. Build them from runt
 
 The schema is intentionally small:
 
-- `NodeMenu`: top-level document with a workspace-assigned `Version`, `Blocks`, and optional `Metadata`.
+- `NodeMenu`: top-level document with a workspace-assigned `Version`, optional `Committable`, `Blocks`, and optional `Metadata`.
 - `MenuBlock`: a named group with `Fields`, `Buttons`, `Repeats`, and optional title/metadata.
 - `MenuField`: one scalar value. Supported kinds are `read-only`, `string`, `int64`, `float64`, and `bool`.
 - `MenuOption`: an allowed value for a field, with optional label and disabled flag.
-- `MenuButton`: an action by ID. Triggering it calls `NodeMenuButtonHook`.
+- `MenuButton`: an action by ID. Triggering it calls `NodeMenuButtonHook`; set `Disabled` for an unclickable button.
 - `MenuRepeat`: a repeatable list. Its `Template` defines the fields every item can contain, and `Items` holds current item state.
 - `MenuRepeatItem`: one row/item in a repeat list.
 
-Use `MenuRenderCheckbox` only for `bool` fields. `read-only` fields may hold JSON-compatible values and are rejected in external state updates.
+Use `MenuRenderCheckbox` only for `bool` fields. `read-only` fields may hold JSON-compatible values and are rejected in external state updates. `Committable` asks GUI layers to stage user edits until a GUI-owned Apply control is clicked; GUI layers should also provide Cancel for staged edits.
 
 ```go
 func (n *streamNode) menu() pasta.NodeMenu {

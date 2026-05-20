@@ -1096,6 +1096,7 @@ func (r *menuHookRuntime) TriggerMenuButton(ref MenuButtonRef) error {
 
 func testMenu() NodeMenu {
 	return NodeMenu{
+		Committable: true,
 		Blocks: []MenuBlock{{
 			ID: "default",
 			Fields: []MenuField{
@@ -1159,7 +1160,7 @@ func TestNodeMenusUpdateHooksWatchersAndSnapshots(t *testing.T) {
 	}
 
 	menu, ok := w.NodeMenu(node)
-	if !ok || menu.Version != 1 {
+	if !ok || menu.Version != 1 || !menu.Committable {
 		t.Fatalf("NodeMenu = %#v ok=%v", menu, ok)
 	}
 	menu.Blocks[0].Fields[1].Value = "mutated"
@@ -1258,6 +1259,9 @@ func TestNodeMenusNodeScopeMarshalAndNonPersistence(t *testing.T) {
 	}
 	if roundTrip.Blocks[0].Fields[2].Value != int64(2) {
 		t.Fatalf("round-trip int64 value = %#v", roundTrip.Blocks[0].Fields[2].Value)
+	}
+	if !roundTrip.Committable {
+		t.Fatalf("round-trip committable = false, want true")
 	}
 	updateText, err := MarshalMenuStateUpdate(MenuStateUpdate{Version: 2, Fields: []MenuFieldUpdate{{Block: "default", Field: "count", Value: int64(4)}}})
 	if err != nil {

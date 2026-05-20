@@ -143,6 +143,7 @@ func (a *appState) reset() {
 	a.must(a.workspace.RegisterLibrary(StringLibrary{}), "register string library")
 	a.must(a.workspace.RegisterLibrary(StreamLibrary{}), "register stream library")
 	a.must(a.workspace.RegisterLibrary(NetworkLibrary{}), "register network library")
+	a.must(a.workspace.RegisterLibrary(MenuLibrary{}), "register menu library")
 	a.subscribeLocked()
 	a.log("workspace initialized and demo classes registered")
 }
@@ -207,6 +208,9 @@ func (a *appState) call(method, raw string) string {
 		data = a.snapshot()
 	case "updateMenuField":
 		err = a.updateMenuField(raw)
+		data = a.snapshot()
+	case "updateMenuState":
+		err = a.updateMenuState(raw)
 		data = a.snapshot()
 	case "triggerMenuButton":
 		err = a.triggerMenuButton(raw)
@@ -371,7 +375,13 @@ func (a *appState) seed() error {
 	if _, err := a.workspace.CreateLink(full(provider, StreamInput), full(prefix, StreamOutput), pasta.LinkOptions{Type: StreamType}); err != nil {
 		return err
 	}
-	a.log("seeded calculator graph, string push graph, and stream pull graph")
+	if _, err := a.newNode(MenuImmediateClass, 80, 1480, 0); err != nil {
+		return err
+	}
+	if _, err := a.newNode(MenuCommittableClass, 540, 1480, 0); err != nil {
+		return err
+	}
+	a.log("seeded calculator graph, string push graph, stream pull graph, and menu demos")
 	return nil
 }
 
@@ -543,6 +553,31 @@ func (a *appState) updateMenuField(raw string) error {
 	return err
 }
 
+func (a *appState) updateMenuState(raw string) error {
+	var in struct {
+		Node    string                   `json:"node"`
+		Version int64                    `json:"version"`
+		Fields  []pasta.MenuFieldUpdate  `json:"fields"`
+		Repeats []pasta.MenuRepeatUpdate `json:"repeats"`
+	}
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		return err
+	}
+	id, err := pasta.ParseNodeID(in.Node)
+	if err != nil {
+		return err
+	}
+	_, err = a.workspace.UpdateNodeMenuState(id, pasta.MenuStateUpdate{
+		Version: in.Version,
+		Fields:  in.Fields,
+		Repeats: in.Repeats,
+	})
+	if err == nil {
+		a.log("menu state updated on %s: %d field(s), %d repeat(s)", id, len(in.Fields), len(in.Repeats))
+	}
+	return err
+}
+
 func (a *appState) triggerMenuButton(raw string) error {
 	var in struct {
 		Node   string `json:"node"`
@@ -654,6 +689,9 @@ func (a *appState) restoreLocked(data pasta.SaveData) error {
 	if err := a.workspace.RegisterLibrary(NetworkLibrary{}); err != nil {
 		return err
 	}
+	if err := a.workspace.RegisterLibrary(MenuLibrary{}); err != nil {
+		return err
+	}
 	a.subscribeLocked()
 	if err := a.workspace.Restore(data); err != nil {
 		return err
@@ -689,7 +727,7 @@ func (a *appState) snapshot() snapshotDTO {
 		Links:   []linkDTO{},
 	}
 	for _, class := range s.Classes {
-		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName && class.Library != NetworkLibraryName) {
+		if !class.Active || (class.Library != examples.CalculatorLibraryName && class.Library != StringLibraryName && class.Library != StreamLibraryName && class.Library != NetworkLibraryName && class.Library != MenuLibraryName) {
 			continue
 		}
 		out.Classes = append(out.Classes, classDTO{
