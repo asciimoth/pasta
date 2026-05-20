@@ -552,6 +552,107 @@ func (a *appState) seed() error {
 	if _, err := a.workspace.CreateLink(full(copyNode, TunInputB), full(copyServerVTun, TunOutput), pasta.LinkOptions{Type: TunType}); err != nil {
 		return err
 	}
+	joinServerA, err := a.newNode(NetworkServerClass, 80, 3740, 0)
+	if err != nil {
+		return err
+	}
+	joinServerB, err := a.newNode(NetworkServerClass, 80, 3960, 0)
+	if err != nil {
+		return err
+	}
+	joinClientA, err := a.newNode(NetworkClientClass, 80, 4180, 0)
+	if err != nil {
+		return err
+	}
+	joinClientB, err := a.newNode(NetworkClientClass, 80, 4400, 0)
+	if err != nil {
+		return err
+	}
+	joinVTun, err := a.newNode(TunVTunClass, 480, 4290, 0)
+	if err != nil {
+		return err
+	}
+	joinSplitter, err := a.newNode(TunSplitterClass, 820, 4290, 0)
+	if err != nil {
+		return err
+	}
+	joinJoiner, err := a.newNode(TunJoinerClass, 1160, 4290, 0)
+	if err != nil {
+		return err
+	}
+	joinSpoofer, err := a.newNode(TunSpooferClass, 1500, 4290, 0)
+	if err != nil {
+		return err
+	}
+	joinLoopback, err := a.newNode(NetworkLoopbackClass, 1840, 3850, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(joinServerA, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "10.82.0.10:8081"},
+		{Block: "main", Field: "response", Value: "joiner splitter A response"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(joinServerB, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "10.82.0.20:8082"},
+		{Block: "main", Field: "response", Value: "joiner splitter B response"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(joinClientA, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "http://10.82.0.10:8081/"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(joinClientB, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "http://10.82.0.20:8082/"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(joinVTun, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "localAddrs", Value: "10.82.0.2"},
+		{Block: "main", Field: "dnsServers", Value: "10.82.0.1"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(joinSplitter, pasta.MenuStateUpdate{Repeats: []pasta.MenuRepeatUpdate{{
+		Block:  "main",
+		Repeat: "splitRules",
+		Items: []pasta.MenuRepeatItemState{
+			{ID: "rule-1", Fields: map[string]any{"address": `^10\.82\.0\.10$`, "slot": int64(1)}},
+			{ID: "rule-2", Fields: map[string]any{"address": `^10\.82\.0\.20$`, "slot": int64(2)}},
+		},
+	}}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinLoopback, NetworkInput), full(joinServerA, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinLoopback, NetworkInput), full(joinServerB, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinVTun, NetworkInput), full(joinClientA, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinVTun, NetworkInput), full(joinClientB, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinSplitter, TunInputA), full(joinVTun, TunOutput), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinJoiner, TunJoinerDefaultInput), full(joinSplitter, tunSplitterOutput(1)), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinJoiner, tunJoinerInput(1)), full(joinSplitter, tunSplitterOutput(2)), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinSpoofer, TunInputA), full(joinJoiner, TunOutput), pasta.LinkOptions{Type: TunType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(joinLoopback, NetworkInput), full(joinSpoofer, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
 	a.log("seeded calculator graph, string push graph, stream pull graph, menu demos, network router demo, and tun demos")
 	return nil
 }

@@ -66,6 +66,33 @@ func TestTunCopyTopologyHTTPAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestTunJoinerSplitterTopologyHTTPAndDynamicPorts(t *testing.T) {
+	w := newTunTestWorkspace(t)
+	ids := createJoinerSplitterTopology(t, w)
+	assertTunHTTP(t, w, ids.clientA, ids.serverA, "join split A response")
+	assertTunHTTP(t, w, ids.clientB, ids.serverB, "join split B response")
+	assertJoinerInputPorts(t, w, ids.joiner, 3)
+
+	if err := w.DeleteLink(ids.joinerSecondaryLink); err != nil {
+		t.Fatal(err)
+	}
+	assertJoinerInputPorts(t, w, ids.joiner, 2)
+	ids.joinerSecondaryLink = linkTunOutput(t, w, ids.joiner, tunJoinerInput(1), ids.splitter, tunSplitterOutput(2))
+	assertJoinerInputPorts(t, w, ids.joiner, 3)
+	assertTunHTTP(t, w, ids.clientB, ids.serverB, "join split B response")
+
+	data, err := w.SaveWithRuntimeState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Restore(data); err != nil {
+		t.Fatal(err)
+	}
+	assertJoinerInputPorts(t, w, ids.joiner, 3)
+	assertTunHTTP(t, w, ids.clientA, ids.serverA, "join split A response")
+	assertTunHTTP(t, w, ids.clientB, ids.serverB, "join split B response")
+}
+
 func newTunTestWorkspace(t *testing.T) *pasta.Workspace {
 	t.Helper()
 	w := pasta.NewWorkspace()
@@ -124,6 +151,19 @@ type copyTopologyIDs struct {
 	tunBLink   pasta.LinkID
 }
 
+type joinerSplitterTopologyIDs struct {
+	serverA             pasta.NodeID
+	serverB             pasta.NodeID
+	clientA             pasta.NodeID
+	clientB             pasta.NodeID
+	loopback            pasta.NodeID
+	vtun                pasta.NodeID
+	splitter            pasta.NodeID
+	joiner              pasta.NodeID
+	spoofer             pasta.NodeID
+	joinerSecondaryLink pasta.LinkID
+}
+
 func createCopyTopology(t *testing.T, w *pasta.Workspace) copyTopologyIDs {
 	t.Helper()
 	ids := copyTopologyIDs{
@@ -154,15 +194,71 @@ func createCopyTopology(t *testing.T, w *pasta.Workspace) copyTopologyIDs {
 	return ids
 }
 
+func createJoinerSplitterTopology(t *testing.T, w *pasta.Workspace) joinerSplitterTopologyIDs {
+	t.Helper()
+	ids := joinerSplitterTopologyIDs{
+		serverA:  createNetworkNode(t, w, NetworkServerClass),
+		serverB:  createNetworkNode(t, w, NetworkServerClass),
+		clientA:  createNetworkNode(t, w, NetworkClientClass),
+		clientB:  createNetworkNode(t, w, NetworkClientClass),
+		loopback: createNetworkNode(t, w, NetworkLoopbackClass),
+		vtun:     createNetworkNode(t, w, TunVTunClass),
+		splitter: createNetworkNode(t, w, TunSplitterClass),
+		joiner:   createNetworkNode(t, w, TunJoinerClass),
+		spoofer:  createNetworkNode(t, w, TunSpooferClass),
+	}
+	updateNetworkMenu(t, w, ids.serverA,
+		pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "10.92.0.10:8081"},
+		pasta.MenuFieldUpdate{Block: "main", Field: "response", Value: "join split A response"},
+	)
+	updateNetworkMenu(t, w, ids.serverB,
+		pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "10.92.0.20:8082"},
+		pasta.MenuFieldUpdate{Block: "main", Field: "response", Value: "join split B response"},
+	)
+	updateNetworkMenu(t, w, ids.clientA,
+		pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "http://10.92.0.10:8081/"},
+	)
+	updateNetworkMenu(t, w, ids.clientB,
+		pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "http://10.92.0.20:8082/"},
+	)
+	updateTunMenu(t, w, ids.vtun,
+		pasta.MenuFieldUpdate{Block: "main", Field: "localAddrs", Value: "10.92.0.2"},
+		pasta.MenuFieldUpdate{Block: "main", Field: "dnsServers", Value: "10.92.0.1"},
+	)
+	updateTunRepeats(t, w, ids.splitter, pasta.MenuRepeatUpdate{
+		Block:  "main",
+		Repeat: "splitRules",
+		Items: []pasta.MenuRepeatItemState{
+			{ID: "rule-1", Fields: map[string]any{"address": `^10\.92\.0\.10$`, "slot": int64(1)}},
+			{ID: "rule-2", Fields: map[string]any{"address": `^10\.92\.0\.20$`, "slot": int64(2)}},
+		},
+	})
+	linkNetwork(t, w, ids.loopback, ids.serverA)
+	linkNetwork(t, w, ids.loopback, ids.serverB)
+	linkNetwork(t, w, ids.vtun, ids.clientA)
+	linkNetwork(t, w, ids.vtun, ids.clientB)
+	linkNetwork(t, w, ids.loopback, ids.spoofer)
+	linkTun(t, w, ids.splitter, TunInputA, ids.vtun)
+	linkTunOutput(t, w, ids.joiner, TunJoinerDefaultInput, ids.splitter, tunSplitterOutput(1))
+	ids.joinerSecondaryLink = linkTunOutput(t, w, ids.joiner, tunJoinerInput(1), ids.splitter, tunSplitterOutput(2))
+	linkTun(t, w, ids.spoofer, TunInputA, ids.joiner)
+	return ids
+}
+
 func linkTun(t *testing.T, w *pasta.Workspace, inputNode pasta.NodeID, inputPort pasta.PortID, outputNode pasta.NodeID) pasta.LinkID {
+	t.Helper()
+	return linkTunOutput(t, w, inputNode, inputPort, outputNode, TunOutput)
+}
+
+func linkTunOutput(t *testing.T, w *pasta.Workspace, inputNode pasta.NodeID, inputPort pasta.PortID, outputNode pasta.NodeID, outputPort pasta.PortID) pasta.LinkID {
 	t.Helper()
 	link, err := w.CreateLink(
 		pasta.FullPortID{Node: inputNode, Port: inputPort},
-		pasta.FullPortID{Node: outputNode, Port: TunOutput},
+		pasta.FullPortID{Node: outputNode, Port: outputPort},
 		pasta.LinkOptions{Type: TunType},
 	)
 	if err != nil {
-		t.Fatalf("CreateLink(%s:%s <- %s:%s) error = %v", inputNode, inputPort, outputNode, TunOutput, err)
+		t.Fatalf("CreateLink(%s:%s <- %s:%s) error = %v", inputNode, inputPort, outputNode, outputPort, err)
 	}
 	return link
 }
@@ -171,6 +267,29 @@ func updateTunMenu(t *testing.T, w *pasta.Workspace, node pasta.NodeID, fields .
 	t.Helper()
 	if _, err := w.UpdateNodeMenuState(node, pasta.MenuStateUpdate{Fields: fields}); err != nil {
 		t.Fatalf("UpdateNodeMenuState(%s) error = %v", node, err)
+	}
+}
+
+func updateTunRepeats(t *testing.T, w *pasta.Workspace, node pasta.NodeID, repeats ...pasta.MenuRepeatUpdate) {
+	t.Helper()
+	if _, err := w.UpdateNodeMenuState(node, pasta.MenuStateUpdate{Repeats: repeats}); err != nil {
+		t.Fatalf("UpdateNodeMenuState(%s) error = %v", node, err)
+	}
+}
+
+func assertJoinerInputPorts(t *testing.T, w *pasta.Workspace, node pasta.NodeID, want int) {
+	t.Helper()
+	snap, ok := w.Node(node)
+	if !ok {
+		t.Fatalf("Node(%s) missing", node)
+	}
+	if len(snap.Inputs) != want {
+		t.Fatalf("joiner input count = %d, want %d: %#v", len(snap.Inputs), want, snap.Inputs)
+	}
+	for i := range want {
+		if snap.Inputs[i].ID.Number != int64(i+1) {
+			t.Fatalf("joiner input %d = %s, want port number %d", i, snap.Inputs[i].ID, i+1)
+		}
 	}
 }
 
