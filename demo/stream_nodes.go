@@ -104,7 +104,6 @@ func streamDefault(display string, state streamState) pasta.NodeState {
 		DisplayName: display,
 		PrimaryType: StreamType,
 		Private:     state,
-		Metadata:    map[string]string{"palette": "streams"},
 	}
 }
 
@@ -114,7 +113,6 @@ func streamInput(id pasta.PortID, name string) pasta.PortSpec {
 		Name:      name,
 		Direction: pasta.InputPort,
 		FixedType: StreamType,
-		Metadata:  map[string]string{"label": name},
 	}
 }
 
@@ -124,7 +122,6 @@ func streamOutput(id pasta.PortID, name string) pasta.PortSpec {
 		Name:      name,
 		Direction: pasta.OutputPort,
 		FixedType: StreamType,
-		Metadata:  map[string]string{"label": name},
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"syscall/js"
 	"time"
 
+	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/pasta/pasta"
 	"github.com/asciimoth/pasta/pasta/examples"
 )
@@ -652,27 +653,40 @@ func (a *appState) paste(raw string) error {
 }
 
 func (a *appState) saveDump() (string, error) {
-	data, err := a.workspace.SaveWithRuntimeState()
+	cfg, err := a.workspace.SaveConfigWithRuntimeState()
 	if err != nil {
 		return "", err
 	}
-	out, err := json.MarshalIndent(data, "", "  ")
+	out, err := json.MarshalIndent(cfg.Snapshot(), "", "  ")
 	if err != nil {
 		return "", err
 	}
-	a.log("saved workspace dump with %d node(s) and %d link(s)", len(data.Nodes), len(data.Links))
+	snap := a.workspace.Snapshot()
+	a.log("saved workspace dump with %d node(s) and %d link(s)", len(snap.Nodes), len(snap.Links))
 	return string(out), nil
 }
 
 func (a *appState) restoreDump(raw string) error {
-	var data pasta.SaveData
+	var data any
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {
 		return err
 	}
-	return a.restoreLocked(data)
+	return a.restoreConfigLocked(configer.NewMemory(data))
 }
 
 func (a *appState) restoreLocked(data pasta.SaveData) error {
+	return a.restoreWorkspace(func(w *pasta.Workspace) error {
+		return w.Restore(data)
+	})
+}
+
+func (a *appState) restoreConfigLocked(cfg configer.Config) error {
+	return a.restoreWorkspace(func(w *pasta.Workspace) error {
+		return w.RestoreConfig(cfg)
+	})
+}
+
+func (a *appState) restoreWorkspace(restore func(*pasta.Workspace) error) error {
 	if a.workspace != nil {
 		_ = a.workspace.Close()
 	}
@@ -693,7 +707,7 @@ func (a *appState) restoreLocked(data pasta.SaveData) error {
 		return err
 	}
 	a.subscribeLocked()
-	if err := a.workspace.Restore(data); err != nil {
+	if err := restore(a.workspace); err != nil {
 		return err
 	}
 	if err := a.rehydrateLinks(); err != nil {

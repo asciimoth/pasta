@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1895,6 +1896,13 @@ func TestSaveConfigRestoreConfigRoundTrip(t *testing.T) {
 	if got != "persisted" {
 		t.Fatalf("config private value = %#v, want persisted", got)
 	}
+	linkValue, err := cfg.Get(configer.Path{"nodes", "1", "ports", "0", "Links", "1L:2N1i:1N1o", "type"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkValue != testType {
+		t.Fatalf("config link type = %#v, want %q", linkValue, testType)
+	}
 	if err := cfg.Set(configer.Path{"nodes", "0", "state", "Private", "value"}, "mutated-copy"); err != nil {
 		t.Fatal(err)
 	}
@@ -1921,6 +1929,150 @@ func TestSaveConfigRestoreConfigRoundTrip(t *testing.T) {
 	restoredLink, ok := restored.Link(link)
 	if !ok || restoredLink.Waypoints[0] != "p1" {
 		t.Fatalf("restored link = %#v, ok %v", restoredLink, ok)
+	}
+}
+
+func TestSaveToClearConfigUsesCompactShapeAndRestores(t *testing.T) {
+	w, _ := testWorkspace(t)
+	a, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{
+		DisplayName: "source",
+		Coordinate:  "x:1",
+		Private:     map[string]any{"value": "persisted"},
+	}})
+	b, _ := w.CreateNode("example.com/Source", NodeOptions{State: NodeState{DisplayName: "sink"}})
+	if _, err := w.CreateLink(
+		FullPortID{Node: b, Port: PortID{Number: 1, Kind: InputPort}},
+		FullPortID{Node: a, Port: PortID{Number: 1, Kind: OutputPort}},
+		LinkOptions{Waypoints: []string{"p1"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	cfg := configer.NewMemory(nil)
+	if err := w.SaveToConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := cfg.Snapshot().(map[string]any)
+	if _, ok := snapshot["nextNode"]; ok {
+		t.Fatalf("compact config stored nextNode: %#v", snapshot)
+	}
+	if _, ok := snapshot["links"]; ok {
+		t.Fatalf("compact config stored root links: %#v", snapshot)
+	}
+	nodes := snapshot["nodes"].([]any)
+	first := nodes[0].(map[string]any)
+	if _, ok := first["inputs"]; ok {
+		t.Fatalf("compact config stored inputs: %#v", first)
+	}
+	if _, ok := first["outputs"]; ok {
+		t.Fatalf("compact config stored outputs: %#v", first)
+	}
+	ports := first["ports"].([]any)
+	if got := ports[0].(map[string]any)["id"]; got != "1i" {
+		t.Fatalf("first port id = %#v, want 1i", got)
+	}
+
+	restored, _ := testWorkspace(t)
+	if err := restored.RestoreConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := restored.Node(a); !ok || got.Dynamic.Private.(map[string]any)["value"] != "persisted" {
+		t.Fatalf("restored node = %#v ok %v", got, ok)
+	}
+	if got := restored.Snapshot(); len(got.Links) != 1 || got.Links[0].Waypoints[0] != "p1" {
+		t.Fatalf("restored links = %#v", got.Links)
+	}
+}
+
+func TestRestoreConfigAcceptsLegacySaveDataShape(t *testing.T) {
+	w, _ := testWorkspace(t)
+	legacy := configer.NewMemory(SaveData{
+		NextNode: 99,
+		NextLink: 99,
+		Nodes: []SaveNode{
+			{ID: "1N", Class: "example.com/Source"},
+			{ID: "2N", Class: "example.com/Source"},
+		},
+		Links: []SaveLink{{Name: "1L:2N1i:1N1o", Type: testType}},
+	})
+	if err := w.RestoreConfig(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Snapshot(); len(got.Links) != 1 {
+		t.Fatalf("legacy restored links = %#v", got.Links)
+	}
+}
+
+type commentMemory struct {
+	*configer.Memory
+	comments map[string]string
+}
+
+func newCommentMemory(value any) *commentMemory {
+	return &commentMemory{Memory: configer.NewMemory(value), comments: map[string]string{}}
+}
+
+func (c *commentMemory) SetComment(path configer.Path, comment string) error {
+	c.comments[strings.Join(path, "\x00")] = comment
+	return nil
+}
+
+func (c *commentMemory) GetComment(path configer.Path) (string, error) {
+	comment, ok := c.comments[strings.Join(path, "\x00")]
+	if !ok {
+		return "", configer.ErrNotFound
+	}
+	return comment, nil
+}
+
+func TestSaveToPreexistingCommentedConfigPreservesUsefulComments(t *testing.T) {
+	w, _ := testWorkspace(t)
+	if _, err := w.CreateNode("example.com/Source", NodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := newCommentMemory(map[string]any{
+		"nextNode": float64(99),
+		"nodes": []any{map[string]any{
+			"id": "old",
+			"state": map[string]any{
+				"Description": "",
+			},
+			"ports": []any{map[string]any{
+				"id":       "1i",
+				"Multiple": false,
+			}},
+		}},
+		"links": []any{map[string]any{"name": "old"}},
+	})
+	if err := cfg.SetComment(configer.Path{"nextNode"}, "old derived ID"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetComment(configer.Path{"nodes", "0", "state", "Description"}, "document why empty"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetComment(configer.Path{"nodes", "0", "ports", "0", "Multiple"}, "document single input"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SaveToConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := cfg.Snapshot().(map[string]any)
+	if _, ok := snapshot["nextNode"]; ok {
+		t.Fatalf("derived nextNode was preserved: %#v", snapshot)
+	}
+	if _, ok := snapshot["links"]; ok {
+		t.Fatalf("legacy root links were preserved: %#v", snapshot)
+	}
+	node := snapshot["nodes"].([]any)[0].(map[string]any)
+	state := node["state"].(map[string]any)
+	if got, ok := state["Description"]; !ok || got != "" {
+		t.Fatalf("commented void Description = %#v ok %v", got, ok)
+	}
+	port := node["ports"].([]any)[0].(map[string]any)
+	if got, ok := port["Multiple"]; !ok || got != false {
+		t.Fatalf("commented void Multiple = %#v ok %v", got, ok)
+	}
+	if comment, err := cfg.GetComment(configer.Path{"nodes", "0", "state", "Description"}); err != nil || comment == "" {
+		t.Fatalf("Description comment = %q err %v", comment, err)
 	}
 }
 

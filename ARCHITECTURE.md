@@ -269,9 +269,14 @@ runtime instead of reusing the closed one.
 `Save` produces deterministic `SaveData`: nodes and links are sorted, IDs are
 formatted through canonical helpers, and ID generator state is included. Private
 node state is stored in the DTO as JSON-like `any` values. `SaveConfig` and
-`SaveConfigWithRuntimeState` wrap that DTO in a `configer.Config` tree for
-callers that want path-based config access, and `RestoreConfig` restores from
-that config-backed shape.
+`SaveConfigWithRuntimeState` write the compact configer persistence shape: ID
+generator state is derived on restore, node ports are stored in one `ports`
+list with string port IDs such as `1i`, and links are stored under the input
+port `Links` map keyed by full link name. `SaveToConfig` and
+`SaveToConfigWithRuntimeState` can update an existing configer tree, preserving
+comments where the config backend supports logical comments and the commented
+value still maps to the compact shape. `RestoreConfig` restores the compact
+shape and still accepts the previous `SaveData`-shaped config for compatibility.
 Runtimes that own volatile private state can implement `NodePrivateExportHook`;
 `SaveWithRuntimeState` and `Copy` call that hook outside the workspace lock and
 use the exported value in the saved or clipboard data. Runtimes that need an

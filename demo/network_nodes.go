@@ -93,7 +93,6 @@ func networkDefault(display string, state networkState) pasta.NodeState {
 		DisplayName: display,
 		PrimaryType: NetworkType,
 		Private:     state,
-		Metadata:    map[string]string{"palette": "network"},
 	}
 }
 
@@ -104,7 +103,6 @@ func networkInput(id pasta.PortID, name string) pasta.PortSpec {
 		Direction: pasta.InputPort,
 		FixedType: NetworkType,
 		Multiple:  true,
-		Metadata:  map[string]string{"label": name},
 	}
 }
 
@@ -114,7 +112,6 @@ func networkOutput(id pasta.PortID, name string) pasta.PortSpec {
 		Name:      name,
 		Direction: pasta.OutputPort,
 		FixedType: NetworkType,
-		Metadata:  map[string]string{"label": name},
 	}
 }
 

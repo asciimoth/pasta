@@ -139,7 +139,6 @@ func stringDefault(display string, private map[string]any) pasta.NodeState {
 		DisplayName: display,
 		PrimaryType: StringType,
 		Private:     private,
-		Metadata:    map[string]string{"palette": "strings"},
 	}
 }
 
@@ -149,7 +148,6 @@ func stringInput(id pasta.PortID, name string) pasta.PortSpec {
 		Name:      name,
 		Direction: pasta.InputPort,
 		FixedType: StringType,
-		Metadata:  map[string]string{"label": name},
 	}
 }
 
@@ -159,7 +157,6 @@ func stringOutput(id pasta.PortID, name string) pasta.PortSpec {
 		Name:      name,
 		Direction: pasta.OutputPort,
 		FixedType: StringType,
-		Metadata:  map[string]string{"label": name},
 	}
 }
 

@@ -194,8 +194,8 @@ func TestSingleDemoClassAllowsOnlyOneNode(t *testing.T) {
 	if !ok {
 		t.Fatal("single demo node missing")
 	}
-	if snap.Dynamic.Metadata["palette"] != "strings" {
-		t.Fatalf("single demo metadata = %#v", snap.Dynamic.Metadata)
+	if snap.Dynamic.Metadata != nil {
+		t.Fatalf("single demo metadata = %#v, want nil", snap.Dynamic.Metadata)
 	}
 	if got := stringStateFromAny(snap.Dynamic.Private).Value; got != "only one allowed" {
 		t.Fatalf("single demo value = %q", got)

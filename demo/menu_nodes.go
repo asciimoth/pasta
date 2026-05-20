@@ -63,7 +63,6 @@ func menuDefault(display string, committable bool) pasta.NodeState {
 			},
 			Committable: committable,
 		},
-		Metadata: map[string]string{"palette": "menus"},
 	}
 }
 

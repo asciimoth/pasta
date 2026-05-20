@@ -1,7 +1,9 @@
 package pasta
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/asciimoth/configer/configer"
@@ -71,6 +73,17 @@ func (w *Workspace) SaveConfig() (configer.Config, error) {
 	return saveDataConfig(w.Save())
 }
 
+// SaveToConfig saves deterministic workspace data into cfg.
+//
+// Existing comments are preserved by Config implementations that support
+// configer.Commenter when the commented value still maps to the compact config
+// format. Void values are omitted unless a comment is already attached to the
+// same compact-format path.
+func (w *Workspace) SaveToConfig(cfg configer.Config) error {
+	_, err := saveDataConfig(w.Save(), cfg)
+	return err
+}
+
 // SaveConfigWithRuntimeState returns deterministic configer data after asking
 // active node runtimes to export their current private state.
 func (w *Workspace) SaveConfigWithRuntimeState() (configer.Config, error) {
@@ -81,12 +94,134 @@ func (w *Workspace) SaveConfigWithRuntimeState() (configer.Config, error) {
 	return saveDataConfig(data)
 }
 
-func saveDataConfig(data SaveData) (configer.Config, error) {
-	cfg := configer.NewMemory(nil)
-	if err := configer.Marshal(cfg, data); err != nil {
+// SaveToConfigWithRuntimeState saves deterministic workspace data into cfg after
+// asking active node runtimes to export their current private state.
+func (w *Workspace) SaveToConfigWithRuntimeState(cfg configer.Config) error {
+	data, err := w.SaveWithRuntimeState()
+	if err != nil {
+		return err
+	}
+	_, err = saveDataConfig(data, cfg)
+	return err
+}
+
+func saveDataConfig(data SaveData, targets ...configer.Config) (configer.Config, error) {
+	cfg := configer.Config(configer.NewMemory(nil))
+	if len(targets) > 0 {
+		cfg = targets[0]
+		if cfg == nil {
+			return nil, opErr("save config", "validate", ErrNotFound)
+		}
+	}
+	value := configValueFromSaveData(data, cfg)
+	if _, err := json.Marshal(value); err != nil {
+		return nil, opErr("save config", "marshal", err)
+	}
+	if err := cfg.Set(nil, value); err != nil {
 		return nil, opErr("save config", "marshal", err)
 	}
 	return cfg, nil
+}
+
+func configValueFromSaveData(data SaveData, cfg configer.Config) map[string]any {
+	root := map[string]any{}
+	linksByInput := make(map[string][]SaveLink)
+	for _, link := range data.Links {
+		full, err := ParseFullLinkName(link.Name)
+		if err != nil {
+			continue
+		}
+		linksByInput[full.Input.String()] = append(linksByInput[full.Input.String()], link)
+	}
+	nodes := make([]any, 0, len(data.Nodes))
+	for nodeIndex, node := range data.Nodes {
+		nodePath := configer.Path{"nodes", fmt.Sprint(nodeIndex)}
+		out := map[string]any{
+			"id":    node.ID,
+			"class": node.Class,
+		}
+		if state := configStateValue(node.State, cfg, append(nodePath, "state")); len(state) > 0 {
+			out["state"] = state
+		}
+		ports := append(clonePorts(node.Inputs), node.Outputs...)
+		if len(ports) > 0 {
+			portValues := make([]any, 0, len(ports))
+			for portIndex, port := range ports {
+				portPath := append(nodePath, "ports", fmt.Sprint(portIndex))
+				portValue := configPortValue(node.ID, port, linksByInput, cfg, portPath)
+				portValues = append(portValues, portValue)
+			}
+			out["ports"] = portValues
+		}
+		nodes = append(nodes, out)
+	}
+	if len(nodes) > 0 {
+		root["nodes"] = nodes
+	}
+	return root
+}
+
+func configStateValue(state NodeState, cfg configer.Config, path configer.Path) map[string]any {
+	out := map[string]any{}
+	setStringConfigField(out, cfg, path, "DisplayName", state.DisplayName)
+	setStringConfigField(out, cfg, path, "Description", state.Description)
+	setStringConfigField(out, cfg, path, "PrimaryType", state.PrimaryType)
+	setStringConfigField(out, cfg, path, "Coordinate", state.Coordinate)
+	if len(state.Metadata) > 0 || hasConfigComment(cfg, append(path, "Metadata")) {
+		out["Metadata"] = cloneStringMap(state.Metadata)
+	}
+	if state.Private != nil || hasConfigComment(cfg, append(path, "Private")) {
+		out["Private"] = clonePrivateState(state.Private)
+	}
+	return out
+}
+
+func setStringConfigField(out map[string]any, cfg configer.Config, path configer.Path, key, value string) {
+	if value != "" || hasConfigComment(cfg, append(path, key)) {
+		out[key] = value
+	}
+}
+
+func configPortValue(nodeID string, port PortSpec, linksByInput map[string][]SaveLink, cfg configer.Config, path configer.Path) map[string]any {
+	out := map[string]any{"id": port.ID.String()}
+	setStringConfigField(out, cfg, path, "Name", port.Name)
+	setStringConfigField(out, cfg, path, "FixedType", port.FixedType)
+	if len(port.AcceptedTypes) > 0 || hasConfigComment(cfg, append(path, "AcceptedTypes")) {
+		out["AcceptedTypes"] = append([]string(nil), port.AcceptedTypes...)
+	}
+	if port.Multiple || hasConfigComment(cfg, append(path, "Multiple")) {
+		out["Multiple"] = port.Multiple
+	}
+	if len(port.Metadata) > 0 || hasConfigComment(cfg, append(path, "Metadata")) {
+		out["Metadata"] = cloneStringMap(port.Metadata)
+	}
+	if port.ID.Kind == InputPort {
+		fullPort := nodeID + port.ID.String()
+		if links := linksByInput[fullPort]; len(links) > 0 {
+			linkValues := map[string]any{}
+			for _, link := range links {
+				value := map[string]any{}
+				if link.Type != "" {
+					value["type"] = link.Type
+				}
+				if len(link.Waypoints) > 0 {
+					value["waypoints"] = append([]string(nil), link.Waypoints...)
+				}
+				linkValues[link.Name] = value
+			}
+			out["Links"] = linkValues
+		}
+	}
+	return out
+}
+
+func hasConfigComment(cfg configer.Config, path configer.Path) bool {
+	commenter, ok := cfg.(configer.Commenter)
+	if !ok {
+		return false
+	}
+	comment, err := commenter.GetComment(path)
+	return err == nil && comment != ""
 }
 
 func (w *Workspace) saveLocked(exports map[NodeID]any) SaveData {
@@ -346,11 +481,132 @@ func (w *Workspace) RestoreConfig(cfg configer.Config) error {
 	if cfg == nil {
 		return opErr("restore config", "validate", ErrNotFound)
 	}
-	var data SaveData
-	if err := configer.Unmarshal(cfg, &data); err != nil {
+	data, err := saveDataFromConfig(cfg)
+	if err != nil {
 		return opErr("restore config", "unmarshal", err)
 	}
 	return w.Restore(data)
+}
+
+type configSaveData struct {
+	Nodes []configSaveNode `json:"nodes"`
+}
+
+type configSaveNode struct {
+	ID    string           `json:"id"`
+	Class string           `json:"class"`
+	State NodeState        `json:"state"`
+	Ports []configPortSpec `json:"ports"`
+}
+
+type configPortSpec struct {
+	ID            string                    `json:"id"`
+	Name          string                    `json:"Name"`
+	FixedType     string                    `json:"FixedType"`
+	AcceptedTypes []string                  `json:"AcceptedTypes"`
+	Multiple      bool                      `json:"Multiple"`
+	Metadata      map[string]string         `json:"Metadata"`
+	Links         map[string]configLinkSpec `json:"Links"`
+}
+
+type configLinkSpec struct {
+	Type      string   `json:"type"`
+	Waypoints []string `json:"waypoints"`
+}
+
+func saveDataFromConfig(cfg configer.Config) (SaveData, error) {
+	snapshot := cfg.Snapshot()
+	if usesLegacyConfigShape(snapshot) {
+		var data SaveData
+		if err := configer.Unmarshal(cfg, &data); err != nil {
+			return SaveData{}, err
+		}
+		return data, nil
+	}
+	var compact configSaveData
+	if err := configer.Unmarshal(cfg, &compact); err != nil {
+		return SaveData{}, err
+	}
+	data := SaveData{Nodes: make([]SaveNode, 0, len(compact.Nodes))}
+	for _, node := range compact.Nodes {
+		saved := SaveNode{
+			ID:    node.ID,
+			Class: node.Class,
+			State: cloneNodeState(node.State),
+		}
+		nodeID, err := ParseNodeID(node.ID)
+		if err != nil {
+			return SaveData{}, err
+		}
+		for _, port := range node.Ports {
+			portID, err := ParsePortID(port.ID)
+			if err != nil {
+				return SaveData{}, err
+			}
+			spec := PortSpec{
+				ID:            portID,
+				Name:          port.Name,
+				Direction:     portID.Kind,
+				FixedType:     port.FixedType,
+				AcceptedTypes: append([]string(nil), port.AcceptedTypes...),
+				Multiple:      port.Multiple,
+				Metadata:      cloneStringMap(port.Metadata),
+			}
+			switch portID.Kind {
+			case InputPort:
+				saved.Inputs = append(saved.Inputs, spec)
+				for name, link := range port.Links {
+					full, err := ParseFullLinkName(name)
+					if err != nil {
+						return SaveData{}, err
+					}
+					if full.Input != (FullPortID{Node: nodeID, Port: portID}) {
+						return SaveData{}, fmt.Errorf("%w: link stored on non-input endpoint", ErrInvalidID)
+					}
+					data.Links = append(data.Links, SaveLink{
+						Name:      name,
+						Type:      link.Type,
+						Waypoints: append([]string(nil), link.Waypoints...),
+					})
+				}
+			case OutputPort:
+				saved.Outputs = append(saved.Outputs, spec)
+				if len(port.Links) > 0 {
+					return SaveData{}, fmt.Errorf("%w: output port links", ErrInvalidID)
+				}
+			}
+		}
+		data.Nodes = append(data.Nodes, saved)
+	}
+	sort.Slice(data.Links, func(i, j int) bool { return data.Links[i].Name < data.Links[j].Name })
+	return data, nil
+}
+
+func usesLegacyConfigShape(snapshot any) bool {
+	root, ok := snapshot.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, ok := root["links"]; ok {
+		return true
+	}
+	nodes, ok := root["nodes"].([]any)
+	if !ok {
+		return false
+	}
+	for _, rawNode := range nodes {
+		node, ok := rawNode.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := node["inputs"]; ok {
+			return true
+		}
+		if _, ok := node["outputs"]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 type restoreInitNode struct {
