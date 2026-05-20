@@ -382,7 +382,73 @@ func (a *appState) seed() error {
 	if _, err := a.newNode(MenuCommittableClass, 540, 1480, 0); err != nil {
 		return err
 	}
-	a.log("seeded calculator graph, string push graph, stream pull graph, and menu demos")
+	serverA, err := a.newNode(NetworkServerClass, 80, 1740, 0)
+	if err != nil {
+		return err
+	}
+	client, err := a.newNode(NetworkClientClass, 80, 1960, 0)
+	if err != nil {
+		return err
+	}
+	serverB, err := a.newNode(NetworkServerClass, 80, 2180, 0)
+	if err != nil {
+		return err
+	}
+	router, err := a.newNode(NetworkRouterClass, 540, 1960, 0)
+	if err != nil {
+		return err
+	}
+	networkA, err := a.newNode(NetworkLoopbackClass, 1000, 1740, 0)
+	if err != nil {
+		return err
+	}
+	networkB, err := a.newNode(NetworkLoopbackClass, 1000, 2180, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(serverA, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "127.0.0.1:101"},
+		{Block: "main", Field: "response", Value: "loopback A response"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(serverB, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "127.0.0.1:102"},
+		{Block: "main", Field: "response", Value: "loopback B response"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(client, pasta.MenuStateUpdate{Fields: []pasta.MenuFieldUpdate{
+		{Block: "main", Field: "address", Value: "http://127.0.0.1:101/"},
+	}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.UpdateNodeMenuState(router, pasta.MenuStateUpdate{Repeats: []pasta.MenuRepeatUpdate{{
+		Block:  "main",
+		Repeat: "rules",
+		Items: []pasta.MenuRepeatItemState{
+			{ID: "rule-1", Fields: map[string]any{"address": ":101$", "slot": int64(1)}},
+			{ID: "rule-2", Fields: map[string]any{"address": ":102$", "slot": int64(2)}},
+		},
+	}}}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(networkA, NetworkInput), full(serverA, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(networkB, NetworkInput), full(serverB, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(router, NetworkInput), full(client, NetworkOutput), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(networkA, NetworkInput), full(router, networkRouterOutput(1)), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	if _, err := a.workspace.CreateLink(full(networkB, NetworkInput), full(router, networkRouterOutput(2)), pasta.LinkOptions{Type: NetworkType}); err != nil {
+		return err
+	}
+	a.log("seeded calculator graph, string push graph, stream pull graph, menu demos, and network router demo")
 	return nil
 }
 

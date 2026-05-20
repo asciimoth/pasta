@@ -72,6 +72,77 @@ func TestNetworkLoggerMiddlewareLogsOperations(t *testing.T) {
 	})
 }
 
+func TestNetworkRouterRoutesHTTPByAddressRule(t *testing.T) {
+	w := pasta.NewWorkspace()
+	if err := w.RegisterLibrary(NetworkLibrary{}); err != nil {
+		t.Fatal(err)
+	}
+	loopbackA := createNetworkNode(t, w, NetworkLoopbackClass)
+	loopbackB := createNetworkNode(t, w, NetworkLoopbackClass)
+	router := createNetworkNode(t, w, NetworkRouterClass)
+	serverA := createNetworkNode(t, w, NetworkServerClass)
+	serverB := createNetworkNode(t, w, NetworkServerClass)
+	client := createNetworkNode(t, w, NetworkClientClass)
+
+	updateNetworkMenu(t, w, serverA,
+		pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "127.0.0.1:101"},
+		pasta.MenuFieldUpdate{Block: "main", Field: "response", Value: "loopback A"},
+	)
+	updateNetworkMenu(t, w, serverB,
+		pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "127.0.0.1:102"},
+		pasta.MenuFieldUpdate{Block: "main", Field: "response", Value: "loopback B"},
+	)
+	if _, err := w.UpdateNodeMenuState(router, pasta.MenuStateUpdate{
+		Repeats: []pasta.MenuRepeatUpdate{{
+			Block:  "main",
+			Repeat: "rules",
+			Items: []pasta.MenuRepeatItemState{
+				{ID: "rule-1", Fields: map[string]any{"address": ":101$", "slot": int64(1)}},
+				{ID: "rule-2", Fields: map[string]any{"address": ":102$", "slot": int64(2)}},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("UpdateNodeMenuState(router rules) error = %v", err)
+	}
+
+	linkNetwork(t, w, loopbackA, serverA)
+	linkNetwork(t, w, loopbackB, serverB)
+	linkNetwork(t, w, router, client)
+	linkNetworkSlot(t, w, loopbackA, router, 1)
+	linkNetworkSlot(t, w, loopbackB, router, 2)
+
+	waitForNetworkState(t, w, serverA, func(state networkState) bool {
+		return strings.HasPrefix(state.Status, "listening ")
+	})
+	waitForNetworkState(t, w, serverB, func(state networkState) bool {
+		return strings.HasPrefix(state.Status, "listening ")
+	})
+
+	updateNetworkMenu(t, w, client, pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "http://127.0.0.1:101/"})
+	if err := w.TriggerNodeMenuButton(client, pasta.MenuButtonRef{Block: "main", Button: "request"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForNetworkState(t, w, client, func(state networkState) bool {
+		return strings.Contains(state.Response, "loopback A")
+	})
+
+	updateNetworkMenu(t, w, client, pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "http://127.0.0.1:102/"})
+	if err := w.TriggerNodeMenuButton(client, pasta.MenuButtonRef{Block: "main", Button: "request"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForNetworkState(t, w, client, func(state networkState) bool {
+		return strings.Contains(state.Response, "loopback B")
+	})
+
+	updateNetworkMenu(t, w, client, pasta.MenuFieldUpdate{Block: "main", Field: "address", Value: "http://127.0.0.1:103/"})
+	if err := w.TriggerNodeMenuButton(client, pasta.MenuButtonRef{Block: "main", Button: "request"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForNetworkState(t, w, client, func(state networkState) bool {
+		return state.Error != ""
+	})
+}
+
 func TestNetworkServerResponseMenuFieldControlsBody(t *testing.T) {
 	w := pasta.NewWorkspace()
 	if err := w.RegisterLibrary(NetworkLibrary{}); err != nil {
@@ -238,6 +309,26 @@ func linkNetwork(t *testing.T, w *pasta.Workspace, inputNode, outputNode pasta.N
 		t.Fatalf("CreateLink(%s <- %s) error = %v", inputNode, outputNode, err)
 	}
 	return link
+}
+
+func linkNetworkSlot(t *testing.T, w *pasta.Workspace, inputNode, outputNode pasta.NodeID, slot int) pasta.LinkID {
+	t.Helper()
+	link, err := w.CreateLink(
+		pasta.FullPortID{Node: inputNode, Port: NetworkInput},
+		pasta.FullPortID{Node: outputNode, Port: networkRouterOutput(slot)},
+		pasta.LinkOptions{Type: NetworkType},
+	)
+	if err != nil {
+		t.Fatalf("CreateLink(%s <- %s slot %d) error = %v", inputNode, outputNode, slot, err)
+	}
+	return link
+}
+
+func updateNetworkMenu(t *testing.T, w *pasta.Workspace, node pasta.NodeID, fields ...pasta.MenuFieldUpdate) {
+	t.Helper()
+	if _, err := w.UpdateNodeMenuState(node, pasta.MenuStateUpdate{Fields: fields}); err != nil {
+		t.Fatalf("UpdateNodeMenuState(%s) error = %v", node, err)
+	}
 }
 
 func waitForNetworkState(t *testing.T, w *pasta.Workspace, node pasta.NodeID, ok func(networkState) bool) {

@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +23,14 @@ const (
 
 	NetworkLoopbackClass = NetworkLibraryName + "/Loopback"
 	NetworkLoggerClass   = NetworkLibraryName + "/Logger"
+	NetworkRouterClass   = NetworkLibraryName + "/Router"
 	NetworkServerClass   = NetworkLibraryName + "/HTTPServer"
 	NetworkClientClass   = NetworkLibraryName + "/HTTPClient"
 
+	// NetworkType link objects must implement gonnect.Network and io.Closer.
+	// Providers that expose a shared network must return a gonnect.DetachedNetwork
+	// or an equivalent closable wrapper so link cleanup only closes that link's
+	// handle, not the shared underlying network.
 	NetworkType = NetworkLibraryName + "/network"
 )
 
@@ -32,6 +39,10 @@ var (
 	NetworkOutput = pasta.PortID{Number: 1, Kind: pasta.OutputPort}
 )
 
+// trackedNetwork is the network.pasta.demo/network runtime contract: Network
+// methods carry traffic, and Close releases only this link's handle. Shared
+// networks should be exposed through gonnect.DetachNetwork instead of returned
+// directly.
 type trackedNetwork interface {
 	gonnect.Network
 	io.Closer
@@ -68,6 +79,15 @@ func NetworkClasses() []pasta.ClassSpec {
 			Inputs:      []pasta.PortSpec{networkInput(NetworkInput, "logged")},
 			Outputs:     []pasta.PortSpec{networkOutput(NetworkOutput, "source")},
 			Runtime:     networkNodeClass{kind: "logger"},
+		},
+		{
+			Name:        NetworkRouterClass,
+			DisplayName: "Network Router",
+			Description: "Routes frontend network operations to one of sixteen linked backend slots.",
+			Default:     networkDefault("Network Router", networkState{Status: "routing"}),
+			Inputs:      []pasta.PortSpec{networkInput(NetworkInput, "frontend")},
+			Outputs:     networkRouterOutputs(),
+			Runtime:     networkNodeClass{kind: "router"},
 		},
 		{
 			Name:        NetworkServerClass,
@@ -115,6 +135,18 @@ func networkOutput(id pasta.PortID, name string) pasta.PortSpec {
 	}
 }
 
+func networkRouterOutputs() []pasta.PortSpec {
+	outputs := make([]pasta.PortSpec, 0, gonnect.RouterSlots)
+	for slot := 1; slot <= gonnect.RouterSlots; slot++ {
+		outputs = append(outputs, networkOutput(networkRouterOutput(slot), "slot "+strconv.Itoa(slot)))
+	}
+	return outputs
+}
+
+func networkRouterOutput(slot int) pasta.PortID {
+	return pasta.PortID{Number: int64(slot), Kind: pasta.OutputPort}
+}
+
 type networkNodeClass struct {
 	kind string
 }
@@ -130,6 +162,13 @@ func (c networkNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState,
 		base:      gonnect.NewLoopbackNetwok(),
 		reattach:  make(chan struct{}),
 		requestCh: make(chan struct{}, 1),
+	}
+	if c.kind == "router" {
+		node.router = gonnect.NewRouter()
+		if err := node.rebuildRouterCfgLocked(); err != nil {
+			cancel()
+			return nil, err
+		}
 	}
 	if node.state.Address == "" {
 		if c.kind == "client" {
@@ -152,29 +191,38 @@ func (c networkNodeClass) InitNode(ctx pasta.NodeContext, state pasta.NodeState,
 }
 
 type networkState struct {
-	Address  string `json:"address,omitempty"`
-	Status   string `json:"status,omitempty"`
-	Response string `json:"response,omitempty"`
-	Error    string `json:"error,omitempty"`
-	Logs     string `json:"logs,omitempty"`
-	Requests int64  `json:"requests,omitempty"`
+	Address  string             `json:"address,omitempty"`
+	Status   string             `json:"status,omitempty"`
+	Response string             `json:"response,omitempty"`
+	Error    string             `json:"error,omitempty"`
+	Logs     string             `json:"logs,omitempty"`
+	Requests int64              `json:"requests,omitempty"`
+	Rules    []networkRouteRule `json:"rules,omitempty"`
+}
+
+type networkRouteRule struct {
+	ID      string `json:"id,omitempty"`
+	Address string `json:"address,omitempty"`
+	Slot    int64  `json:"slot,omitempty"`
 }
 
 type networkNode struct {
-	mu        sync.Mutex
-	ctx       pasta.NodeContext
-	runCtx    context.Context
-	cancel    context.CancelFunc
-	kind      string
-	state     networkState
-	base      gonnect.Network
-	link      pasta.LinkID
-	network   trackedNetwork
-	server    *http.Server
-	serverCan context.CancelFunc
-	serverGen int64
-	reattach  chan struct{}
-	requestCh chan struct{}
+	mu          sync.Mutex
+	ctx         pasta.NodeContext
+	runCtx      context.Context
+	cancel      context.CancelFunc
+	kind        string
+	state       networkState
+	base        gonnect.Network
+	link        pasta.LinkID
+	network     trackedNetwork
+	router      *gonnect.Router
+	routerLinks [gonnect.RouterSlots]pasta.LinkID
+	server      *http.Server
+	serverCan   context.CancelFunc
+	serverGen   int64
+	reattach    chan struct{}
+	requestCh   chan struct{}
 }
 
 func (n *networkNode) LinkObject(endpoint pasta.LinkEndpoint) (any, error) {
@@ -186,6 +234,8 @@ func (n *networkNode) LinkObject(endpoint pasta.LinkEndpoint) (any, error) {
 		return gonnect.DetachNetwork(n.base), nil
 	case "logger":
 		return &loggingNetwork{node: n, log: n.logNetwork}, nil
+	case "router":
+		return gonnect.DetachNetwork(n.router), nil
 	default:
 		return nil, nil
 	}
@@ -195,6 +245,18 @@ func (n *networkNode) BeforeLinkAttach(endpoint pasta.LinkEndpoint, object any) 
 	netw, ok := object.(trackedNetwork)
 	if !ok {
 		return fmt.Errorf("network link object has type %T, want gonnect.Network+io.Closer", object)
+	}
+	if endpoint.Direction == pasta.OutputPort && n.kind == "router" {
+		slot := routerSlotFromPort(endpoint.Self.Port)
+		if slot == 0 {
+			return fmt.Errorf("router backend port %s is not a valid slot", endpoint.Self)
+		}
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if n.routerLinks[slot-1] != 0 && n.routerLinks[slot-1] != endpoint.Link {
+			return pasta.ErrMultiplicity
+		}
+		return nil
 	}
 	if endpoint.Direction == pasta.OutputPort {
 		n.mu.Lock()
@@ -225,7 +287,35 @@ func (n *networkNode) AfterLinkAttach(endpoint pasta.LinkEndpoint, object any) {
 		n.setStatus("logging")
 		return
 	}
+	if endpoint.Direction == pasta.InputPort && n.kind == "router" {
+		if err := n.ctx.Node.TrackResource(netw, []pasta.LinkID{endpoint.Link}, closeTrackedNetwork); err != nil {
+			n.setError(err)
+		}
+		return
+	}
 	if endpoint.Direction != pasta.OutputPort {
+		return
+	}
+	if n.kind == "router" {
+		slot := routerSlotFromPort(endpoint.Self.Port)
+		if slot == 0 {
+			n.setError(fmt.Errorf("router backend port %s is not a valid slot", endpoint.Self))
+			return
+		}
+		if err := n.ctx.Node.TrackResource(netw, []pasta.LinkID{endpoint.Link}, closeTrackedNetwork); err != nil {
+			n.setError(err)
+			return
+		}
+		if err := n.router.Attach(slot, netw); err != nil {
+			n.setError(err)
+			return
+		}
+		n.mu.Lock()
+		n.routerLinks[slot-1] = endpoint.Link
+		n.state.Status = "routing"
+		n.state.Error = ""
+		n.mu.Unlock()
+		n.publish()
 		return
 	}
 	if err := n.ctx.Node.TrackResource(netw, nil, closeTrackedNetwork); err != nil {
@@ -274,6 +364,9 @@ func (n *networkNode) Close() error {
 	n.server = nil
 	n.link = 0
 	n.network = nil
+	router := n.router
+	n.router = nil
+	n.routerLinks = [gonnect.RouterSlots]pasta.LinkID{}
 	n.wakeReattachLocked()
 	n.mu.Unlock()
 	if serverCancel != nil {
@@ -281,6 +374,9 @@ func (n *networkNode) Close() error {
 	}
 	if server != nil {
 		_ = server.Close()
+	}
+	if router != nil {
+		_ = router.Close()
 	}
 	return nil
 }
@@ -294,6 +390,31 @@ func (n *networkNode) ApplyMenuUpdate(update pasta.MenuStateUpdate) (pasta.MenuS
 		if field.Block == "main" && field.Field == "response" && n.kind == "server" {
 			n.state.Response = stringFromAny(field.Value)
 		}
+	}
+	for _, repeat := range update.Repeats {
+		if repeat.Block != "main" || repeat.Repeat != "rules" || n.kind != "router" {
+			continue
+		}
+		rules := make([]networkRouteRule, 0, len(repeat.Items))
+		for i, item := range repeat.Items {
+			rule := networkRouteRule{
+				ID:      firstNonEmptyString(item.ID, networkRuleID(i+1)),
+				Address: stringFromAny(item.Fields["address"]),
+				Slot:    int64(menuNumberValue(item.Fields["slot"])),
+			}
+			rules = append(rules, rule)
+		}
+		cfg, err := newNetworkRouterCfg(rules)
+		if err != nil {
+			n.mu.Unlock()
+			return pasta.MenuStateUpdate{}, err
+		}
+		n.state.Rules = rules
+		if n.router != nil {
+			n.router.SetCfg(cfg)
+		}
+		n.state.Status = "routing"
+		n.state.Error = ""
 	}
 	state := n.state
 	n.mu.Unlock()
@@ -318,6 +439,15 @@ func (n *networkNode) TriggerMenuButton(ref pasta.MenuButtonRef) error {
 func (n *networkNode) ImportPrivateState(private any) error {
 	n.mu.Lock()
 	n.state = networkStateFromAny(private)
+	if n.kind == "router" {
+		if n.router == nil {
+			n.router = gonnect.NewRouter()
+		}
+		if err := n.rebuildRouterCfgLocked(); err != nil {
+			n.mu.Unlock()
+			return err
+		}
+	}
 	n.mu.Unlock()
 	n.publish()
 	return nil
@@ -470,6 +600,23 @@ func (n *networkNode) currentNetwork() (trackedNetwork, string, <-chan struct{})
 
 func (n *networkNode) detach(link pasta.LinkID) {
 	n.mu.Lock()
+	if n.kind == "router" {
+		for slot, linked := range n.routerLinks {
+			if linked != link {
+				continue
+			}
+			n.routerLinks[slot] = 0
+			router := n.router
+			n.mu.Unlock()
+			if router != nil {
+				_ = router.Detach(slot + 1)
+			}
+			n.setStatus("routing")
+			return
+		}
+		n.mu.Unlock()
+		return
+	}
 	if n.link != link {
 		n.mu.Unlock()
 		return
@@ -558,10 +705,21 @@ func (n *networkNode) menu() pasta.NodeMenu {
 		fields = append([]pasta.MenuField{{ID: "address", Label: "Address", Kind: pasta.MenuFieldString, Value: state.Address}}, fields...)
 	}
 	block := pasta.MenuBlock{ID: "main", Title: "Network", Fields: fields}
+	if kind == "router" {
+		block.Repeats = []pasta.MenuRepeat{{
+			ID:    "rules",
+			Title: "Routing rules",
+			Template: []pasta.MenuField{
+				{ID: "address", Label: "Address regexp", Kind: pasta.MenuFieldString},
+				{ID: "slot", Label: "Slot", Kind: pasta.MenuFieldInt64},
+			},
+			Items: networkRuleItems(state.Rules),
+		}}
+	}
 	if kind == "client" {
 		block.Buttons = []pasta.MenuButton{{ID: "request", Label: "Request"}}
 	}
-	return pasta.NodeMenu{Blocks: []pasta.MenuBlock{block}}
+	return pasta.NodeMenu{Committable: kind == "router", Blocks: []pasta.MenuBlock{block}}
 }
 
 func (n *networkNode) logNetwork(format string, args ...any) {
@@ -580,6 +738,114 @@ func (n *networkNode) logNetwork(format string, args ...any) {
 	n.state.Status = line
 	n.mu.Unlock()
 	n.publish()
+}
+
+func (n *networkNode) rebuildRouterCfgLocked() error {
+	if n.router == nil {
+		return nil
+	}
+	cfg, err := newNetworkRouterCfg(n.state.Rules)
+	if err != nil {
+		return err
+	}
+	n.router.SetCfg(cfg)
+	return nil
+}
+
+func routerSlotFromPort(port pasta.PortID) int {
+	if port.Kind != pasta.OutputPort || port.Number < 1 || port.Number > gonnect.RouterSlots {
+		return 0
+	}
+	return int(port.Number)
+}
+
+func networkRuleItems(rules []networkRouteRule) []pasta.MenuRepeatItem {
+	items := make([]pasta.MenuRepeatItem, 0, len(rules))
+	for i, rule := range rules {
+		id := firstNonEmptyString(rule.ID, networkRuleID(i+1))
+		items = append(items, pasta.MenuRepeatItem{
+			ID:    id,
+			Title: "Rule " + strconv.Itoa(i+1),
+			Fields: []pasta.MenuField{
+				{ID: "address", Value: rule.Address},
+				{ID: "slot", Value: rule.Slot},
+			},
+		})
+	}
+	return items
+}
+
+func networkRuleID(n int) string {
+	if n < 1 {
+		n = 1
+	}
+	return "rule-" + strconv.Itoa(n)
+}
+
+type networkRouterCfg struct {
+	rules []compiledNetworkRouteRule
+}
+
+type compiledNetworkRouteRule struct {
+	address *regexp.Regexp
+	slot    int
+}
+
+func newNetworkRouterCfg(rules []networkRouteRule) (gonnect.RouterCfg, error) {
+	cfg := networkRouterCfg{rules: make([]compiledNetworkRouteRule, 0, len(rules))}
+	for _, rule := range rules {
+		if strings.TrimSpace(rule.Address) == "" {
+			continue
+		}
+		re, err := regexp.Compile(rule.Address)
+		if err != nil {
+			return nil, err
+		}
+		cfg.rules = append(cfg.rules, compiledNetworkRouteRule{address: re, slot: int(rule.Slot)})
+	}
+	return cfg, nil
+}
+
+func (c networkRouterCfg) DialTCP(_, _, raddr string) int {
+	return c.routeAddress(raddr)
+}
+
+func (c networkRouterCfg) ListenTCP(_, laddr string) int {
+	return c.routeAddress(laddr)
+}
+
+func (c networkRouterCfg) DialUDP(_, laddr, raddr string) int {
+	if slot := c.routeAddress(raddr); slot != 0 {
+		return slot
+	}
+	return c.routeAddress(laddr)
+}
+
+func (c networkRouterCfg) RouteUDP(_ string, laddr, raddr net.Addr) int {
+	if slot := c.routeAddr(raddr); slot != 0 {
+		return slot
+	}
+	return c.routeAddr(laddr)
+}
+
+func (c networkRouterCfg) Lookup(_, address string) int {
+	return c.routeAddress(address)
+}
+
+func (c networkRouterCfg) routeAddr(addr net.Addr) int {
+	if addr == nil {
+		return 0
+	}
+	return c.routeAddress(addr.String())
+}
+
+func (c networkRouterCfg) routeAddress(address string) int {
+	for _, rule := range c.rules {
+		if rule.address.MatchString(address) {
+			return rule.slot
+		}
+	}
+	return 0
 }
 
 type loggingNetwork struct {
@@ -914,8 +1180,32 @@ func networkStateFromAny(v any) networkState {
 			Error:    stringFromAny(x["error"]),
 			Logs:     stringFromAny(x["logs"]),
 			Requests: int64(positiveFloatFromAny(x["requests"], 0)),
+			Rules:    networkRulesFromAny(x["rules"]),
 		}
 	default:
 		return networkState{}
 	}
+}
+
+func networkRulesFromAny(v any) []networkRouteRule {
+	items, ok := v.([]any)
+	if !ok {
+		if rules, ok := v.([]networkRouteRule); ok {
+			return append([]networkRouteRule(nil), rules...)
+		}
+		return nil
+	}
+	rules := make([]networkRouteRule, 0, len(items))
+	for i, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		rules = append(rules, networkRouteRule{
+			ID:      firstNonEmptyString(stringFromAny(m["id"]), networkRuleID(i+1)),
+			Address: stringFromAny(m["address"]),
+			Slot:    int64(menuNumberValue(m["slot"])),
+		})
+	}
+	return rules
 }
