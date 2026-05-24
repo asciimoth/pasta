@@ -6,6 +6,8 @@ type NotificationKind string
 const (
 	// NotificationWorkspaceSnapshot carries a full workspace snapshot.
 	NotificationWorkspaceSnapshot NotificationKind = "workspace_snapshot"
+	// NotificationWorkspaceStopped reports that the workspace has been closed.
+	NotificationWorkspaceStopped NotificationKind = "workspace_stopped"
 
 	NotificationNodeAdded   NotificationKind = "node_added"
 	NotificationNodeRemoved NotificationKind = "node_removed"
@@ -56,6 +58,10 @@ func (w *Workspace) SubscribeNotifications(callback NotificationCallback) uint64
 	}
 
 	w.Lock()
+	if w.closed {
+		w.Unlock()
+		return 0
+	}
 	id := w.nextSubscriptionID
 	if id < 1 {
 		id = 1
@@ -81,6 +87,9 @@ func (w *Workspace) UnsubscribeNotifications(id uint64) bool {
 
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return false
+	}
 
 	if _, present := w.subscribers[id]; !present {
 		return false

@@ -23,6 +23,9 @@ func (w *Workspace) SendInbox(message InboxMessage) {
 func (w *Workspace) deliverInbox(message InboxMessage) {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 
 	receiver, present := w.nodes.Get(message.ReceiverNode)
 	if !present || receiver == nil {

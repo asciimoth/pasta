@@ -26,6 +26,9 @@ func (w *Workspace) SendEvent(event Event) {
 func (w *Workspace) deliverEvent(event Event) {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 
 	sender, present := w.nodes.Get(event.SenderNode)
 	if !present || sender == nil {

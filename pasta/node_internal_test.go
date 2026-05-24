@@ -10,6 +10,26 @@ type internalNode struct {
 	calls   []string
 }
 
+type nopLoggerFactory struct{}
+
+func (nopLoggerFactory) WorkspaceLogger() Logger { return nopLogger{} }
+func (nopLoggerFactory) NodeLogger(id uint64, class string) Logger {
+	return nopLogger{}
+}
+
+type nopLogger struct{}
+
+func (nopLogger) Debug(args ...any)                 {}
+func (nopLogger) Debugf(format string, args ...any) {}
+func (nopLogger) Info(args ...any)                  {}
+func (nopLogger) Infof(format string, args ...any)  {}
+func (nopLogger) Warn(args ...any)                  {}
+func (nopLogger) Warnf(format string, args ...any)  {}
+func (nopLogger) Err(args ...any)                   {}
+func (nopLogger) Errf(format string, args ...any)   {}
+func (nopLogger) Fatal(args ...any)                 {}
+func (nopLogger) Fatalf(format string, args ...any) {}
+
 func (n *internalNode) call(name string) {
 	if n.panicOn[name] {
 		panic(name)
@@ -112,6 +132,26 @@ func TestNodeRecordPanicStopsNode(t *testing.T) {
 
 func TestNodeStopIgnoresPanic(t *testing.T) {
 	nodeStop(&internalNode{panicOn: map[string]bool{"stop": true}})
+}
+
+func TestWorkspaceCloseDrainsPendingOperations(t *testing.T) {
+	w := NewWorkspace(&nopLoggerFactory{})
+
+	ran := false
+	w.mu.Lock()
+	w.pending = append(w.pending, func() {
+		ran = true
+	})
+	w.mu.Unlock()
+
+	w.Close()
+
+	if !ran {
+		t.Fatal("Close did not drain pending operation")
+	}
+	if len(w.pending) != 0 {
+		t.Fatalf("pending operations after Close = %d, want 0", len(w.pending))
+	}
 }
 
 func TestMultiSliceIterStopsWhenYieldReturnsFalse(t *testing.T) {

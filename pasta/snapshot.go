@@ -44,6 +44,9 @@ type LinkSnapshot struct {
 func (w *Workspace) Snapshot() WorkspaceSnapshot {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return WorkspaceSnapshot{}
+	}
 
 	return w.snapshotLocked()
 }
@@ -83,7 +86,7 @@ func (w *Workspace) NodeSnapshot(id uint64) (NodeSnapshot, bool) {
 	defer w.Unlock()
 
 	record, present := w.nodes.Get(id)
-	if !present || record == nil {
+	if w.closed || !present || record == nil {
 		return NodeSnapshot{}, false
 	}
 	return nodeSnapshot(record), true
@@ -95,7 +98,7 @@ func (w *Workspace) PortSnapshot(id uint64) (PortSnapshot, bool) {
 	defer w.Unlock()
 
 	port, present := w.ports.Get(id)
-	if !present || port == nil {
+	if w.closed || !present || port == nil {
 		return PortSnapshot{}, false
 	}
 	return portSnapshot(port), true
@@ -107,7 +110,7 @@ func (w *Workspace) LinkSnapshot(id uint64) (LinkSnapshot, bool) {
 	defer w.Unlock()
 
 	link, present := w.links.Get(id)
-	if !present || link == nil {
+	if w.closed || !present || link == nil {
 		return LinkSnapshot{}, false
 	}
 	return linkSnapshot(link), true

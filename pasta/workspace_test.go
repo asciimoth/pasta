@@ -570,6 +570,115 @@ func TestWorkspaceReplaceNodeRejectsMissingAndDuplicateNodes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeAID, err := w.AddNode(nodeA, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(nodeB, "example.com/NodeB")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	portA := mustAddPort(t, w, nodeAID, "left", "example.com/typeA")
+	portB := mustAddPort(t, w, nodeBID, "right", "example.com/typeA")
+	link, _, err := w.AddLink(portA, portB)
+	if err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	subscriptionID := w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	w.Close()
+	w.Close()
+
+	if nodeA.stopCount != 1 || nodeB.stopCount != 1 {
+		t.Fatalf("stop counts = %d, %d; want 1, 1", nodeA.stopCount, nodeB.stopCount)
+	}
+	assertNotificationMatches(t, notifications, []notificationMatch{
+		{kind: pasta.NotificationWorkspaceStopped},
+	})
+	if w.UnsubscribeNotifications(subscriptionID) {
+		t.Fatal("UnsubscribeNotifications after Close returned true")
+	}
+	if got := w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		t.Fatalf("SubscribeNotifications after Close delivered %#v", notification)
+	}); got != 0 {
+		t.Fatalf("SubscribeNotifications after Close = %d, want 0", got)
+	}
+
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/NodeC"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddNode after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if _, err := w.AddRootNode(&workspaceNode{}, "example.com/NodeC"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddRootNode after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.ReplaceNode(nodeAID, &workspaceNode{}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("ReplaceNode after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if _, err := w.AddPort(pasta.Port{Node: nodeAID, Direction: "left", Types: []string{"example.com/typeA"}}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddPort after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if _, _, err := w.AddLink(portA, portB); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddLink after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetNodePrimary(nodeAID, "example.com/typeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePrimary after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetNodeRoot(nodeAID, true); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodeRoot after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetPortName(portA, "input"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetPortName after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+
+	w.RemoveLink(link)
+	w.RemovePort(portA)
+	w.RemoveNode(nodeAID)
+	w.RemoveLinksByNodes(nodeAID, nodeBID)
+	w.Ready()
+	w.AddPendingOp(func() {
+		t.Fatal("AddPendingOp after Close ran")
+	})
+	w.SendEvent(pasta.Event{SenderNode: nodeAID, SenderPort: portA, ReceiverNode: nodeBID, ReceiverPort: portB})
+	w.SendInbox(pasta.InboxMessage{ReceiverNode: nodeAID, Payload: "ignored"})
+
+	if w.IsReady() {
+		t.Fatal("closed workspace reports ready")
+	}
+	if got := w.NextID(); got != 0 {
+		t.Fatalf("NextID after Close = %d, want 0", got)
+	}
+	if got := w.Snapshot(); !equalWorkspaceSnapshot(got, pasta.WorkspaceSnapshot{}) {
+		t.Fatalf("Snapshot after Close = %#v, want empty", got)
+	}
+	if _, ok := w.NodeSnapshot(nodeAID); ok {
+		t.Fatal("NodeSnapshot after Close returned ok")
+	}
+	if _, ok := w.PortSnapshot(portA); ok {
+		t.Fatal("PortSnapshot after Close returned ok")
+	}
+	if _, _, ok := w.LinkByPorts(portA, portB); ok {
+		t.Fatal("LinkByPorts after Close returned ok")
+	}
+	if w.PortsConnected(portA, portB) || w.NodesConnected(nodeAID, nodeBID) {
+		t.Fatal("closed workspace reports connections")
+	}
+	if links := w.LinksByNodes(nodeAID, nodeBID); len(links) != 0 {
+		t.Fatalf("LinksByNodes after Close = %#v, want empty", links)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("notifications after post-close operations = %d, want 1", len(notifications))
+	}
+}
+
 func TestWorkspaceLinkEdgeCasesAndInvariants(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 

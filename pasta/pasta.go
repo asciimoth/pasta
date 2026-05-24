@@ -22,6 +22,8 @@ var (
 	ErrSameDirection = errors.New("same direction")
 	// ErrTypeCompat reports that two ports do not share a usable link type.
 	ErrTypeCompat = errors.New("types are incompatible")
+	// ErrWorkspaceClosed reports that an operation cannot run after Close.
+	ErrWorkspaceClosed = errors.New("workspace closed")
 )
 
 // Workspace owns nodes, ports, and links and coordinates their lifecycle callbacks.
@@ -31,6 +33,7 @@ type Workspace struct {
 
 	nextid  uint64
 	isReady bool
+	closed  bool
 
 	pending []func()
 
@@ -74,6 +77,9 @@ func NewWorkspace(logf LogFactory) *Workspace {
 func (w *Workspace) NextID() uint64 {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return 0
+	}
 	if w.nextid < 1 {
 		w.nextid = 1
 	}
@@ -86,6 +92,9 @@ func (w *Workspace) NextID() uint64 {
 func (w *Workspace) IsReady() bool {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return false
+	}
 	return w.isReady
 }
 
@@ -94,7 +103,7 @@ func (w *Workspace) Ready() {
 	w.Lock()
 	defer w.Unlock()
 
-	if w.isReady {
+	if w.closed || w.isReady {
 		return
 	}
 
@@ -133,10 +142,50 @@ func (w *Workspace) Unlock() {
 func (w *Workspace) AddPendingOp(op func()) {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 	if w.pending == nil {
 		w.pending = make([]func(), 0, 1)
 	}
 	w.pending = append(w.pending, op)
+}
+
+// Close stops all nodes, notifies subscribers, drains pending operations, and
+// prevents future workspace operations from mutating state.
+func (w *Workspace) Close() {
+	w.Lock()
+	if w.closed {
+		w.Unlock()
+		return
+	}
+	w.closed = true
+
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value == nil {
+			continue
+		}
+		pair.Value.OnStop()
+	}
+
+	for len(w.pending) > 0 {
+		ops := w.pending
+		w.pending = make([]func(), 0)
+		w.Unlock()
+		for _, op := range ops {
+			if op != nil {
+				op()
+			}
+		}
+		w.Lock()
+	}
+
+	w.enqueueNotification(WorkspaceNotification{Kind: NotificationWorkspaceStopped})
+	deliveries := w.drainNotificationDeliveries()
+	w.subscribers = make(map[uint64]NotificationCallback)
+	w.Unlock()
+
+	deliverNotifications(deliveries)
 }
 
 // RemoveNode removes a node and all of its ports and links.
@@ -147,6 +196,9 @@ func (w *Workspace) RemoveNode(id uint64) {
 
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 
 	var (
 		record  *nodeRecord
@@ -176,6 +228,9 @@ func (w *Workspace) RemovePort(id uint64) {
 
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 
 	var (
 		port    *Port
@@ -209,6 +264,9 @@ func (w *Workspace) RemoveLink(id uint64) {
 
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 
 	var (
 		link    *Link
@@ -253,12 +311,15 @@ func (w *Workspace) AddRootNode(node Node, class string) (uint64, error) {
 
 // AddNodeWithRoot adds node to the workspace and sets its initial root status.
 func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64, error) {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return 0, ErrWorkspaceClosed
+	}
+
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
-
-	w.Lock()
-	defer w.Unlock()
 
 	// Reject if this node already exists
 	for pair := w.nodes.Newest(); pair != nil; pair = pair.Prev() {
@@ -316,12 +377,14 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 // current root-path status. A successful replacement does not enqueue workspace
 // notifications because the snapshot-observable node state is unchanged.
 func (w *Workspace) ReplaceNode(id uint64, node Node) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
 	if id < 1 {
 		return ErrNoNode
 	}
-
-	w.Lock()
-	defer w.Unlock()
 
 	record, present := w.nodes.Get(id)
 	if !present || record == nil {
@@ -365,12 +428,16 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 func (w *Workspace) AddPort(port Port) (uint64, error) {
 	port = port.Copy()
 	port.Links = []uint64{}
-	if err := port.Validate(); err != nil {
-		return 0, err
-	}
 
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return 0, ErrWorkspaceClosed
+	}
+
+	if err := port.Validate(); err != nil {
+		return 0, err
+	}
 
 	// Make sure node exists
 	record, present := w.nodes.Get(port.Node)
@@ -413,6 +480,9 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return 0, "", ErrWorkspaceClosed
+	}
 
 	portA, present := w.ports.Get(pa)
 	if !present || portA == nil {
@@ -535,6 +605,9 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return false
+	}
 
 	portA, present := w.ports.Get(pa)
 	if !present || portA == nil {
@@ -553,6 +626,9 @@ func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 func (w *Workspace) NodesConnected(na, nb uint64) bool {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return false
+	}
 
 	return len(w.linksBetweenNodes(na, nb)) > 0
 }
@@ -561,6 +637,9 @@ func (w *Workspace) NodesConnected(na, nb uint64) bool {
 func (w *Workspace) LinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return 0, LinkSnapshot{}, false
+	}
 
 	portA, present := w.ports.Get(pa)
 	if !present || portA == nil {
@@ -587,6 +666,9 @@ func (w *Workspace) GetLinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
 func (w *Workspace) LinksByNodes(na, nb uint64) map[uint64]LinkSnapshot {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return nil
+	}
 
 	links := w.linksBetweenNodes(na, nb)
 	snapshots := make(map[uint64]LinkSnapshot, len(links))
@@ -605,6 +687,9 @@ func (w *Workspace) GetLinksByNodes(na, nb uint64) map[uint64]LinkSnapshot {
 func (w *Workspace) RemoveLinksByNodes(na, nb uint64) {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return
+	}
 
 	links := w.linksBetweenNodes(na, nb)
 	for _, link := range links {
@@ -617,14 +702,17 @@ func (w *Workspace) RemoveLinksByNodes(na, nb uint64) {
 // typ may be empty to clear the primary type. Non-empty values must be valid
 // type names.
 func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
 	if typ != "" {
 		if err := ValidateTypeName(typ); err != nil {
 			return err
 		}
 	}
-
-	w.Lock()
-	defer w.Unlock()
 
 	record, present := w.nodes.Get(id)
 	if !present || record == nil {
@@ -639,6 +727,9 @@ func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
 func (w *Workspace) SetNodeRoot(id uint64, root bool) error {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
 
 	record, present := w.nodes.Get(id)
 	if !present || record == nil {
@@ -660,6 +751,9 @@ func (w *Workspace) SetNodeRoot(id uint64, root bool) error {
 func (w *Workspace) SetPortName(id uint64, name string) error {
 	w.Lock()
 	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
 
 	port, present := w.ports.Get(id)
 	if !present || port == nil {
