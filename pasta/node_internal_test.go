@@ -27,6 +27,11 @@ func (n *internalNode) OnReady() error {
 	return nil
 }
 
+func (n *internalNode) OnRootStatus(hasRootPath bool) error {
+	n.call("root-status")
+	return nil
+}
+
 func (n *internalNode) OnStop() {
 	n.call("stop")
 }

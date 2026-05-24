@@ -41,6 +41,10 @@ func (n *calcNode) OnReady() error {
 	return nil
 }
 
+func (n *calcNode) OnRootStatus(hasRootPath bool) error {
+	return nil
+}
+
 func (n *calcNode) OnStop() {
 	n.log("stop")
 }

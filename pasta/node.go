@@ -35,6 +35,10 @@ type Node interface {
 	// Nodes added to an already-ready workspace receive OnReady immediately.
 	OnReady() error
 
+	// OnRootStatus is called after OnReady with the node's current path-to-root
+	// status, and again whenever that status changes.
+	OnRootStatus(hasRootPath bool) error
+
 	// OnStop is called once when the node is removed or the workspace closes.
 	OnStop()
 
@@ -89,13 +93,16 @@ type nodeRecord struct {
 	Class string // node class name
 
 	PrimaryType string
+	Root        bool
+	HasRootPath bool
 
 	LeftPorts  []uint64
 	RightPorts []uint64
 
 	L Logger
 
-	stopped bool
+	stopped         bool
+	rootStatusKnown bool
 }
 
 func (n *nodeRecord) RemovePort(id uint64) {
@@ -271,6 +278,20 @@ func (n *nodeRecord) OnReady() (err error) {
 		}
 	}()
 	err = n.Node.OnReady()
+	return
+}
+
+func (n *nodeRecord) OnRootStatus(hasRootPath bool) (err error) {
+	if n.stopped {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			n.stopped = true
+			err = ErrNodePanic
+		}
+	}()
+	err = n.Node.OnRootStatus(hasRootPath)
 	return
 }
 

@@ -109,6 +109,7 @@ func (w *Workspace) Ready() {
 			})
 		}
 	}
+	w.recomputeRootPaths(true)
 }
 
 // Lock locks the workspace.
@@ -234,6 +235,7 @@ func (w *Workspace) RemoveLink(id uint64) {
 	w.nodeEvLinkRemoved(link.RightPortNode, id, link.RightPort, link.Type, "right")
 
 	w.log.Debug("removed link", id)
+	w.recomputeRootPaths(true)
 }
 
 // AddNode adds node to the workspace and returns its workspace-scoped ID.
@@ -241,6 +243,16 @@ func (w *Workspace) RemoveLink(id uint64) {
 // class must be a valid class name. Nodes can configure their primary type
 // from OnInit or later callbacks with SetNodePrimary.
 func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
+	return w.AddNodeWithRoot(node, class, false)
+}
+
+// AddRootNode adds node to the workspace as a root node.
+func (w *Workspace) AddRootNode(node Node, class string) (uint64, error) {
+	return w.AddNodeWithRoot(node, class, true)
+}
+
+// AddNodeWithRoot adds node to the workspace and sets its initial root status.
+func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64, error) {
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
@@ -262,6 +274,7 @@ func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
 		Node:        node,
 		Class:       class,
 		PrimaryType: "",
+		Root:        root,
 		LeftPorts:   []uint64{},
 		RightPorts:  []uint64{},
 		L:           log,
@@ -278,6 +291,15 @@ func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
 		if err := rec.OnReady(); err != nil {
 			w.RemoveNode(id)
 			w.log.Debugf("node %d faled in OnReady", id)
+			return 0, err
+		}
+		if failed := w.recomputeRootPaths(false); len(failed) > 0 {
+			err := failed[id]
+			if err == nil {
+				err = ErrNodePanic
+			}
+			w.RemoveNode(id)
+			w.log.Debugf("node %d faled in OnRootStatus", id)
 			return 0, err
 		}
 	}
@@ -454,6 +476,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	w.enqueueLinkNotification(NotificationLinkAdded, link.ID, linkSnapshot(&link))
 	w.enqueuePortNotification(NotificationPortUpdated, Left.ID, portSnapshot(Left))
 	w.enqueuePortNotification(NotificationPortUpdated, Right.ID, portSnapshot(Right))
+	w.recomputeRootPaths(true)
 	return link.ID, link.Type, nil
 }
 
@@ -561,6 +584,27 @@ func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
 	return nil
 }
 
+// SetNodeRoot changes whether a node is an explicit workspace root.
+func (w *Workspace) SetNodeRoot(id uint64, root bool) error {
+	w.Lock()
+	defer w.Unlock()
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	if record.Root == root {
+		return nil
+	}
+
+	record.Root = root
+	changed := w.recomputeRootPaths(true)
+	if _, present := changed[id]; !present {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
+	return nil
+}
+
 // SetPortName sets a port's display name.
 func (w *Workspace) SetPortName(id uint64, name string) error {
 	w.Lock()
@@ -621,6 +665,89 @@ func (w *Workspace) verifyDAG() bool {
 		}
 	}
 	return true
+}
+
+// recomputeRootPaths updates path-to-root status for every node.
+//
+// Links are treated as undirected for this purpose. When notify is true,
+// changed node snapshots are enqueued. The return value contains nodes whose
+// OnRootStatus callback failed and were scheduled for removal.
+func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
+	if !w.isReady {
+		return nil
+	}
+
+	reachable := make(map[uint64]bool, w.nodes.Len())
+	queue := make([]uint64, 0)
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		record := pair.Value
+		if record == nil {
+			continue
+		}
+		reachable[pair.Key] = false
+		if record.Root {
+			reachable[pair.Key] = true
+			queue = append(queue, pair.Key)
+		}
+	}
+
+	adjacency := make(map[uint64][]uint64, w.nodes.Len())
+	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
+		link := pair.Value
+		if link == nil {
+			continue
+		}
+		if _, present := reachable[link.LeftPortNode]; !present {
+			continue
+		}
+		if _, present := reachable[link.RightPortNode]; !present {
+			continue
+		}
+		adjacency[link.LeftPortNode] = append(adjacency[link.LeftPortNode], link.RightPortNode)
+		adjacency[link.RightPortNode] = append(adjacency[link.RightPortNode], link.LeftPortNode)
+	}
+
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		for _, next := range adjacency[node] {
+			if reachable[next] {
+				continue
+			}
+			reachable[next] = true
+			queue = append(queue, next)
+		}
+	}
+
+	failed := make(map[uint64]error)
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		record := pair.Value
+		if record == nil {
+			continue
+		}
+		hasRootPath := reachable[pair.Key]
+		changed := !record.rootStatusKnown || record.HasRootPath != hasRootPath
+		record.HasRootPath = hasRootPath
+		record.rootStatusKnown = true
+		if !changed {
+			continue
+		}
+		if notify {
+			w.enqueueNodeNotification(NotificationNodeUpdated, pair.Key, nodeSnapshot(record))
+		}
+		if err := record.OnRootStatus(hasRootPath); err != nil {
+			w.log.Debugf("node %d faled in OnRootStatus", record.ID)
+			failed[record.ID] = err
+			nodeID := record.ID
+			w.AddPendingOp(func() {
+				w.RemoveNode(nodeID)
+			})
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return failed
 }
 
 // postlock executes after top-level unlock (one with recursion == 0).

@@ -13,6 +13,7 @@ import (
 type workspaceNode struct {
 	l           pasta.Logger
 	initPrimary string
+	rootStatus  []bool
 }
 
 func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string) error {
@@ -26,6 +27,11 @@ func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, cl
 
 func (n *workspaceNode) OnReady() error {
 	n.l.Debug("ready")
+	return nil
+}
+
+func (n *workspaceNode) OnRootStatus(hasRootPath bool) error {
+	n.rootStatus = append(n.rootStatus, hasRootPath)
 	return nil
 }
 
@@ -384,6 +390,96 @@ func TestWorkspaceNodeCanSetPrimaryTypeInOnInit(t *testing.T) {
 	})
 }
 
+func TestWorkspaceTracksRootPaths(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeC := &workspaceNode{}
+
+	nodeAID, err := w.AddRootNode(nodeA, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddRootNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(nodeB, "example.com/NodeB")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	nodeCID, err := w.AddNodeWithRoot(nodeC, "example.com/NodeC", false)
+	if err != nil {
+		t.Fatalf("AddNodeWithRoot C: %v", err)
+	}
+
+	if got, want := nodeA.rootStatus, []bool{true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node A root statuses = %v, want %v", got, want)
+	}
+	if got, want := nodeB.rootStatus, []bool{false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node B root statuses = %v, want %v", got, want)
+	}
+	if got, want := nodeC.rootStatus, []bool{false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node C root statuses = %v, want %v", got, want)
+	}
+
+	aLeft := mustAddPort(t, w, nodeAID, "left", "example.com/typeA")
+	bRight := mustAddPort(t, w, nodeBID, "right", "example.com/typeA")
+	bLeft := mustAddPort(t, w, nodeBID, "left", "example.com/typeA")
+	cRight := mustAddPort(t, w, nodeCID, "right", "example.com/typeA")
+
+	ab, _, err := w.AddLink(aLeft, bRight)
+	if err != nil {
+		t.Fatalf("AddLink A-B: %v", err)
+	}
+	if got, want := nodeB.rootStatus, []bool{false, true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node B root statuses after A-B = %v, want %v", got, want)
+	}
+
+	bc, _, err := w.AddLink(bLeft, cRight)
+	if err != nil {
+		t.Fatalf("AddLink B-C: %v", err)
+	}
+	if got, want := nodeC.rootStatus, []bool{false, true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node C root statuses after B-C = %v, want %v", got, want)
+	}
+
+	snapshot := w.Snapshot()
+	if !snapshot.Nodes[nodeAID].Root || !snapshot.Nodes[nodeAID].HasRootPath {
+		t.Fatalf("root node snapshot = %#v, want root with root path", snapshot.Nodes[nodeAID])
+	}
+	if !snapshot.Nodes[nodeBID].HasRootPath || !snapshot.Nodes[nodeCID].HasRootPath {
+		t.Fatalf("connected node snapshots = %#v %#v, want root paths", snapshot.Nodes[nodeBID], snapshot.Nodes[nodeCID])
+	}
+
+	w.RemoveLink(bc)
+	if got, want := nodeC.rootStatus, []bool{false, true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node C root statuses after removing B-C = %v, want %v", got, want)
+	}
+
+	if err := w.SetNodeRoot(nodeAID, false); err != nil {
+		t.Fatalf("SetNodeRoot A false: %v", err)
+	}
+	if got, want := nodeA.rootStatus, []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node A root statuses after clearing root = %v, want %v", got, want)
+	}
+	if got, want := nodeB.rootStatus, []bool{false, true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node B root statuses after clearing A root = %v, want %v", got, want)
+	}
+
+	if err := w.SetNodeRoot(nodeCID, true); err != nil {
+		t.Fatalf("SetNodeRoot C true: %v", err)
+	}
+	if got, want := nodeC.rootStatus, []bool{false, true, false, true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node C root statuses after setting C root = %v, want %v", got, want)
+	}
+
+	w.RemoveLink(ab)
+	if got, want := nodeB.rootStatus, []bool{false, true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node B root statuses after removing A-B = %v, want %v", got, want)
+	}
+	if err := w.SetNodeRoot(999, true); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("SetNodeRoot missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+}
+
 func TestWorkspaceLinkEdgeCasesAndInvariants(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -503,6 +599,8 @@ func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
 func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {
 	return a.Class == b.Class &&
 		a.PrimaryType == b.PrimaryType &&
+		a.Root == b.Root &&
+		a.HasRootPath == b.HasRootPath &&
 		reflect.DeepEqual(emptyIfNil(a.LeftPorts), emptyIfNil(b.LeftPorts)) &&
 		reflect.DeepEqual(emptyIfNil(a.RightPorts), emptyIfNil(b.RightPorts))
 }
