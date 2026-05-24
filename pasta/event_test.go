@@ -33,7 +33,7 @@ func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class s
 	n.l = l
 	n.id = id
 	n.log("init")
-	return nil
+	return n.updateLabel()
 }
 
 func (n *calcNode) OnReady() error {
@@ -101,7 +101,7 @@ func (n *calcNode) OnEvent(event pasta.Event, linkType string, receiverPortTypes
 	if n.kind == "result" {
 		n.value = value
 		n.log("result state=%g", n.value)
-		return nil
+		return n.updateLabel()
 	}
 
 	if n.isMiddleware() {
@@ -120,6 +120,9 @@ func (n *calcNode) recalcAndBroadcast() {
 	old := n.value
 	n.value = n.recalc()
 	n.log("%s state=%g", n.kind, n.value)
+	if err := n.updateLabel(); err != nil {
+		n.log("label update failed: %v", err)
+	}
 	if n.value != old {
 		n.sendAll()
 	}
@@ -199,6 +202,13 @@ func (n *calcNode) setInput(port uint64, value float64) {
 	}
 }
 
+func (n *calcNode) updateLabel() error {
+	if n.w == nil || n.id == 0 {
+		return nil
+	}
+	return n.w.SetNodeLabel(n.id, fmt.Sprintf("%g", n.value))
+}
+
 type calcGraph struct {
 	w     *pasta.Workspace
 	nodes map[string]*calcNode
@@ -259,6 +269,13 @@ func TestWorkspaceEventsCalculatorTopology(t *testing.T) {
 	if got := second.states(); !reflect.DeepEqual(got, wantStates) {
 		t.Fatalf("second states = %#v, want %#v", got, wantStates)
 	}
+	wantLabels := calcLabels(wantStates)
+	if got := first.labels(); !reflect.DeepEqual(got, wantLabels) {
+		t.Fatalf("first labels = %#v, want %#v", got, wantLabels)
+	}
+	if got := second.labels(); !reflect.DeepEqual(got, wantLabels) {
+		t.Fatalf("second labels = %#v, want %#v", got, wantLabels)
+	}
 	if got, want := first.topology(), second.topology(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("topologies differ\ngot:  %#v\nwant: %#v", got, want)
 	}
@@ -273,6 +290,9 @@ func TestWorkspaceEventsCalculatorTopology(t *testing.T) {
 	wantStates["final"] = 0
 	if got := first.states(); !reflect.DeepEqual(got, wantStates) {
 		t.Fatalf("states after input disconnect = %#v, want %#v", got, wantStates)
+	}
+	if got, want := first.labels(), calcLabels(wantStates); !reflect.DeepEqual(got, want) {
+		t.Fatalf("labels after input disconnect = %#v, want %#v", got, want)
 	}
 }
 
@@ -431,6 +451,23 @@ func (g *calcGraph) states() map[string]float64 {
 		states[name] = node.value
 	}
 	return states
+}
+
+func (g *calcGraph) labels() map[string]string {
+	snapshot := g.w.Snapshot()
+	labels := make(map[string]string, len(g.nodes))
+	for name, node := range g.nodes {
+		labels[name] = snapshot.Nodes[node.id].Label
+	}
+	return labels
+}
+
+func calcLabels(states map[string]float64) map[string]string {
+	labels := make(map[string]string, len(states))
+	for name, value := range states {
+		labels[name] = fmt.Sprintf("%g", value)
+	}
+	return labels
 }
 
 func (g *calcGraph) topology() []string {

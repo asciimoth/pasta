@@ -14,6 +14,7 @@ import (
 type workspaceNode struct {
 	l           pasta.Logger
 	initPrimary string
+	initLabel   string
 	rootStatus  []bool
 	initData    *pasta.NodeInitData
 	readyCount  int
@@ -30,7 +31,12 @@ func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, cl
 	}
 	l.Debugf("init id=%d class=%s", id, class)
 	if n.initPrimary != "" {
-		return w.SetNodePrimary(id, n.initPrimary)
+		if err := w.SetNodePrimary(id, n.initPrimary); err != nil {
+			return err
+		}
+	}
+	if n.initLabel != "" {
+		return w.SetNodeLabel(id, n.initLabel)
 	}
 	return nil
 }
@@ -510,6 +516,32 @@ func TestWorkspaceNodeCanSetPrimaryTypeInOnInit(t *testing.T) {
 	})
 }
 
+func TestWorkspaceNodeLabelSnapshots(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeID, err := w.AddNode(&workspaceNode{initLabel: "starting"}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeID: {Class: "example.com/Node", Label: "starting"},
+		},
+	})
+
+	if err := w.SetNodeLabel(nodeID, "ready"); err != nil {
+		t.Fatalf("SetNodeLabel: %v", err)
+	}
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeID: {Class: "example.com/Node", Label: "ready"},
+		},
+	})
+	if err := w.SetNodeLabel(999, "missing"); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("SetNodeLabel missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+}
+
 func TestWorkspaceTracksRootPaths(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -615,6 +647,9 @@ func TestWorkspaceReplaceNodePreservesRecordState(t *testing.T) {
 	if err := w.SetNodePrimary(nodeID, "example.com/typeA"); err != nil {
 		t.Fatalf("SetNodePrimary: %v", err)
 	}
+	if err := w.SetNodeLabel(nodeID, "active"); err != nil {
+		t.Fatalf("SetNodeLabel: %v", err)
+	}
 
 	before := w.Snapshot()
 	var notifications []pasta.WorkspaceNotification
@@ -641,6 +676,9 @@ func TestWorkspaceReplaceNodePreservesRecordState(t *testing.T) {
 	}
 	if replacement.initData.PrimaryType != "example.com/typeA" {
 		t.Fatalf("restored primary type = %q, want example.com/typeA", replacement.initData.PrimaryType)
+	}
+	if replacement.initData.Label != "active" {
+		t.Fatalf("restored label = %q, want active", replacement.initData.Label)
 	}
 	if !reflect.DeepEqual(replacement.initData.LeftPorts, []uint64{left}) {
 		t.Fatalf("restored left ports = %v, want [%d]", replacement.initData.LeftPorts, left)
@@ -704,6 +742,12 @@ func TestWorkspacePlaceholderNodeLifecycleAndSnapshots(t *testing.T) {
 	if snapshot := w.Snapshot().Nodes[placeholderID]; snapshot.PrimaryType != "" {
 		t.Fatalf("placeholder primary type snapshot = %q, want empty", snapshot.PrimaryType)
 	}
+	if err := w.SetNodeLabel(placeholderID, "missing"); err != nil {
+		t.Fatalf("SetNodeLabel placeholder: %v", err)
+	}
+	if snapshot := w.Snapshot().Nodes[placeholderID]; snapshot.Label != "missing" {
+		t.Fatalf("placeholder label snapshot = %q, want missing", snapshot.Label)
+	}
 
 	placeholderRight := placeholder.RightPorts[0]
 	link, _, err := w.AddLink(rootLeft, placeholderRight)
@@ -725,6 +769,9 @@ func TestWorkspacePlaceholderNodeLifecycleAndSnapshots(t *testing.T) {
 	if replacement.initData == nil || !reflect.DeepEqual(replacement.initData.RightPorts, []uint64{placeholderRight}) {
 		t.Fatalf("replacement init data = %#v, want preserved right port %d", replacement.initData, placeholderRight)
 	}
+	if replacement.initData.Label != "missing" {
+		t.Fatalf("replacement init label = %q, want missing", replacement.initData.Label)
+	}
 	if got, want := replacement.rootStatus, []bool{true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("replacement root status = %v, want %v", got, want)
 	}
@@ -733,7 +780,7 @@ func TestWorkspacePlaceholderNodeLifecycleAndSnapshots(t *testing.T) {
 		t.Fatalf("restored link snapshot = %#v, %v; want non-placeholder", linkSnapshot, ok)
 	}
 	nodeSnapshot := w.Snapshot().Nodes[placeholderID]
-	if nodeSnapshot.Placeholder || !nodeSnapshot.Root || !nodeSnapshot.HasRootPath || nodeSnapshot.PrimaryType != "example.com/typeA" {
+	if nodeSnapshot.Placeholder || !nodeSnapshot.Root || !nodeSnapshot.HasRootPath || nodeSnapshot.PrimaryType != "example.com/typeA" || nodeSnapshot.Label != "missing" {
 		t.Fatalf("restored node snapshot = %#v, want normal restored state", nodeSnapshot)
 	}
 }
@@ -1062,6 +1109,9 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	if err := w.SetNodePrimary(nodeAID, "example.com/typeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodePrimary after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
+	if err := w.SetNodeLabel(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodeLabel after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
 	if err := w.SetNodeRoot(nodeAID, true); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeRoot after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
@@ -1254,6 +1304,7 @@ func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
 func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {
 	return a.Class == b.Class &&
 		a.PrimaryType == b.PrimaryType &&
+		a.Label == b.Label &&
 		a.Placeholder == b.Placeholder &&
 		a.Root == b.Root &&
 		a.HasRootPath == b.HasRootPath &&

@@ -94,6 +94,7 @@ type Node interface {
 // the new Node implementation inherits.
 type NodeInitData struct {
 	PrimaryType string
+	Label       string
 	LeftPorts   []uint64
 	RightPorts  []uint64
 }
@@ -104,6 +105,7 @@ type nodeRecord struct {
 	Class string // node class name
 
 	PrimaryType string
+	Label       string
 	Root        bool
 	HasRootPath bool
 
@@ -146,6 +148,7 @@ func (n *nodeRecord) Ports() iter.Seq[uint64] {
 func (n *nodeRecord) InitData() NodeInitData {
 	return NodeInitData{
 		PrimaryType: n.PrimaryType,
+		Label:       n.Label,
 		LeftPorts:   slices.Clone(n.LeftPorts),
 		RightPorts:  slices.Clone(n.RightPorts),
 	}

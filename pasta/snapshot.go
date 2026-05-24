@@ -16,6 +16,7 @@ type WorkspaceSnapshot struct {
 type NodeSnapshot struct {
 	Class       string   `json:"class"`
 	PrimaryType string   `json:"primary_type"`
+	Label       string   `json:"label"`
 	Placeholder bool     `json:"placeholder"`
 	Root        bool     `json:"root"`
 	HasRootPath bool     `json:"has_root_path"`
@@ -122,6 +123,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 	if record.Node == nil {
 		return NodeSnapshot{
 			Class:       record.Class,
+			Label:       record.Label,
 			Placeholder: true,
 			LeftPorts:   slices.Clone(record.LeftPorts),
 			RightPorts:  slices.Clone(record.RightPorts),
@@ -130,6 +132,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 	return NodeSnapshot{
 		Class:       record.Class,
 		PrimaryType: record.PrimaryType,
+		Label:       record.Label,
 		Root:        record.Root,
 		HasRootPath: record.HasRootPath,
 		LeftPorts:   slices.Clone(record.LeftPorts),

@@ -363,7 +363,8 @@ func (w *Workspace) RemoveLink(id uint64) {
 // AddNode adds node to the workspace and returns its workspace-scoped ID.
 //
 // class must be a valid class name. Nodes can configure their primary type
-// from OnInit or later callbacks with SetNodePrimary.
+// and label from OnInit or later callbacks with SetNodePrimary and
+// SetNodeLabel.
 func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
 	return w.AddNodeWithRoot(node, class, false)
 }
@@ -402,6 +403,7 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 		Node:        node,
 		Class:       class,
 		PrimaryType: "",
+		Label:       "",
 		Root:        root,
 		LeftPorts:   []uint64{},
 		RightPorts:  []uint64{},
@@ -462,6 +464,7 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 		Node:        nil,
 		Class:       class,
 		PrimaryType: "",
+		Label:       "",
 		Root:        root,
 		LeftPorts:   []uint64{},
 		RightPorts:  []uint64{},
@@ -483,9 +486,10 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 
 // ReplaceNode replaces the Node implementation in an existing node record.
 //
-// The workspace keeps the node ID, class, primary type, ports, root state, and
-// current root-path status. A successful replacement does not enqueue workspace
-// notifications because the snapshot-observable node state is unchanged.
+// The workspace keeps the node ID, class, primary type, label, ports, root
+// state, and current root-path status. A successful replacement does not
+// enqueue workspace notifications because the snapshot-observable node state is
+// unchanged.
 func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	w.Lock()
 	defer w.Unlock()
@@ -936,6 +940,23 @@ func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
 		return ErrNoNode
 	}
 	record.PrimaryType = typ
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
+// SetNodeLabel sets a node's optional display label.
+func (w *Workspace) SetNodeLabel(id uint64, label string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	record.Label = label
 	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	return nil
 }
