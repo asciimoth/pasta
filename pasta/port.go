@@ -19,7 +19,7 @@ type Port struct {
 	ID        uint64 // must be Workspace scope uinique
 	Node      uint64 // ID of owner node
 
-	Name uint64
+	Name string
 
 	// List of supported link types.
 	// There must be at least one type.

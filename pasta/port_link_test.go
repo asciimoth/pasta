@@ -28,7 +28,7 @@ func TestPortCopyIsDeepCopy(t *testing.T) {
 		Direction: "left",
 		ID:        10,
 		Node:      20,
-		Name:      30,
+		Name:      "input",
 		Types:     []string{"example.com/typeA"},
 		Links:     []uint64{1, 2},
 	}
@@ -44,7 +44,7 @@ func TestPortCopyIsDeepCopy(t *testing.T) {
 		t.Fatalf("original link changed to %d", port.Links[0])
 	}
 	if copied.Name != port.Name {
-		t.Fatalf("copied name = %d, want %d", copied.Name, port.Name)
+		t.Fatalf("copied name = %q, want %q", copied.Name, port.Name)
 	}
 }
 
