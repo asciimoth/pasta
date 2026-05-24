@@ -14,14 +14,15 @@ type WorkspaceSnapshot struct {
 
 // NodeSnapshot is a JSON-serializable copy of node metadata and port IDs.
 type NodeSnapshot struct {
-	Class       string   `json:"class"`
-	PrimaryType string   `json:"primary_type"`
-	Label       string   `json:"label"`
-	Placeholder bool     `json:"placeholder"`
-	Root        bool     `json:"root"`
-	HasRootPath bool     `json:"has_root_path"`
-	LeftPorts   []uint64 `json:"left_ports"`
-	RightPorts  []uint64 `json:"right_ports"`
+	Class       string      `json:"class"`
+	PrimaryType string      `json:"primary_type"`
+	Label       string      `json:"label"`
+	Popups      []NodePopup `json:"popups"`
+	Placeholder bool        `json:"placeholder"`
+	Root        bool        `json:"root"`
+	HasRootPath bool        `json:"has_root_path"`
+	LeftPorts   []uint64    `json:"left_ports"`
+	RightPorts  []uint64    `json:"right_ports"`
 }
 
 // PortSnapshot is a JSON-serializable copy of a port.
@@ -124,6 +125,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 		return NodeSnapshot{
 			Class:       record.Class,
 			Label:       record.Label,
+			Popups:      slices.Clone(record.Popups),
 			Placeholder: true,
 			LeftPorts:   slices.Clone(record.LeftPorts),
 			RightPorts:  slices.Clone(record.RightPorts),
@@ -133,6 +135,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 		Class:       record.Class,
 		PrimaryType: record.PrimaryType,
 		Label:       record.Label,
+		Popups:      slices.Clone(record.Popups),
 		Root:        record.Root,
 		HasRootPath: record.HasRootPath,
 		LeftPorts:   slices.Clone(record.LeftPorts),

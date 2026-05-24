@@ -11,7 +11,40 @@ var (
 	ErrNodePanic = errors.New("node panic")
 	// ErrNoPort reports that a port ID does not exist in the workspace.
 	ErrNoPort = errors.New("port not found")
+	// ErrNodePopupType reports that a node popup type is unsupported.
+	ErrNodePopupType = errors.New("node popup type")
 )
+
+const (
+	// NodePopupInfo marks an informational node popup.
+	NodePopupInfo = "info"
+	// NodePopupWard marks a warning node popup.
+	NodePopupWard = "ward"
+	// NodePopupErr marks an error node popup.
+	NodePopupErr = "err"
+)
+
+// NodePopup is a short user-facing note attached to a node.
+//
+// Popups are intended for node implementations to report user-actionable
+// conditions, such as incorrect node configuration. They are observable
+// workspace state, are included in snapshots, and usually duplicate details
+// written to logs for operators or tests.
+type NodePopup struct {
+	ID   uint64 `json:"id"`
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// ValidateNodePopupType reports whether typ is a supported node popup type.
+func ValidateNodePopupType(typ string) error {
+	switch typ {
+	case NodePopupInfo, NodePopupWard, NodePopupErr:
+		return nil
+	default:
+		return errors.Join(ErrNodePopupType, errors.New(typ))
+	}
+}
 
 // Node receives lifecycle and graph mutation callbacks from a workspace.
 //
@@ -106,6 +139,7 @@ type nodeRecord struct {
 
 	PrimaryType string
 	Label       string
+	Popups      []NodePopup
 	Root        bool
 	HasRootPath bool
 

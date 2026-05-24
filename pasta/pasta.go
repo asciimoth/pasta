@@ -404,6 +404,7 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 		Class:       class,
 		PrimaryType: "",
 		Label:       "",
+		Popups:      []NodePopup{},
 		Root:        root,
 		LeftPorts:   []uint64{},
 		RightPorts:  []uint64{},
@@ -465,6 +466,7 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 		Class:       class,
 		PrimaryType: "",
 		Label:       "",
+		Popups:      []NodePopup{},
 		Root:        root,
 		LeftPorts:   []uint64{},
 		RightPorts:  []uint64{},
@@ -487,9 +489,9 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 // ReplaceNode replaces the Node implementation in an existing node record.
 //
 // The workspace keeps the node ID, class, primary type, label, ports, root
-// state, and current root-path status. A successful replacement does not
-// enqueue workspace notifications because the snapshot-observable node state is
-// unchanged.
+// state, and current root-path status. Existing node popups are cleared before
+// the replacement node starts; any popups added by the replacement are treated
+// as new observable state.
 func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	w.Lock()
 	defer w.Unlock()
@@ -518,6 +520,8 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 
 	wasPlaceholder := record.Node == nil
 	old := record.Node
+	clearedPopups := len(record.Popups) > 0
+	record.Popups = nil
 	restored := record.InitData()
 	nodeStop(old)
 
@@ -590,6 +594,8 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 		w.refreshPlaceholderLinks(id, true)
 		w.recomputeRootPaths(true)
 		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	} else if clearedPopups {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	}
 	return nil
 }
@@ -615,6 +621,7 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 	if old != nil {
 		nodeStop(old)
 	}
+	record.Popups = nil
 	record.Node = nil
 	record.stopped = false
 	added, err := w.addPlaceholderPorts(record, ports)
@@ -958,6 +965,131 @@ func (w *Workspace) SetNodeLabel(id uint64, label string) error {
 	}
 	record.Label = label
 	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
+// AddNodePopup appends a user-facing popup note to a node and returns its ID.
+//
+// Popup types must be NodePopupInfo, NodePopupWard, or NodePopupErr. Popups are
+// intended for node implementations to surface user-actionable state, such as
+// incorrect node configuration, and usually duplicate details written to logs.
+// If deduplicate is true, earlier popups on the same node with the same type
+// and text are removed before the new popup is appended.
+func (w *Workspace) AddNodePopup(id uint64, popupType, text string, deduplicate bool) (uint64, error) {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return 0, ErrWorkspaceClosed
+	}
+	if err := ValidateNodePopupType(popupType); err != nil {
+		return 0, err
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return 0, ErrNoNode
+	}
+	if deduplicate {
+		record.Popups = slices.DeleteFunc(record.Popups, func(popup NodePopup) bool {
+			return popup.Type == popupType && popup.Text == text
+		})
+	}
+	popupID := w.NextID()
+	record.Popups = append(record.Popups, NodePopup{
+		ID:   popupID,
+		Type: popupType,
+		Text: text,
+	})
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return popupID, nil
+}
+
+// RemoveNodePopups removes every popup attached to one node.
+func (w *Workspace) RemoveNodePopups(id uint64) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	if len(record.Popups) == 0 {
+		return nil
+	}
+	record.Popups = nil
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
+// RemoveNodePopup removes one popup from one node by popup ID.
+func (w *Workspace) RemoveNodePopup(id, popupID uint64) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	before := len(record.Popups)
+	record.Popups = slices.DeleteFunc(record.Popups, func(popup NodePopup) bool {
+		return popup.ID == popupID
+	})
+	if len(record.Popups) != before {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
+	return nil
+}
+
+// RemoveNodePopupsByText removes every popup with text from one node.
+func (w *Workspace) RemoveNodePopupsByText(id uint64, text string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	before := len(record.Popups)
+	record.Popups = slices.DeleteFunc(record.Popups, func(popup NodePopup) bool {
+		return popup.Text == text
+	})
+	if len(record.Popups) != before {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
+	return nil
+}
+
+// RemoveNodePopupsByType removes every popup with popupType from one node.
+func (w *Workspace) RemoveNodePopupsByType(id uint64, popupType string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+	if err := ValidateNodePopupType(popupType); err != nil {
+		return err
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	before := len(record.Popups)
+	record.Popups = slices.DeleteFunc(record.Popups, func(popup NodePopup) bool {
+		return popup.Type == popupType
+	})
+	if len(record.Popups) != before {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
 	return nil
 }
 

@@ -542,6 +542,155 @@ func TestWorkspaceNodeLabelSnapshots(t *testing.T) {
 	}
 }
 
+func TestWorkspaceNodePopupSnapshotsAndMutations(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeAID, err := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(&workspaceNode{}, "example.com/NodeB")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	infoA, err := w.AddNodePopup(nodeAID, pasta.NodePopupInfo, "configure input", false)
+	if err != nil {
+		t.Fatalf("AddNodePopup info: %v", err)
+	}
+	wardA, err := w.AddNodePopup(nodeAID, pasta.NodePopupWard, "unstable input", false)
+	if err != nil {
+		t.Fatalf("AddNodePopup ward: %v", err)
+	}
+	infoADedup, err := w.AddNodePopup(nodeAID, pasta.NodePopupInfo, "configure input", true)
+	if err != nil {
+		t.Fatalf("AddNodePopup dedup: %v", err)
+	}
+	if infoADedup == infoA {
+		t.Fatalf("deduplicated popup reused id %d", infoADedup)
+	}
+	errB, err := w.AddNodePopup(nodeBID, pasta.NodePopupErr, "configure input", false)
+	if err != nil {
+		t.Fatalf("AddNodePopup err: %v", err)
+	}
+	if err := w.SetNodePrimary(nodeAID, "example.com/typeA"); err != nil {
+		t.Fatalf("SetNodePrimary: %v", err)
+	}
+
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeAID: {
+				Class:       "example.com/NodeA",
+				PrimaryType: "example.com/typeA",
+				Popups: []pasta.NodePopup{
+					{ID: wardA, Type: pasta.NodePopupWard, Text: "unstable input"},
+					{ID: infoADedup, Type: pasta.NodePopupInfo, Text: "configure input"},
+				},
+			},
+			nodeBID: {
+				Class: "example.com/NodeB",
+				Popups: []pasta.NodePopup{
+					{ID: errB, Type: pasta.NodePopupErr, Text: "configure input"},
+				},
+			},
+		},
+	})
+	assertNotificationMatches(t, notifications, []notificationMatch{
+		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
+		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
+		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
+		{kind: pasta.NotificationNodeUpdated, id: nodeBID},
+		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
+	})
+	if got := notifications[2].Node.Popups; !reflect.DeepEqual(got, []pasta.NodePopup{{ID: wardA, Type: pasta.NodePopupWard, Text: "unstable input"}, {ID: infoADedup, Type: pasta.NodePopupInfo, Text: "configure input"}}) {
+		t.Fatalf("deduplicated notification popups = %#v", got)
+	}
+
+	if err := w.RemoveNodePopup(nodeAID, errB); err != nil {
+		t.Fatalf("RemoveNodePopup wrong node: %v", err)
+	}
+	if err := w.RemoveNodePopup(nodeAID, wardA); err != nil {
+		t.Fatalf("RemoveNodePopup(%d): %v", wardA, err)
+	}
+	if err := w.RemoveNodePopup(nodeAID, wardA); err != nil {
+		t.Fatalf("second RemoveNodePopup(%d): %v", wardA, err)
+	}
+	if err := w.RemoveNodePopupsByText(nodeAID, "configure input"); err != nil {
+		t.Fatalf("RemoveNodePopupsByText node A: %v", err)
+	}
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeAID: {Class: "example.com/NodeA", PrimaryType: "example.com/typeA"},
+			nodeBID: {
+				Class: "example.com/NodeB",
+				Popups: []pasta.NodePopup{
+					{ID: errB, Type: pasta.NodePopupErr, Text: "configure input"},
+				},
+			},
+		},
+	})
+	if err := w.RemoveNodePopupsByText(nodeBID, "configure input"); err != nil {
+		t.Fatalf("RemoveNodePopupsByText node B: %v", err)
+	}
+
+	wardA, err = w.AddNodePopup(nodeAID, pasta.NodePopupWard, "late", false)
+	if err != nil {
+		t.Fatalf("AddNodePopup late A: %v", err)
+	}
+	wardB, err := w.AddNodePopup(nodeBID, pasta.NodePopupWard, "late", false)
+	if err != nil {
+		t.Fatalf("AddNodePopup late B: %v", err)
+	}
+	if err := w.RemoveNodePopupsByType(nodeAID, pasta.NodePopupWard); err != nil {
+		t.Fatalf("RemoveNodePopupsByType: %v", err)
+	}
+	if err := w.RemoveNodePopup(nodeAID, wardA); err != nil {
+		t.Fatalf("RemoveNodePopup(%d) after type removal: %v", wardA, err)
+	}
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeAID: {Class: "example.com/NodeA", PrimaryType: "example.com/typeA"},
+			nodeBID: {
+				Class: "example.com/NodeB",
+				Popups: []pasta.NodePopup{
+					{ID: wardB, Type: pasta.NodePopupWard, Text: "late"},
+				},
+			},
+		},
+	})
+	if err := w.RemoveNodePopups(nodeBID); err != nil {
+		t.Fatalf("RemoveNodePopups empty: %v", err)
+	}
+
+	if _, err := w.AddNodePopup(nodeAID, "warn", "bad type", false); !errors.Is(err, pasta.ErrNodePopupType) {
+		t.Fatalf("AddNodePopup invalid type error = %v, want %v", err, pasta.ErrNodePopupType)
+	}
+	if _, err := w.AddNodePopup(999, pasta.NodePopupInfo, "missing", false); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("AddNodePopup missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.RemoveNodePopups(999); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("RemoveNodePopups missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.RemoveNodePopup(999, wardA); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("RemoveNodePopup missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.RemoveNodePopupsByText(999, "missing"); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("RemoveNodePopupsByText missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.RemoveNodePopupsByType(nodeAID, "warn"); !errors.Is(err, pasta.ErrNodePopupType) {
+		t.Fatalf("RemoveNodePopupsByType invalid type error = %v, want %v", err, pasta.ErrNodePopupType)
+	}
+	if err := w.RemoveNodePopupsByType(999, pasta.NodePopupInfo); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("RemoveNodePopupsByType missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+}
+
 func TestWorkspaceTracksRootPaths(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -690,6 +839,58 @@ func TestWorkspaceReplaceNodePreservesRecordState(t *testing.T) {
 	if len(notifications) != 0 {
 		t.Fatalf("replacement emitted notifications: %#v", notifications)
 	}
+}
+
+func TestWorkspaceReplaceNodeClearsPopupsAndNotifies(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	if _, err := w.AddNodePopup(nodeID, pasta.NodePopupErr, "old implementation", false); err != nil {
+		t.Fatalf("AddNodePopup: %v", err)
+	}
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	replacement := &workspaceNode{}
+	if err := w.ReplaceNode(nodeID, replacement); err != nil {
+		t.Fatalf("ReplaceNode: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Popups; len(got) != 0 {
+		t.Fatalf("popups after ReplaceNode = %#v, want empty", got)
+	}
+	assertNotificationMatches(t, notifications, []notificationMatch{
+		{kind: pasta.NotificationNodeUpdated, id: nodeID},
+	})
+
+	if _, err := w.AddNodePopup(nodeID, pasta.NodePopupWard, "placeholder warning", false); err != nil {
+		t.Fatalf("AddNodePopup before placeholder: %v", err)
+	}
+	notifications = nil
+	if err := w.ReplaceNodeWithPlaceholder(nodeID, nil); err != nil {
+		t.Fatalf("ReplaceNodeWithPlaceholder: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Popups; len(got) != 0 {
+		t.Fatalf("popups after ReplaceNodeWithPlaceholder = %#v, want empty", got)
+	}
+	assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
+
+	if _, err := w.AddNodePopup(nodeID, pasta.NodePopupInfo, "placeholder info", false); err != nil {
+		t.Fatalf("AddNodePopup on placeholder: %v", err)
+	}
+	notifications = nil
+	if err := w.ReplacePlaceholderNode(nodeID, &workspaceNode{}); err != nil {
+		t.Fatalf("ReplacePlaceholderNode: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Popups; len(got) != 0 {
+		t.Fatalf("popups after ReplacePlaceholderNode = %#v, want empty", got)
+	}
+	assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
 }
 
 func TestWorkspaceReplaceNodeRejectsMissingAndDuplicateNodes(t *testing.T) {
@@ -1112,6 +1313,21 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	if err := w.SetNodeLabel(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeLabel after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
+	if _, err := w.AddNodePopup(nodeAID, pasta.NodePopupInfo, "closed", false); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddNodePopup after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodePopups(nodeAID); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodePopups after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodePopupsByType(nodeAID, pasta.NodePopupInfo); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodePopupsByType after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodePopup(nodeAID, 1); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodePopup after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodePopupsByText(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodePopupsByText after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
 	if err := w.SetNodeRoot(nodeAID, true); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeRoot after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
@@ -1305,6 +1521,7 @@ func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {
 	return a.Class == b.Class &&
 		a.PrimaryType == b.PrimaryType &&
 		a.Label == b.Label &&
+		reflect.DeepEqual(emptyPopupsIfNil(a.Popups), emptyPopupsIfNil(b.Popups)) &&
 		a.Placeholder == b.Placeholder &&
 		a.Root == b.Root &&
 		a.HasRootPath == b.HasRootPath &&
@@ -1330,6 +1547,13 @@ func emptyIfNil(values []uint64) []uint64 {
 func emptyStringsIfNil(values []string) []string {
 	if values == nil {
 		return []string{}
+	}
+	return values
+}
+
+func emptyPopupsIfNil(values []pasta.NodePopup) []pasta.NodePopup {
+	if values == nil {
+		return []pasta.NodePopup{}
 	}
 	return values
 }
