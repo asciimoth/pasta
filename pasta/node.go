@@ -90,7 +90,9 @@ type Node interface {
 
 	// PreLinkAdd is called before a link is added to one of this node's ports.
 	//
-	// Returning a non-nil error rejects the link.
+	// Returning a non-nil error rejects the link. Rejections are ordinary
+	// validation decisions, not node failures. A panic is still treated as a
+	// node failure by the workspace.
 	PreLinkAdd(
 		port uint64,
 		linkType, portDirection string,

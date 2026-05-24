@@ -15,6 +15,8 @@ type workspaceNode struct {
 	l           pasta.Logger
 	initPrimary string
 	initLabel   string
+	failOn      map[string]error
+	panicOn     map[string]bool
 	rootStatus  []bool
 	initData    *pasta.NodeInitData
 	readyCount  int
@@ -38,18 +40,18 @@ func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, cl
 	if n.initLabel != "" {
 		return w.SetNodeLabel(id, n.initLabel)
 	}
-	return nil
+	return n.maybeFail("OnInit")
 }
 
 func (n *workspaceNode) OnReady() error {
 	n.readyCount += 1
 	n.l.Debug("ready")
-	return nil
+	return n.maybeFail("OnReady")
 }
 
 func (n *workspaceNode) OnRootStatus(hasRootPath bool) error {
 	n.rootStatus = append(n.rootStatus, hasRootPath)
-	return nil
+	return n.maybeFail("OnRootStatus")
 }
 
 func (n *workspaceNode) OnStop() {
@@ -59,37 +61,47 @@ func (n *workspaceNode) OnStop() {
 
 func (n *workspaceNode) OnPortAdd(port uint64, direction string, types []string) error {
 	n.l.Debugf("port add port=%d direction=%s types=%v", port, direction, types)
-	return nil
+	return n.maybeFail("OnPortAdd")
 }
 
 func (n *workspaceNode) OnPortRemoved(port uint64, direction string) error {
 	n.l.Debugf("port removed port=%d direction=%s", port, direction)
-	return nil
+	return n.maybeFail("OnPortRemoved")
 }
 
 func (n *workspaceNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	n.l.Debugf("pre link add port=%d type=%s direction=%s", port, linkType, portDirection)
-	return nil
+	return n.maybeFail("PreLinkAdd")
 }
 
 func (n *workspaceNode) OnLinkAdd(link, port uint64, linkType, portDirection string) error {
 	n.l.Debugf("link add link=%d port=%d type=%s direction=%s", link, port, linkType, portDirection)
-	return nil
+	return n.maybeFail("OnLinkAdd")
 }
 
 func (n *workspaceNode) OnLinkRemoved(link, port uint64, linkType, portDirection string) error {
 	n.l.Debugf("link removed link=%d port=%d type=%s direction=%s", link, port, linkType, portDirection)
-	return nil
+	return n.maybeFail("OnLinkRemoved")
 }
 
 func (n *workspaceNode) OnEvent(event pasta.Event, linkType string, receiverPortTypes []string, receiverPortDirection string) error {
 	n.l.Debugf("event sender=%d:%d receiver=%d:%d type=%s receiver_types=%v receiver_direction=%s payload=%v", event.SenderNode, event.SenderPort, event.ReceiverNode, event.ReceiverPort, linkType, receiverPortTypes, receiverPortDirection, event.Payload)
-	return nil
+	return n.maybeFail("OnEvent")
 }
 
 func (n *workspaceNode) OnInbox(message pasta.InboxMessage) error {
 	n.l.Debugf("inbox receiver=%d payload=%v", message.ReceiverNode, message.Payload)
-	return nil
+	return n.maybeFail("OnInbox")
+}
+
+func (n *workspaceNode) maybeFail(callback string) error {
+	if n.panicOn != nil && n.panicOn[callback] {
+		panic(callback)
+	}
+	if n.failOn == nil {
+		return nil
+	}
+	return n.failOn[callback]
 }
 
 func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
@@ -689,6 +701,221 @@ func TestWorkspaceNodePopupSnapshotsAndMutations(t *testing.T) {
 	if err := w.RemoveNodePopupsByType(999, pasta.NodePopupInfo); !errors.Is(err, pasta.ErrNoNode) {
 		t.Fatalf("RemoveNodePopupsByType missing node error = %v, want %v", err, pasta.ErrNoNode)
 	}
+}
+
+func TestWorkspaceNodeCallbackFailuresBecomePlaceholders(t *testing.T) {
+	failErr := errors.New("boom")
+
+	t.Run("OnInit", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnInit": failErr}}
+
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if !errors.Is(err, failErr) {
+			t.Fatalf("AddNode error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnInit", "boom")
+		if node.stopCount != 1 {
+			t.Fatalf("stop count = %d, want 1", node.stopCount)
+		}
+	})
+
+	t.Run("OnReady", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnReady": failErr}}
+
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if !errors.Is(err, failErr) {
+			t.Fatalf("AddNode error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnReady", "boom")
+		if node.stopCount != 1 {
+			t.Fatalf("stop count = %d, want 1", node.stopCount)
+		}
+	})
+
+	t.Run("OnReady panic", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{panicOn: map[string]bool{"OnReady": true}}
+
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if !errors.Is(err, pasta.ErrNodePanic) {
+			t.Fatalf("AddNode error = %v, want %v", err, pasta.ErrNodePanic)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnReady", "node panic")
+		if node.stopCount != 1 {
+			t.Fatalf("stop count = %d, want 1", node.stopCount)
+		}
+	})
+
+	t.Run("OnRootStatus", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnRootStatus": failErr}}
+
+		nodeID, err := w.AddRootNode(node, "example.com/Node")
+		if !errors.Is(err, failErr) {
+			t.Fatalf("AddRootNode error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnRootStatus", "boom")
+		if node.stopCount != 1 {
+			t.Fatalf("stop count = %d, want 1", node.stopCount)
+		}
+	})
+
+	t.Run("OnPortAdd", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnPortAdd": failErr}}
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		addOldPopup(t, w, nodeID)
+
+		if _, err := w.AddPort(pasta.Port{Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}}); !errors.Is(err, failErr) {
+			t.Fatalf("AddPort error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnPortAdd", "boom")
+	})
+
+	t.Run("OnPortRemoved", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{}
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		port := mustAddPort(t, w, nodeID, "left", "example.com/typeA")
+		addOldPopup(t, w, nodeID)
+		node.failOn = map[string]error{"OnPortRemoved": failErr}
+
+		w.RemovePort(port)
+		assertFailedPlaceholder(t, w, nodeID, "OnPortRemoved", "boom")
+	})
+
+	t.Run("PreLinkAdd panic", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		leftID, rightID, leftPort, rightPort := addLinkedPairNodes(t, w, &workspaceNode{panicOn: map[string]bool{"PreLinkAdd": true}}, &workspaceNode{})
+		addOldPopup(t, w, leftID)
+
+		if _, _, err := w.AddLink(leftPort, rightPort); !errors.Is(err, pasta.ErrNodePanic) {
+			t.Fatalf("AddLink error = %v, want %v", err, pasta.ErrNodePanic)
+		}
+		assertFailedPlaceholder(t, w, leftID, "PreLinkAdd", "node panic")
+		assertLiveNode(t, w, rightID)
+	})
+
+	t.Run("PreLinkAdd rejection", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		leftID, rightID, leftPort, rightPort := addLinkedPairNodes(t, w, &workspaceNode{failOn: map[string]error{"PreLinkAdd": failErr}}, &workspaceNode{})
+		popupID := addOldPopup(t, w, leftID)
+
+		if _, _, err := w.AddLink(leftPort, rightPort); !errors.Is(err, failErr) {
+			t.Fatalf("AddLink error = %v, want %v", err, failErr)
+		}
+		assertLiveNode(t, w, leftID)
+		assertLiveNode(t, w, rightID)
+		if got := w.Snapshot().Nodes[leftID].Popups; !reflect.DeepEqual(got, []pasta.NodePopup{{ID: popupID, Type: pasta.NodePopupInfo, Text: "old popup"}}) {
+			t.Fatalf("popups after rejection = %#v, want old popup preserved", got)
+		}
+	})
+
+	t.Run("OnLinkAdd", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		leftID, _, leftPort, rightPort := addLinkedPairNodes(t, w, &workspaceNode{failOn: map[string]error{"OnLinkAdd": failErr}}, &workspaceNode{})
+		addOldPopup(t, w, leftID)
+
+		if _, _, err := w.AddLink(leftPort, rightPort); !errors.Is(err, failErr) {
+			t.Fatalf("AddLink error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, leftID, "OnLinkAdd", "boom")
+	})
+
+	t.Run("OnLinkRemoved", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		left := &workspaceNode{}
+		leftID, _, leftPort, rightPort := addLinkedPairNodes(t, w, left, &workspaceNode{})
+		link, _, err := w.AddLink(leftPort, rightPort)
+		if err != nil {
+			t.Fatalf("AddLink: %v", err)
+		}
+		addOldPopup(t, w, leftID)
+		left.failOn = map[string]error{"OnLinkRemoved": failErr}
+
+		w.RemoveLink(link)
+		assertFailedPlaceholder(t, w, leftID, "OnLinkRemoved", "boom")
+	})
+
+	t.Run("OnEvent", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		receiver := &workspaceNode{failOn: map[string]error{"OnEvent": failErr}}
+		senderID, receiverID, senderPort, receiverPort := addLinkedPairNodes(t, w, &workspaceNode{}, receiver)
+		if _, _, err := w.AddLink(senderPort, receiverPort); err != nil {
+			t.Fatalf("AddLink: %v", err)
+		}
+		addOldPopup(t, w, receiverID)
+
+		w.SendEvent(pasta.Event{SenderNode: senderID, SenderPort: senderPort, ReceiverNode: receiverID, ReceiverPort: receiverPort, Payload: "payload"})
+		assertFailedPlaceholder(t, w, receiverID, "OnEvent", "boom")
+	})
+
+	t.Run("OnInbox", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnInbox": failErr}}
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		addOldPopup(t, w, nodeID)
+
+		var notifications []pasta.WorkspaceNotification
+		w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+			notifications = append(notifications, notification)
+		})
+		notifications = nil
+
+		w.SendInbox(pasta.InboxMessage{ReceiverNode: nodeID, Payload: "payload"})
+		assertFailedPlaceholder(t, w, nodeID, "OnInbox", "boom")
+		assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
+		if got := notifications[len(notifications)-1].Node.Popups; len(got) != 1 || got[0].Type != pasta.NodePopupErr {
+			t.Fatalf("failure notification popups = %#v, want one error popup", got)
+		}
+	})
+}
+
+func TestWorkspaceReplaceNodeFailuresBecomePlaceholders(t *testing.T) {
+	failErr := errors.New("replace boom")
+
+	for _, callback := range []string{"OnInit", "OnReady"} {
+		t.Run(callback, func(t *testing.T) {
+			w := pasta.NewWorkspace(&StringLoggerFactory{})
+			nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+			if err != nil {
+				t.Fatalf("AddNode: %v", err)
+			}
+			addOldPopup(t, w, nodeID)
+
+			err = w.ReplaceNode(nodeID, &workspaceNode{failOn: map[string]error{callback: failErr}})
+			if !errors.Is(err, failErr) {
+				t.Fatalf("ReplaceNode error = %v, want %v", err, failErr)
+			}
+			assertFailedPlaceholder(t, w, nodeID, callback, "replace boom")
+		})
+	}
+
+	t.Run("OnRootStatus", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		nodeID, err := w.AddRootNode(&workspaceNode{}, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddRootNode: %v", err)
+		}
+		addOldPopup(t, w, nodeID)
+
+		err = w.ReplaceNode(nodeID, &workspaceNode{failOn: map[string]error{"OnRootStatus": failErr}})
+		if !errors.Is(err, failErr) {
+			t.Fatalf("ReplaceNode error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnRootStatus", "replace boom")
+	})
 }
 
 func TestWorkspaceTracksRootPaths(t *testing.T) {
@@ -1485,6 +1712,66 @@ func assertHasNotification(t *testing.T, notifications []pasta.WorkspaceNotifica
 		}
 	}
 	t.Fatalf("missing notification {%q, %d} in %#v", kind, id, notifications)
+}
+
+func assertFailedPlaceholder(t *testing.T, w *pasta.Workspace, nodeID uint64, callback, reason string) {
+	t.Helper()
+
+	snapshot, ok := w.NodeSnapshot(nodeID)
+	if !ok {
+		t.Fatalf("NodeSnapshot(%d) returned false", nodeID)
+	}
+	if !snapshot.Placeholder {
+		t.Fatalf("node %d snapshot = %#v, want placeholder", nodeID, snapshot)
+	}
+	if len(snapshot.Popups) != 1 {
+		t.Fatalf("node %d popups = %#v, want one failure popup", nodeID, snapshot.Popups)
+	}
+	popup := snapshot.Popups[0]
+	if popup.Type != pasta.NodePopupErr {
+		t.Fatalf("failure popup type = %q, want %q", popup.Type, pasta.NodePopupErr)
+	}
+	if !strings.Contains(popup.Text, callback) || !strings.Contains(popup.Text, reason) {
+		t.Fatalf("failure popup text = %q, want callback %q and reason %q", popup.Text, callback, reason)
+	}
+}
+
+func assertLiveNode(t *testing.T, w *pasta.Workspace, nodeID uint64) {
+	t.Helper()
+
+	snapshot, ok := w.NodeSnapshot(nodeID)
+	if !ok {
+		t.Fatalf("NodeSnapshot(%d) returned false", nodeID)
+	}
+	if snapshot.Placeholder {
+		t.Fatalf("node %d snapshot = %#v, want live node", nodeID, snapshot)
+	}
+}
+
+func addOldPopup(t *testing.T, w *pasta.Workspace, nodeID uint64) uint64 {
+	t.Helper()
+
+	popupID, err := w.AddNodePopup(nodeID, pasta.NodePopupInfo, "old popup", false)
+	if err != nil {
+		t.Fatalf("AddNodePopup old: %v", err)
+	}
+	return popupID
+}
+
+func addLinkedPairNodes(t *testing.T, w *pasta.Workspace, left, right *workspaceNode) (uint64, uint64, uint64, uint64) {
+	t.Helper()
+
+	leftID, err := w.AddNode(left, "example.com/Left")
+	if err != nil {
+		t.Fatalf("AddNode left: %v", err)
+	}
+	rightID, err := w.AddNode(right, "example.com/Right")
+	if err != nil {
+		t.Fatalf("AddNode right: %v", err)
+	}
+	leftPort := mustAddPort(t, w, leftID, "left", "example.com/typeA")
+	rightPort := mustAddPort(t, w, rightID, "right", "example.com/typeA")
+	return leftID, rightID, leftPort, rightPort
 }
 
 func assertJSONSerializable(t *testing.T, value any) {

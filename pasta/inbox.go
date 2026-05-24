@@ -34,8 +34,6 @@ func (w *Workspace) deliverInbox(message InboxMessage) {
 
 	if err := receiver.OnInbox(message); err != nil {
 		w.log.Debugf("node %d faled in OnInbox", receiver.ID)
-		w.AddPendingOp(func() {
-			w.RemoveNode(receiver.ID)
-		})
+		w.failNodeLocked(receiver.ID, "OnInbox", err, true, true)
 	}
 }

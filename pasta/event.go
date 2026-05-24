@@ -65,8 +65,6 @@ func (w *Workspace) deliverEvent(event Event) {
 		receiverPort.Direction,
 	); err != nil {
 		w.log.Debugf("node %d faled in OnEvent", receiver.ID)
-		w.AddPendingOp(func() {
-			w.RemoveNode(receiver.ID)
-		})
+		w.failNodeLocked(receiver.ID, "OnEvent", err, true, true)
 	}
 }

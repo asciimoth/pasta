@@ -2,6 +2,7 @@ package pasta
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/asciimoth/badlock"
@@ -115,10 +116,8 @@ func (w *Workspace) Ready() {
 	// Notify nodes.
 	for pair := w.nodes.Newest(); pair != nil; pair = pair.Prev() {
 		if err := pair.Value.OnReady(); err != nil {
-			// Remove node on panic
-			w.AddPendingOp(func() {
-				w.RemoveNode(pair.Key)
-			})
+			w.log.Debugf("node %d faled in OnReady", pair.Key)
+			w.failNodeLocked(pair.Key, "OnReady", err, true, false)
 		}
 	}
 	w.recomputeRootPaths(true)
@@ -221,6 +220,38 @@ func (w *Workspace) RemoveNode(id uint64) {
 
 	w.log.Debug("removed node", id)
 	w.enqueueNodeNotification(NotificationNodeRemoved, id, removed)
+}
+
+func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, notify bool, recompute bool) bool {
+	record, present := w.nodes.Get(id)
+	if w.closed || !present || record == nil || record.Node == nil {
+		return false
+	}
+
+	nodeStop(record.Node)
+	record.Node = nil
+	record.stopped = false
+	record.Popups = []NodePopup{{
+		ID:   w.NextID(),
+		Type: NodePopupErr,
+		Text: nodeFailureText(callback, cause),
+	}}
+	w.deactivateNodeLinks(record)
+	w.refreshPlaceholderLinks(id, notify)
+	if recompute {
+		w.recomputeRootPaths(notify)
+	}
+	if notify {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
+	return true
+}
+
+func nodeFailureText(callback string, cause error) string {
+	if cause == nil {
+		return fmt.Sprintf("%s failed", callback)
+	}
+	return fmt.Sprintf("%s failed: %v", callback, cause)
 }
 
 // NodesByClass returns IDs of all nodes with class.
@@ -414,24 +445,27 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 	w.nodes.Set(id, &rec)
 
 	if err := rec.OnInit(w, nil); err != nil {
-		w.RemoveNode(id)
-		return 0, err
+		w.log.Debugf("node %d faled in OnInit", id)
+		w.failNodeLocked(id, "OnInit", err, false, false)
+		w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
+		return id, err
 	}
 
 	if w.isReady {
 		if err := rec.OnReady(); err != nil {
-			w.RemoveNode(id)
 			w.log.Debugf("node %d faled in OnReady", id)
-			return 0, err
+			w.failNodeLocked(id, "OnReady", err, false, false)
+			w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
+			return id, err
 		}
 		if failed := w.recomputeRootPaths(false); len(failed) > 0 {
 			err := failed[id]
 			if err == nil {
 				err = ErrNodePanic
 			}
-			w.RemoveNode(id)
 			w.log.Debugf("node %d faled in OnRootStatus", id)
-			return 0, err
+			w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
+			return id, err
 		}
 	}
 
@@ -528,24 +562,14 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	record.Node = node
 	record.stopped = false
 	if err := record.OnInit(w, &restored); err != nil {
-		if wasPlaceholder {
-			record.Node = nil
-			record.stopped = false
-		} else {
-			w.RemoveNode(id)
-		}
+		w.log.Debugf("node %d faled in OnInit", id)
+		w.failNodeLocked(id, "OnInit", err, true, true)
 		return err
 	}
 	if w.isReady {
 		if err := record.OnReady(); err != nil {
-			if wasPlaceholder {
-				nodeStop(record.Node)
-				record.Node = nil
-				record.stopped = false
-			} else {
-				w.RemoveNode(id)
-			}
 			w.log.Debugf("node %d faled in OnReady", id)
+			w.failNodeLocked(id, "OnReady", err, true, true)
 			return err
 		}
 		if wasPlaceholder {
@@ -584,8 +608,8 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 			}
 		} else {
 			if err := record.OnRootStatus(record.HasRootPath); err != nil {
-				w.RemoveNode(id)
 				w.log.Debugf("node %d faled in OnRootStatus", id)
+				w.failNodeLocked(id, "OnRootStatus", err, true, true)
 				return err
 			}
 		}
@@ -672,11 +696,9 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 	w.ports.Set(id, &port)
 
 	if err := record.OnPortAdd(port.ID, port.Direction, port.CopyTypes()); err != nil {
-		w.log.Debugf("node %d faled in OnReady", record.ID)
+		w.log.Debugf("node %d faled in OnPortAdd", record.ID)
 		w.ports.Delete(port.ID)
-		w.AddPendingOp(func() {
-			w.RemoveNode(record.ID)
-		})
+		w.failNodeLocked(record.ID, "OnPortAdd", err, true, true)
 		return 0, err
 	}
 
@@ -697,8 +719,9 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 //
 // The ports must exist, belong to different nodes, have opposite directions,
 // share a usable type, and preserve the workspace DAG. If either node rejects
-// the link or panics during PreLinkAdd, no link is added. If a node panics or
-// returns an error during OnLinkAdd, that node is scheduled for removal.
+// the link from PreLinkAdd, no link is added and the node remains active. If a
+// node panics during PreLinkAdd, or panics or returns an error during
+// OnLinkAdd, that node is replaced with a placeholder carrying an error popup.
 func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	w.Lock()
 	defer w.Unlock()
@@ -760,9 +783,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		if rejection != nil {
 			if errors.Is(rejection, ErrNodePanic) {
 				w.log.Debugf("node %d faled in PreLinkAdd", leftNode.ID)
-				w.AddPendingOp(func() {
-					w.RemoveNode(leftNode.ID)
-				})
+				w.failNodeLocked(leftNode.ID, "PreLinkAdd", rejection, true, true)
 			}
 			return 0, "", rejection
 		}
@@ -770,9 +791,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		if rejection != nil {
 			if errors.Is(rejection, ErrNodePanic) {
 				w.log.Debugf("node %d faled in PreLinkAdd", rightNode.ID)
-				w.AddPendingOp(func() {
-					w.RemoveNode(rightNode.ID)
-				})
+				w.failNodeLocked(rightNode.ID, "PreLinkAdd", rejection, true, true)
 			}
 			return 0, "", rejection
 		}
@@ -801,18 +820,14 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		if err != nil {
 			w.links.Delete(link.ID)
 			w.log.Debugf("node %d faled in OnLinkAdd", leftNode.ID)
-			w.AddPendingOp(func() {
-				w.RemoveNode(leftNode.ID)
-			})
+			w.failNodeLocked(leftNode.ID, "OnLinkAdd", err, true, true)
 			return 0, "", err
 		}
 		err = rightNode.OnLinkAdd(link.ID, Right.ID, link.Type, Right.Direction)
 		if err != nil {
 			w.links.Delete(link.ID)
 			w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
-			w.AddPendingOp(func() {
-				w.RemoveNode(rightNode.ID)
-			})
+			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
 			w.nodeEvLinkRemoved(leftNode.ID, link.ID, Left.ID, link.Type, Left.Direction)
 			return 0, "", err
 		}
@@ -1244,7 +1259,7 @@ func (w *Workspace) verifyDAG() bool {
 //
 // Links are treated as undirected for this purpose. When notify is true,
 // changed node snapshots are enqueued. The return value contains nodes whose
-// OnRootStatus callback failed and were scheduled for removal.
+// OnRootStatus callback failed and were replaced with placeholders.
 func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 	if !w.isReady {
 		return nil
@@ -1317,10 +1332,7 @@ func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 		if err := record.OnRootStatus(hasRootPath); err != nil {
 			w.log.Debugf("node %d faled in OnRootStatus", record.ID)
 			failed[record.ID] = err
-			nodeID := record.ID
-			w.AddPendingOp(func() {
-				w.RemoveNode(nodeID)
-			})
+			w.failNodeLocked(record.ID, "OnRootStatus", err, notify, false)
 		}
 	}
 	if len(failed) == 0 {
@@ -1458,24 +1470,16 @@ func (w *Workspace) activatePlaceholderLinks(record *nodeRecord) map[uint64]erro
 		}
 		if err := leftNode.PreLinkAdd(link.LeftPort, link.Type, "left"); err != nil {
 			if errors.Is(err, ErrNodePanic) {
-				nodeID := leftNode.ID
-				if nodeID != record.ID {
-					w.AddPendingOp(func() {
-						w.RemoveNode(nodeID)
-					})
-				}
+				w.log.Debugf("node %d faled in PreLinkAdd", leftNode.ID)
+				w.failNodeLocked(leftNode.ID, "PreLinkAdd", err, true, true)
 			}
 			failed[leftNode.ID] = err
 			return failed
 		}
 		if err := rightNode.PreLinkAdd(link.RightPort, link.Type, "right"); err != nil {
 			if errors.Is(err, ErrNodePanic) {
-				nodeID := rightNode.ID
-				if nodeID != record.ID {
-					w.AddPendingOp(func() {
-						w.RemoveNode(nodeID)
-					})
-				}
+				w.log.Debugf("node %d faled in PreLinkAdd", rightNode.ID)
+				w.failNodeLocked(rightNode.ID, "PreLinkAdd", err, true, true)
 			}
 			failed[rightNode.ID] = err
 			return failed
@@ -1496,26 +1500,14 @@ func (w *Workspace) notifyActivatedPlaceholderLinks(record *nodeRecord) map[uint
 			continue
 		}
 		if err := leftNode.OnLinkAdd(link.ID, link.LeftPort, link.Type, "left"); err != nil {
-			if errors.Is(err, ErrNodePanic) {
-				nodeID := leftNode.ID
-				if nodeID != record.ID {
-					w.AddPendingOp(func() {
-						w.RemoveNode(nodeID)
-					})
-				}
-			}
+			w.log.Debugf("node %d faled in OnLinkAdd", leftNode.ID)
+			w.failNodeLocked(leftNode.ID, "OnLinkAdd", err, true, true)
 			failed[leftNode.ID] = err
 			return failed
 		}
 		if err := rightNode.OnLinkAdd(link.ID, link.RightPort, link.Type, "right"); err != nil {
-			if errors.Is(err, ErrNodePanic) {
-				nodeID := rightNode.ID
-				if nodeID != record.ID {
-					w.AddPendingOp(func() {
-						w.RemoveNode(nodeID)
-					})
-				}
-			}
+			w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
+			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
 			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left")
 			failed[rightNode.ID] = err
 			return failed
@@ -1640,29 +1632,10 @@ func (w *Workspace) nodeEvPortRemoved(
 		record.RemovePort(port)
 		if err := record.OnPortRemoved(port, direction); err != nil {
 			w.log.Debugf("node %d faled in OnPortRemoved", nodeID)
-			w.AddPendingOp(func() {
-				w.RemoveNode(nodeID)
-			})
+			w.failNodeLocked(nodeID, "OnPortRemoved", err, true, true)
 		}
 	}
 }
-
-// func (w *Workspace) nodeEvPortAdd(
-// 	nodeID uint64,
-// 	port uint64,
-// 	direction string,
-// 	types []string,
-// ) {
-// 	record, present := w.nodes.Get(nodeID)
-// 	if present && record != nil {
-// 		if err := record.OnPortAdd(port, direction, types); err != nil {
-// 			w.log.Debugf("node %d faled in OnPortAdd", nodeID)
-// 			w.AddPendingOp(func() {
-// 				w.RemoveNode(nodeID)
-// 			})
-// 		}
-// 	}
-// }
 
 func (w *Workspace) nodeEvLinkRemoved(
 	nodeID uint64,
@@ -1673,9 +1646,7 @@ func (w *Workspace) nodeEvLinkRemoved(
 	if present && record != nil {
 		if err := record.OnLinkRemoved(link, port, linkType, portDirection); err != nil {
 			w.log.Debugf("node %d faled in OnLinkRemoved", nodeID)
-			w.AddPendingOp(func() {
-				w.RemoveNode(nodeID)
-			})
+			w.failNodeLocked(nodeID, "OnLinkRemoved", err, true, true)
 		}
 	}
 }
