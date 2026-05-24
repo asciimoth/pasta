@@ -26,6 +26,10 @@ type Port struct {
 
 	// List of supported link types.
 	// There must be at least one type.
+	//
+	// AnyType can be used as a wildcard placeholder type. Node implementations
+	// should generally allow attached AnyType links and ignore them when they
+	// have no specific handling.
 	Types []string
 
 	Links []uint64

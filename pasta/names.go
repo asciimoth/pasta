@@ -12,6 +12,17 @@ var (
 	ErrTypeName = errors.New("invalid type name")
 )
 
+const (
+	// AnyType is a wildcard port and link type.
+	//
+	// Ports with this type can link to any other port regardless of its type
+	// list. Node implementations should generally allow attached AnyType links
+	// and ignore them when they have no specific handling, because wildcard
+	// ports and links are commonly used as placeholders that may later be
+	// replaced with a more specific type.
+	AnyType = "any/any"
+)
+
 // ValidateClassName reports whether name is a valid class name.
 //
 // A class name has the form "example.com/ClassName". The prefix may contain
@@ -27,6 +38,9 @@ func ValidateClassName(name string) error {
 // alphanumeric characters and dots. The suffix must start with a lowercase
 // ASCII letter and contain only alphanumeric characters.
 func ValidateTypeName(name string) error {
+	if name == AnyType {
+		return nil
+	}
 	return validateName(name, isLower, ErrTypeName)
 }
 

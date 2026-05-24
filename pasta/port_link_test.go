@@ -63,6 +63,10 @@ func TestPortValidate(t *testing.T) {
 			port: pasta.Port{Direction: "right", Types: []string{"example.com/typeA"}},
 		},
 		{
+			name: "valid any",
+			port: pasta.Port{Direction: "left", Types: []string{pasta.AnyType}},
+		},
+		{
 			name: "bad direction",
 			port: pasta.Port{Direction: "top", Types: []string{"example.com/typeA"}},
 			want: pasta.ErrPortDirection,

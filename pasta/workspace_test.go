@@ -646,6 +646,95 @@ func TestWorkspaceSetNodePortOrder(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAnyPortTypeLinksToAnyOtherType(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA, err := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeB, err := w.AddNode(&workspaceNode{}, "example.com/NodeB")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	nodeC, err := w.AddNode(&workspaceNode{}, "example.com/NodeC")
+	if err != nil {
+		t.Fatalf("AddNode C: %v", err)
+	}
+	nodeD, err := w.AddNode(&workspaceNode{}, "example.com/NodeD")
+	if err != nil {
+		t.Fatalf("AddNode D: %v", err)
+	}
+
+	anyLeft := mustAddPort(t, w, nodeA, "left", pasta.AnyType)
+	singleRight := mustAddPort(t, w, nodeB, "right", "example.com/typeA")
+	anyRight := mustAddPort(t, w, nodeC, "right", pasta.AnyType)
+	multiRight, err := w.AddPort(pasta.Port{
+		Node:      nodeD,
+		Direction: "right",
+		Types:     []string{"example.com/typeB", "example.com/typeC"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort multi right: %v", err)
+	}
+
+	_, linkType, err := w.AddLink(anyLeft, singleRight)
+	if err != nil {
+		t.Fatalf("AddLink any-single: %v", err)
+	}
+	if linkType != "example.com/typeA" {
+		t.Fatalf("any-single link type = %q, want example.com/typeA", linkType)
+	}
+
+	_, linkType, err = w.AddLink(anyLeft, anyRight)
+	if err != nil {
+		t.Fatalf("AddLink any-any: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("any-any link type = %q, want %q", linkType, pasta.AnyType)
+	}
+
+	_, linkType, err = w.AddLink(anyLeft, multiRight)
+	if err != nil {
+		t.Fatalf("AddLink any-multi: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("any-multi link type = %q, want %q", linkType, pasta.AnyType)
+	}
+
+	nodeE, err := w.AddNode(&workspaceNode{}, "example.com/NodeE")
+	if err != nil {
+		t.Fatalf("AddNode E: %v", err)
+	}
+	nodeF, err := w.AddNode(&workspaceNode{}, "example.com/NodeF")
+	if err != nil {
+		t.Fatalf("AddNode F: %v", err)
+	}
+	multiLeft, err := w.AddPort(pasta.Port{
+		Node:      nodeE,
+		Direction: "left",
+		Types:     []string{"example.com/typeD", "example.com/typeE"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort multi left: %v", err)
+	}
+	singleAnyRight, err := w.AddPort(pasta.Port{
+		Node:      nodeF,
+		Direction: "right",
+		Types:     []string{pasta.AnyType, "example.com/typeF"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort any mixed right: %v", err)
+	}
+	_, linkType, err = w.AddLink(multiLeft, singleAnyRight)
+	if err != nil {
+		t.Fatalf("AddLink multi-any: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("multi-any link type = %q, want %q", linkType, pasta.AnyType)
+	}
+}
+
 func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 

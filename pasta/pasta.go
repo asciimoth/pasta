@@ -1006,6 +1006,23 @@ func (w *Workspace) postlock() {
 
 func (w *Workspace) portsSharedType(portA, portB *Port) string {
 	// Each port must always had at least one type
+	portAAny := slices.Contains(portA.Types, AnyType)
+	portBAny := slices.Contains(portB.Types, AnyType)
+	if portAAny && portBAny {
+		return AnyType
+	}
+	if portAAny {
+		if len(portB.Types) == 1 {
+			return portB.Types[0]
+		}
+		return AnyType
+	}
+	if portBAny {
+		if len(portA.Types) == 1 {
+			return portA.Types[0]
+		}
+		return AnyType
+	}
 	if len(portA.Types) > 1 {
 		if len(portB.Types) > 1 {
 			return ""

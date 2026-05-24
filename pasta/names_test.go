@@ -45,6 +45,7 @@ func TestValidateTypeName(t *testing.T) {
 		{name: "example.com/typeName"},
 		{name: "example1.com2/type123"},
 		{name: "example/type"},
+		{name: pasta.AnyType},
 		{name: "", want: pasta.ErrTypeName},
 		{name: "example.com", want: pasta.ErrTypeName},
 		{name: "/typeName", want: pasta.ErrTypeName},
