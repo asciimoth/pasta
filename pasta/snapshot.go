@@ -2,12 +2,17 @@ package pasta
 
 import "slices"
 
+// WorkspaceSnapshot is a JSON-serializable copy of a workspace graph.
+//
+// Nodes, ports, and links are keyed by their workspace-scoped IDs. Individual
+// snapshot values do not include their own IDs.
 type WorkspaceSnapshot struct {
 	Nodes map[uint64]NodeSnapshot `json:"nodes"`
 	Ports map[uint64]PortSnapshot `json:"ports"`
 	Links map[uint64]LinkSnapshot `json:"links"`
 }
 
+// NodeSnapshot is a JSON-serializable copy of node metadata and port IDs.
 type NodeSnapshot struct {
 	Class       string   `json:"class"`
 	PrimaryType string   `json:"primary_type"`
@@ -15,6 +20,7 @@ type NodeSnapshot struct {
 	RightPorts  []uint64 `json:"right_ports"`
 }
 
+// PortSnapshot is a JSON-serializable copy of a port.
 type PortSnapshot struct {
 	Direction string   `json:"direction"`
 	Node      uint64   `json:"node"`
@@ -23,6 +29,7 @@ type PortSnapshot struct {
 	Links     []uint64 `json:"links"`
 }
 
+// LinkSnapshot is a JSON-serializable copy of a link.
 type LinkSnapshot struct {
 	Type          string `json:"type"`
 	LeftPort      uint64 `json:"left_port"`
@@ -31,6 +38,7 @@ type LinkSnapshot struct {
 	RightPortNode uint64 `json:"right_port_node"`
 }
 
+// Snapshot returns a JSON-serializable copy of all nodes, ports, and links.
 func (w *Workspace) Snapshot() WorkspaceSnapshot {
 	w.Lock()
 	defer w.Unlock()
@@ -63,6 +71,7 @@ func (w *Workspace) Snapshot() WorkspaceSnapshot {
 	return snapshot
 }
 
+// NodeSnapshot returns a JSON-serializable copy of one node.
 func (w *Workspace) NodeSnapshot(id uint64) (NodeSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
@@ -74,6 +83,7 @@ func (w *Workspace) NodeSnapshot(id uint64) (NodeSnapshot, bool) {
 	return nodeSnapshot(record), true
 }
 
+// PortSnapshot returns a JSON-serializable copy of one port.
 func (w *Workspace) PortSnapshot(id uint64) (PortSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
@@ -85,6 +95,7 @@ func (w *Workspace) PortSnapshot(id uint64) (PortSnapshot, bool) {
 	return portSnapshot(port), true
 }
 
+// LinkSnapshot returns a JSON-serializable copy of one link.
 func (w *Workspace) LinkSnapshot(id uint64) (LinkSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()

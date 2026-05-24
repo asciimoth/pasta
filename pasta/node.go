@@ -7,15 +7,21 @@ import (
 )
 
 var (
+	// ErrNodePanic reports that a node callback panicked.
 	ErrNodePanic = errors.New("node panic")
-	ErrNoPort    = errors.New("port not found")
+	// ErrNoPort reports that a port ID does not exist in the workspace.
+	ErrNoPort = errors.New("port not found")
 )
 
-// If any node methods returns error or panics, this node should be removed
-// from workspace.
+// Node receives lifecycle and graph mutation callbacks from a workspace.
+//
+// If a node callback returns an error or panics, the workspace may remove the
+// node to keep the graph consistent.
 type Node interface {
-	// Should be called when node is added to Workspace
-	// It is a place it define ports / promary types / etc.
+	// OnInit is called when the node is added to a workspace.
+	//
+	// Implementations can use this callback to keep the workspace ID, create
+	// initial ports, or configure node-local state.
 	OnInit(
 		w *Workspace,
 		l Logger,
@@ -24,36 +30,42 @@ type Node interface {
 		// TODO: when restoring from config, pass restored
 	) error
 
-	// Should be called once when Workspace in ready to work.
-	// E.g. after restoring from config.
-	// If node is added to already ready Workspace, OnReady will be called immediately.
+	// OnReady is called once the workspace is ready to run.
+	//
+	// Nodes added to an already-ready workspace receive OnReady immediately.
 	OnReady() error
 
-	// Should be called once when node is removed or Workspace is closed.
-	// It is a place for resource cleanup.
+	// OnStop is called once when the node is removed or the workspace closes.
 	OnStop()
 
+	// OnPortAdd is called after a port is added to this node.
 	OnPortAdd(
 		port uint64,
 		direction string,
 		types []string,
 	) error
 
+	// OnPortRemoved is called after a port is removed from this node.
 	OnPortRemoved(
 		port uint64,
 		direction string,
 	) error
 
+	// PreLinkAdd is called before a link is added to one of this node's ports.
+	//
+	// Returning a non-nil error rejects the link.
 	PreLinkAdd(
 		port uint64,
 		linkType, portDirection string,
 	) (rejection error)
 
+	// OnLinkAdd is called after a link is added to one of this node's ports.
 	OnLinkAdd(
 		link, port uint64,
 		linkType, portDirection string,
 	) error
 
+	// OnLinkRemoved is called after a link is removed from one of this node's ports.
 	OnLinkRemoved(
 		link, port uint64,
 		linkType, portDirection string,

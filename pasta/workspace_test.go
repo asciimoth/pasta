@@ -11,12 +11,16 @@ import (
 )
 
 type workspaceNode struct {
-	l pasta.Logger
+	l           pasta.Logger
+	initPrimary string
 }
 
 func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string) error {
 	n.l = l
 	l.Debugf("init id=%d class=%s", id, class)
+	if n.initPrimary != "" {
+		return w.SetNodePrimary(id, n.initPrimary)
+	}
 	return nil
 }
 
@@ -66,7 +70,7 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	nodeA := &workspaceNode{}
 	nodeB := &workspaceNode{}
 
-	nodeAID, err := w.AddNode(nodeA, "example.com/NodeA", "")
+	nodeAID, err := w.AddNode(nodeA, "example.com/NodeA")
 	if err != nil {
 		t.Fatalf("AddNode A: %v", err)
 	}
@@ -75,7 +79,7 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 			nodeAID: {Class: "example.com/NodeA"},
 		},
 	})
-	nodeBID, err := w.AddNode(nodeB, "example.com/NodeB", "")
+	nodeBID, err := w.AddNode(nodeB, "example.com/NodeB")
 	if err != nil {
 		t.Fatalf("AddNode B: %v", err)
 	}
@@ -169,6 +173,46 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	if !ok || !reflect.DeepEqual(linkSnapshot, withLink.Links[link]) {
 		t.Fatalf("LinkSnapshot(%d) = %#v, %v; want %#v, true", link, linkSnapshot, ok, withLink.Links[link])
 	}
+	linkByPortsID, linkByPortsSnapshot, ok := w.GetLinkByPorts(right, left)
+	if !ok || linkByPortsID != link || !reflect.DeepEqual(linkByPortsSnapshot, withLink.Links[link]) {
+		t.Fatalf("GetLinkByPorts(%d, %d) = %d, %#v, %v; want %d, %#v, true", right, left, linkByPortsID, linkByPortsSnapshot, ok, link, withLink.Links[link])
+	}
+	if !w.NodesConnected(nodeAID, nodeBID) || !w.NodesConnected(nodeBID, nodeAID) {
+		t.Fatal("nodes are not connected after AddLink")
+	}
+	if got := w.GetLinksByNodes(nodeAID, nodeBID); !reflect.DeepEqual(got, withLink.Links) {
+		t.Fatalf("GetLinksByNodes(%d, %d) = %#v, want %#v", nodeAID, nodeBID, got, withLink.Links)
+	}
+
+	if err := w.SetNodePrimary(nodeAID, "example.com/typeA"); err != nil {
+		t.Fatalf("SetNodePrimary: %v", err)
+	}
+	withLink.Nodes[nodeAID] = pasta.NodeSnapshot{
+		Class:       "example.com/NodeA",
+		PrimaryType: "example.com/typeA",
+		LeftPorts:   []uint64{left},
+	}
+	assertWorkspaceSnapshot(t, w, withLink)
+	if err := w.SetPortName(left, "input"); err != nil {
+		t.Fatalf("SetPortName: %v", err)
+	}
+	withLink.Ports[left] = pasta.PortSnapshot{
+		Node:      nodeAID,
+		Direction: "left",
+		Name:      "input",
+		Types:     []string{"example.com/typeA"},
+		Links:     []uint64{link},
+	}
+	assertWorkspaceSnapshot(t, w, withLink)
+	if err := w.SetNodePrimary(nodeAID, "example.com/TypeA"); !errors.Is(err, pasta.ErrTypeName) {
+		t.Fatalf("SetNodePrimary invalid type error = %v, want %v", err, pasta.ErrTypeName)
+	}
+	if err := w.SetNodePrimary(999, ""); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("SetNodePrimary missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.SetPortName(999, "missing"); !errors.Is(err, pasta.ErrNoPort) {
+		t.Fatalf("SetPortName missing port error = %v, want %v", err, pasta.ErrNoPort)
+	}
 
 	portSnapshot.Types[0] = "example.com/changed"
 	portSnapshot.Links[0] = 999
@@ -180,18 +224,24 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	}
 	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
 		Nodes: map[uint64]pasta.NodeSnapshot{
-			nodeAID: {Class: "example.com/NodeA", LeftPorts: []uint64{left}},
+			nodeAID: {Class: "example.com/NodeA", PrimaryType: "example.com/typeA", LeftPorts: []uint64{left}},
 			nodeBID: {Class: "example.com/NodeB", RightPorts: []uint64{right}},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
-			left:  {Node: nodeAID, Direction: "left", Types: []string{"example.com/typeA"}},
+			left:  {Node: nodeAID, Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
 			right: {Node: nodeBID, Direction: "right", Types: []string{"example.com/typeA"}},
 		},
 	})
+	if w.NodesConnected(nodeAID, nodeBID) {
+		t.Fatal("nodes are connected after RemoveLink")
+	}
+	if _, _, ok := w.GetLinkByPorts(left, right); ok {
+		t.Fatal("GetLinkByPorts returned removed link")
+	}
 	w.RemovePort(left)
 	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
 		Nodes: map[uint64]pasta.NodeSnapshot{
-			nodeAID: {Class: "example.com/NodeA"},
+			nodeAID: {Class: "example.com/NodeA", PrimaryType: "example.com/typeA"},
 			nodeBID: {Class: "example.com/NodeB", RightPorts: []uint64{right}},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
@@ -201,7 +251,7 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	w.RemoveNode(nodeBID)
 	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
 		Nodes: map[uint64]pasta.NodeSnapshot{
-			nodeAID: {Class: "example.com/NodeA"},
+			nodeAID: {Class: "example.com/NodeA", PrimaryType: "example.com/typeA"},
 		},
 	})
 	if _, ok := w.NodeSnapshot(nodeBID); ok {
@@ -251,12 +301,12 @@ func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 	node := &workspaceNode{}
 	empty := pasta.WorkspaceSnapshot{}
 
-	if _, err := w.AddNode(node, "example.com/node", ""); !errors.Is(err, pasta.ErrClassName) {
+	if _, err := w.AddNode(node, "example.com/node"); !errors.Is(err, pasta.ErrClassName) {
 		t.Fatalf("invalid class AddNode error = %v, want %v", err, pasta.ErrClassName)
 	}
 	assertWorkspaceSnapshot(t, w, empty)
 
-	nodeID, err := w.AddNode(node, "example.com/Node", "")
+	nodeID, err := w.AddNode(node, "example.com/Node")
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
@@ -266,7 +316,7 @@ func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 		},
 	}
 	assertWorkspaceSnapshot(t, w, onlyNode)
-	if _, err := w.AddNode(node, "example.com/Node", ""); !errors.Is(err, pasta.ErrNodeDup) {
+	if _, err := w.AddNode(node, "example.com/Node"); !errors.Is(err, pasta.ErrNodeDup) {
 		t.Fatalf("duplicate AddNode error = %v, want %v", err, pasta.ErrNodeDup)
 	}
 	assertWorkspaceSnapshot(t, w, onlyNode)
@@ -309,12 +359,27 @@ func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 	}
 }
 
+func TestWorkspaceNodeCanSetPrimaryTypeInOnInit(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeID, err := w.AddNode(&workspaceNode{initPrimary: "example.com/typeA"}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeID: {Class: "example.com/Node", PrimaryType: "example.com/typeA"},
+		},
+	})
+}
+
 func TestWorkspaceLinkEdgeCasesAndInvariants(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
-	nodeA, _ := w.AddNode(&workspaceNode{}, "example.com/NodeA", "")
-	nodeB, _ := w.AddNode(&workspaceNode{}, "example.com/NodeB", "")
-	nodeC, _ := w.AddNode(&workspaceNode{}, "example.com/NodeC", "")
+	nodeA, _ := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	nodeB, _ := w.AddNode(&workspaceNode{}, "example.com/NodeB")
+	nodeC, _ := w.AddNode(&workspaceNode{}, "example.com/NodeC")
 
 	aLeft := mustAddPort(t, w, nodeA, "left", "example.com/typeA")
 	aRight := mustAddPort(t, w, nodeA, "right", "example.com/typeA")
@@ -361,6 +426,16 @@ func TestWorkspaceLinkEdgeCasesAndInvariants(t *testing.T) {
 
 	if _, _, err := w.AddLink(bLeft, cRight); err != nil {
 		t.Fatalf("AddLink B->C: %v", err)
+	}
+	w.RemoveLinksByNodes(nodeB, nodeC)
+	if w.NodesConnected(nodeB, nodeC) {
+		t.Fatal("nodes are connected after RemoveLinksByNodes")
+	}
+	if got := w.LinksByNodes(nodeB, nodeC); len(got) != 0 {
+		t.Fatalf("LinksByNodes after RemoveLinksByNodes = %#v, want empty", got)
+	}
+	if _, _, err := w.AddLink(bLeft, cRight); err != nil {
+		t.Fatalf("AddLink B->C again: %v", err)
 	}
 	beforeCycle := w.Snapshot()
 	if _, _, err := w.AddLink(cLeft, aRight); !errors.Is(err, pasta.ErrCycle) {

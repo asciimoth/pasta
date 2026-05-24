@@ -6,22 +6,26 @@ import (
 )
 
 var (
+	// ErrClassName reports that a class name is malformed.
 	ErrClassName = errors.New("invalid class name")
-	ErrTypeName  = errors.New("invalid type name")
+	// ErrTypeName reports that a type name is malformed.
+	ErrTypeName = errors.New("invalid type name")
 )
 
-// Class name looks like `example.com/ClassName`.
-// It can contain only alpha-numeric chars, `.` and single `/`
-// Name part (righter from `/`) must starts with capital letter and contain
-// only alpha-numeric
+// ValidateClassName reports whether name is a valid class name.
+//
+// A class name has the form "example.com/ClassName". The prefix may contain
+// only alphanumeric characters and dots. The suffix must start with an
+// uppercase ASCII letter and contain only alphanumeric characters.
 func ValidateClassName(name string) error {
 	return validateName(name, isUpper, ErrClassName)
 }
 
-// Class name looks like `example.com/typeName`.
-// It can contain only alpha-numeric chars, `.` and single `/`
-// Name part (righter from `/`) must starts with small letter and contain
-// only alpha-numeric
+// ValidateTypeName reports whether name is a valid type name.
+//
+// A type name has the form "example.com/typeName". The prefix may contain only
+// alphanumeric characters and dots. The suffix must start with a lowercase
+// ASCII letter and contain only alphanumeric characters.
 func ValidateTypeName(name string) error {
 	return validateName(name, isLower, ErrTypeName)
 }

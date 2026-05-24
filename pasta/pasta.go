@@ -9,18 +9,24 @@ import (
 )
 
 var (
+	// ErrNodeDup reports that the same Node instance is already present in a workspace.
 	ErrNodeDup = errors.New("node duplicate")
+	// ErrLinkDup reports that two ports are already connected by a link.
 	ErrLinkDup = errors.New("link duplicate")
 
-	ErrNoNode        = errors.New("node do not exists")
-	ErrCycle         = errors.New("graph cycle")
+	// ErrNoNode reports that a node ID does not exist in the workspace.
+	ErrNoNode = errors.New("node do not exists")
+	// ErrCycle reports that a link would create a cycle in the node graph.
+	ErrCycle = errors.New("graph cycle")
+	// ErrSameDirection reports that both ports have the same direction.
 	ErrSameDirection = errors.New("same direction")
-	ErrTypeCompat    = errors.New("types are incompatible")
+	// ErrTypeCompat reports that two ports do not share a usable link type.
+	ErrTypeCompat = errors.New("types are incompatible")
 )
 
+// Workspace owns nodes, ports, and links and coordinates their lifecycle callbacks.
 type Workspace struct {
-	// mu should NOT be used directly. Instead use w.Lock() and w.Unlock() methods
-	// because they execute some post-lock hooks.
+	// mu should not be used directly. Use Lock and Unlock so post-lock hooks run.
 	mu *badlock.BadLock
 
 	nextid  uint64
@@ -36,6 +42,7 @@ type Workspace struct {
 	logf LogFactory
 }
 
+// NewWorkspace creates a ready workspace using logf for workspace and node loggers.
 func NewWorkspace(logf LogFactory) *Workspace {
 	return &Workspace{
 		mu: badlock.New(),
@@ -53,7 +60,9 @@ func NewWorkspace(logf LogFactory) *Workspace {
 	}
 }
 
-// ID is newer 0
+// NextID returns the next workspace-scoped ID.
+//
+// IDs start at 1 and are never 0.
 func (w *Workspace) NextID() uint64 {
 	w.Lock()
 	defer w.Unlock()
@@ -65,12 +74,14 @@ func (w *Workspace) NextID() uint64 {
 	return id
 }
 
+// IsReady reports whether the workspace is ready to run node OnReady callbacks.
 func (w *Workspace) IsReady() bool {
 	w.Lock()
 	defer w.Unlock()
 	return w.isReady
 }
 
+// Ready marks the workspace as ready and calls OnReady for existing nodes.
 func (w *Workspace) Ready() {
 	w.Lock()
 	defer w.Unlock()
@@ -81,7 +92,7 @@ func (w *Workspace) Ready() {
 
 	w.isReady = true
 
-	//Notify nodes
+	// Notify nodes.
 	for pair := w.nodes.Newest(); pair != nil; pair = pair.Prev() {
 		if err := pair.Value.OnReady(); err != nil {
 			// Remove node on panic
@@ -92,12 +103,12 @@ func (w *Workspace) Ready() {
 	}
 }
 
-// Lock is safe for concurrent calls.
+// Lock locks the workspace.
 func (w *Workspace) Lock() {
 	w.mu.Lock()
 }
 
-// Unlock unlocks internal recursive mutex. After top-level Unlock
+// Unlock unlocks the workspace and runs pending operations after the top-level unlock.
 func (w *Workspace) Unlock() {
 	r := w.mu.Unlock()
 	if r > 0 {
@@ -106,9 +117,10 @@ func (w *Workspace) Unlock() {
 	w.postlock()
 }
 
-// AddPendingOp adds pending operation that will be executed after current
-// in-fly operations wit Workspace (after top-level unlock). If there is no
-// other in-fly operation then AddPendingOpimmediately, it will executed immediately.
+// AddPendingOp queues op to run after current workspace operations finish.
+//
+// Pending operations run after the top-level Unlock. If the workspace is not
+// currently inside another operation, op runs before AddPendingOp returns.
 func (w *Workspace) AddPendingOp(op func()) {
 	w.Lock()
 	defer w.Unlock()
@@ -118,6 +130,7 @@ func (w *Workspace) AddPendingOp(op func()) {
 	w.pending = append(w.pending, op)
 }
 
+// RemoveNode removes a node and all of its ports and links.
 func (w *Workspace) RemoveNode(id uint64) {
 	if id < 1 {
 		return
@@ -142,9 +155,10 @@ func (w *Workspace) RemoveNode(id uint64) {
 	record.RightPorts = nil
 
 	w.log.Debug("removed node", id)
-	// TODO: Send notifocation
+	// TODO: Send notification
 }
 
+// RemovePort removes a port and all links attached to it.
 func (w *Workspace) RemovePort(id uint64) {
 	if id < 1 {
 		return
@@ -173,6 +187,7 @@ func (w *Workspace) RemovePort(id uint64) {
 	// TODO: Send notification
 }
 
+// RemoveLink removes a link and updates both endpoint ports and nodes.
 func (w *Workspace) RemoveLink(id uint64) {
 	if id < 1 {
 		return
@@ -202,10 +217,14 @@ func (w *Workspace) RemoveLink(id uint64) {
 	w.nodeEvLinkRemoved(link.RightPortNode, id, link.RightPort, link.Type, "right")
 
 	w.log.Debug("removed link", id)
-	// TODO: Send notifocation
+	// TODO: Send notification
 }
 
-func (w *Workspace) AddNode(node Node, class, ptype string) (uint64, error) {
+// AddNode adds node to the workspace and returns its workspace-scoped ID.
+//
+// class must be a valid class name. Nodes can configure their primary type
+// from OnInit or later callbacks with SetNodePrimary.
+func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
@@ -232,12 +251,12 @@ func (w *Workspace) AddNode(node Node, class, ptype string) (uint64, error) {
 		L:           log,
 		stopped:     false,
 	}
+	w.nodes.Set(id, &rec)
 
 	if err := rec.OnInit(w); err != nil {
+		w.RemoveNode(id)
 		return 0, err
 	}
-
-	w.nodes.Set(id, &rec)
 
 	if w.isReady {
 		if err := rec.OnReady(); err != nil {
@@ -253,6 +272,7 @@ func (w *Workspace) AddNode(node Node, class, ptype string) (uint64, error) {
 	return id, nil
 }
 
+// AddPort adds a port to its owner node and returns the new port ID.
 func (w *Workspace) AddPort(port Port) (uint64, error) {
 	port = port.Copy()
 	port.Links = []uint64{}
@@ -294,17 +314,12 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 	return id, nil
 }
 
-// Both ports must exists.
-// One of ports must be left type and one must be right type.
-// There must be link types supported by both ports.
-// At least one of ports must have exactly one supported type which will be used
-// as link's one.
-// Ports must be owned by different nodes.
-// There should not be already existed link for this two ports.
-// Both nodes must accepted new link.
-// Nodes graph must stay DAG.
-// If any of nodes rejects link or panic on PreLinkAdd, link will not be added.
-// If any of nodes will panic on OnLinkAdd, node will be removed back.
+// AddLink connects two ports and returns the new link ID and selected link type.
+//
+// The ports must exist, belong to different nodes, have opposite directions,
+// share a usable type, and preserve the workspace DAG. If either node rejects
+// the link or panics during PreLinkAdd, no link is added. If a node panics or
+// returns an error during OnLinkAdd, that node is scheduled for removal.
 func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	w.Lock()
 	defer w.Unlock()
@@ -423,6 +438,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	return link.ID, link.Type, nil
 }
 
+// PortsConnected reports whether two ports are connected by a link.
 func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 	w.Lock()
 	defer w.Unlock()
@@ -440,8 +456,105 @@ func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 	return w.portsConnected(portA, portB)
 }
 
-// Any link creation should be tested with verifyDAG() and rolled back if
-// false reported
+// NodesConnected reports whether two nodes have at least one direct link.
+func (w *Workspace) NodesConnected(na, nb uint64) bool {
+	w.Lock()
+	defer w.Unlock()
+
+	return len(w.linksBetweenNodes(na, nb)) > 0
+}
+
+// LinkByPorts returns the link connecting two ports.
+func (w *Workspace) LinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
+	w.Lock()
+	defer w.Unlock()
+
+	portA, present := w.ports.Get(pa)
+	if !present || portA == nil {
+		return 0, LinkSnapshot{}, false
+	}
+	portB, present := w.ports.Get(pb)
+	if !present || portB == nil {
+		return 0, LinkSnapshot{}, false
+	}
+
+	link := w.linkBetweenPorts(portA, portB)
+	if link == nil {
+		return 0, LinkSnapshot{}, false
+	}
+	return link.ID, linkSnapshot(link), true
+}
+
+// GetLinkByPorts returns the link connecting two ports.
+func (w *Workspace) GetLinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
+	return w.LinkByPorts(pa, pb)
+}
+
+// LinksByNodes returns snapshots of all direct links between two nodes.
+func (w *Workspace) LinksByNodes(na, nb uint64) map[uint64]LinkSnapshot {
+	w.Lock()
+	defer w.Unlock()
+
+	links := w.linksBetweenNodes(na, nb)
+	snapshots := make(map[uint64]LinkSnapshot, len(links))
+	for _, link := range links {
+		snapshots[link.ID] = linkSnapshot(link)
+	}
+	return snapshots
+}
+
+// GetLinksByNodes returns snapshots of all direct links between two nodes.
+func (w *Workspace) GetLinksByNodes(na, nb uint64) map[uint64]LinkSnapshot {
+	return w.LinksByNodes(na, nb)
+}
+
+// RemoveLinksByNodes removes every direct link between two nodes.
+func (w *Workspace) RemoveLinksByNodes(na, nb uint64) {
+	w.Lock()
+	defer w.Unlock()
+
+	links := w.linksBetweenNodes(na, nb)
+	for _, link := range links {
+		w.RemoveLink(link.ID)
+	}
+}
+
+// SetNodePrimary sets a node's primary type.
+//
+// typ may be empty to clear the primary type. Non-empty values must be valid
+// type names.
+func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
+	if typ != "" {
+		if err := ValidateTypeName(typ); err != nil {
+			return err
+		}
+	}
+
+	w.Lock()
+	defer w.Unlock()
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	record.PrimaryType = typ
+	return nil
+}
+
+// SetPortName sets a port's display name.
+func (w *Workspace) SetPortName(id uint64, name string) error {
+	w.Lock()
+	defer w.Unlock()
+
+	port, present := w.ports.Get(id)
+	if !present || port == nil {
+		return ErrNoPort
+	}
+	port.Name = name
+	return nil
+}
+
+// verifyDAG reports whether the current link graph is acyclic.
 func (w *Workspace) verifyDAG() bool {
 	graph := make(map[uint64][]uint64, w.nodes.Len())
 	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
@@ -524,15 +637,34 @@ func (w *Workspace) portsSharedType(portA, portB *Port) string {
 }
 
 func (w *Workspace) portsConnected(portA, portB *Port) bool {
+	return w.linkBetweenPorts(portA, portB) != nil
+}
+
+func (w *Workspace) linkBetweenPorts(portA, portB *Port) *Link {
 	for lid := range multiSLiceIter(portA.Links, portB.Links) {
 		link, present := w.links.Get(lid)
 		if present && link != nil &&
 			((link.LeftPort == portA.ID && link.RightPort == portB.ID) ||
 				(link.LeftPort == portB.ID && link.RightPort == portA.ID)) {
-			return true
+			return link
 		}
 	}
-	return false
+	return nil
+}
+
+func (w *Workspace) linksBetweenNodes(na, nb uint64) []*Link {
+	links := make([]*Link, 0)
+	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
+		link := pair.Value
+		if link == nil {
+			continue
+		}
+		if (link.LeftPortNode == na && link.RightPortNode == nb) ||
+			(link.LeftPortNode == nb && link.RightPortNode == na) {
+			links = append(links, link)
+		}
+	}
+	return links
 }
 
 func (w *Workspace) nodeEvPortRemoved(
