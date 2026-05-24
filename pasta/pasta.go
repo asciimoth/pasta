@@ -323,10 +323,13 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
+	if node == nil {
+		return 0, ErrNoNode
+	}
 
 	// Reject if this node already exists
 	for pair := w.nodes.Newest(); pair != nil; pair = pair.Prev() {
-		if pair.Value.Node == node {
+		if pair.Value != nil && pair.Value.Node == node {
 			return 0, ErrNodeDup
 		}
 	}
@@ -374,6 +377,49 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 	return id, nil
 }
 
+// AddPlaceholderNode adds a placeholder node with predefined ports.
+func (w *Workspace) AddPlaceholderNode(class string, ports []Port) (uint64, error) {
+	return w.AddPlaceholderNodeWithRoot(class, false, ports)
+}
+
+// AddPlaceholderNodeWithRoot adds a placeholder node with predefined ports and
+// an initial root flag. Placeholder root state is stored but ignored by
+// snapshots and root-path tracing until the node is replaced by a normal node.
+func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []Port) (uint64, error) {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return 0, ErrWorkspaceClosed
+	}
+	if err := ValidateClassName(class); err != nil {
+		return 0, err
+	}
+
+	id := w.NextID()
+	rec := nodeRecord{
+		ID:          id,
+		Node:        nil,
+		Class:       class,
+		PrimaryType: "",
+		Root:        root,
+		LeftPorts:   []uint64{},
+		RightPorts:  []uint64{},
+		L:           w.logf.NodeLogger(id, class),
+	}
+	added, err := w.addPlaceholderPorts(&rec, ports)
+	if err != nil {
+		return 0, err
+	}
+	w.nodes.Set(id, &rec)
+	for _, portID := range added {
+		port, _ := w.ports.Get(portID)
+		w.enqueuePortNotification(NotificationPortAdded, portID, portSnapshot(port))
+	}
+	w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
+	w.recomputeRootPaths(true)
+	return id, nil
+}
+
 // ReplaceNode replaces the Node implementation in an existing node record.
 //
 // The workspace keeps the node ID, class, primary type, ports, root state, and
@@ -393,6 +439,9 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	if !present || record == nil {
 		return ErrNoNode
 	}
+	if node == nil {
+		return ErrNoNode
+	}
 	if record.Node == node {
 		return ErrNodeDup
 	}
@@ -402,6 +451,7 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 		}
 	}
 
+	wasPlaceholder := record.Node == nil
 	old := record.Node
 	restored := record.InitData()
 	nodeStop(old)
@@ -409,22 +459,119 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	record.Node = node
 	record.stopped = false
 	if err := record.OnInit(w, &restored); err != nil {
-		w.RemoveNode(id)
+		if wasPlaceholder {
+			record.Node = nil
+			record.stopped = false
+		} else {
+			w.RemoveNode(id)
+		}
 		return err
 	}
 	if w.isReady {
 		if err := record.OnReady(); err != nil {
-			w.RemoveNode(id)
+			if wasPlaceholder {
+				nodeStop(record.Node)
+				record.Node = nil
+				record.stopped = false
+			} else {
+				w.RemoveNode(id)
+			}
 			w.log.Debugf("node %d faled in OnReady", id)
 			return err
 		}
-		if err := record.OnRootStatus(record.HasRootPath); err != nil {
-			w.RemoveNode(id)
-			w.log.Debugf("node %d faled in OnRootStatus", id)
-			return err
+		if wasPlaceholder {
+			if failed := w.activatePlaceholderLinks(record); len(failed) > 0 {
+				nodeStop(record.Node)
+				record.Node = nil
+				record.stopped = false
+				return firstError(failed)
+			}
+			w.refreshPlaceholderLinks(id, false)
+			if !w.verifyDAG() {
+				w.deactivateNodeLinks(record)
+				nodeStop(record.Node)
+				record.Node = nil
+				record.stopped = false
+				w.refreshPlaceholderLinks(id, true)
+				w.recomputeRootPaths(true)
+				return ErrCycle
+			}
+			if failed := w.notifyActivatedPlaceholderLinks(record); len(failed) > 0 {
+				w.deactivateNodeLinks(record)
+				nodeStop(record.Node)
+				record.Node = nil
+				record.stopped = false
+				w.refreshPlaceholderLinks(id, true)
+				w.recomputeRootPaths(true)
+				return firstError(failed)
+			}
+			record.rootStatusKnown = false
+			if failed := w.recomputeRootPaths(false); len(failed) > 0 {
+				w.deactivateNodeLinks(record)
+				nodeStop(record.Node)
+				record.Node = nil
+				record.stopped = false
+				return firstError(failed)
+			}
+		} else {
+			if err := record.OnRootStatus(record.HasRootPath); err != nil {
+				w.RemoveNode(id)
+				w.log.Debugf("node %d faled in OnRootStatus", id)
+				return err
+			}
 		}
 	}
+	if wasPlaceholder {
+		w.refreshPlaceholderLinks(id, true)
+		w.recomputeRootPaths(true)
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
 	return nil
+}
+
+// ReplaceNodeWithPlaceholder replaces an existing node implementation with a
+// placeholder record while preserving existing ports and links. Any supplied
+// ports are added to the placeholder.
+func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+	record, present := w.nodes.Get(id)
+	if id < 1 || !present || record == nil {
+		return ErrNoNode
+	}
+	if err := validatePlaceholderPorts(id, ports); err != nil {
+		return err
+	}
+
+	old := record.Node
+	if old != nil {
+		nodeStop(old)
+	}
+	record.Node = nil
+	record.stopped = false
+	added, err := w.addPlaceholderPorts(record, ports)
+	if err != nil {
+		return err
+	}
+	w.deactivateNodeLinks(record)
+	for _, portID := range added {
+		port, _ := w.ports.Get(portID)
+		w.enqueuePortNotification(NotificationPortAdded, portID, portSnapshot(port))
+	}
+	w.refreshPlaceholderLinks(id, true)
+	changed := w.recomputeRootPaths(true)
+	if _, present := changed[id]; !present {
+		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	}
+	return nil
+}
+
+// ReplacePlaceholderNode replaces a placeholder node with a normal Node.
+func (w *Workspace) ReplacePlaceholderNode(id uint64, node Node) error {
+	return w.ReplaceNode(id, node)
 }
 
 // AddPort adds a port to its owner node and returns the new port ID.
@@ -534,26 +681,29 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	if !present || rightNode == nil {
 		return 0, "", ErrNoNode
 	}
+	placeholder := leftNode.Node == nil || rightNode.Node == nil
 
-	rejection := leftNode.PreLinkAdd(Left.ID, linkType, Left.Direction)
-	if rejection != nil {
-		if errors.Is(rejection, ErrNodePanic) {
-			w.log.Debugf("node %d faled in PreLinkAdd", leftNode.ID)
-			w.AddPendingOp(func() {
-				w.RemoveNode(leftNode.ID)
-			})
+	if !placeholder {
+		rejection := leftNode.PreLinkAdd(Left.ID, linkType, Left.Direction)
+		if rejection != nil {
+			if errors.Is(rejection, ErrNodePanic) {
+				w.log.Debugf("node %d faled in PreLinkAdd", leftNode.ID)
+				w.AddPendingOp(func() {
+					w.RemoveNode(leftNode.ID)
+				})
+			}
+			return 0, "", rejection
 		}
-		return 0, "", rejection
-	}
-	rejection = rightNode.PreLinkAdd(Right.ID, linkType, Right.Direction)
-	if rejection != nil {
-		if errors.Is(rejection, ErrNodePanic) {
-			w.log.Debugf("node %d faled in PreLinkAdd", rightNode.ID)
-			w.AddPendingOp(func() {
-				w.RemoveNode(rightNode.ID)
-			})
+		rejection = rightNode.PreLinkAdd(Right.ID, linkType, Right.Direction)
+		if rejection != nil {
+			if errors.Is(rejection, ErrNodePanic) {
+				w.log.Debugf("node %d faled in PreLinkAdd", rightNode.ID)
+				w.AddPendingOp(func() {
+					w.RemoveNode(rightNode.ID)
+				})
+			}
+			return 0, "", rejection
 		}
-		return 0, "", rejection
 	}
 
 	link := Link{
@@ -566,6 +716,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		RightPort:     Right.ID,
 		RightPortNode: rightNode.ID,
 	}
+	link.Placeholder = placeholder
 	w.links.Set(link.ID, &link)
 
 	if !w.verifyDAG() {
@@ -573,24 +724,26 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		return 0, "", ErrCycle
 	}
 
-	err := leftNode.OnLinkAdd(link.ID, Left.ID, link.Type, Left.Direction)
-	if err != nil {
-		w.links.Delete(link.ID)
-		w.log.Debugf("node %d faled in OnLinkAdd", leftNode.ID)
-		w.AddPendingOp(func() {
-			w.RemoveNode(leftNode.ID)
-		})
-		return 0, "", err
-	}
-	err = rightNode.OnLinkAdd(link.ID, Right.ID, link.Type, Right.Direction)
-	if err != nil {
-		w.links.Delete(link.ID)
-		w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
-		w.AddPendingOp(func() {
-			w.RemoveNode(rightNode.ID)
-		})
-		w.nodeEvLinkRemoved(leftNode.ID, link.ID, Left.ID, link.Type, Left.Direction)
-		return 0, "", err
+	if !link.Placeholder {
+		err := leftNode.OnLinkAdd(link.ID, Left.ID, link.Type, Left.Direction)
+		if err != nil {
+			w.links.Delete(link.ID)
+			w.log.Debugf("node %d faled in OnLinkAdd", leftNode.ID)
+			w.AddPendingOp(func() {
+				w.RemoveNode(leftNode.ID)
+			})
+			return 0, "", err
+		}
+		err = rightNode.OnLinkAdd(link.ID, Right.ID, link.Type, Right.Direction)
+		if err != nil {
+			w.links.Delete(link.ID)
+			w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
+			w.AddPendingOp(func() {
+				w.RemoveNode(rightNode.ID)
+			})
+			w.nodeEvLinkRemoved(leftNode.ID, link.ID, Left.ID, link.Type, Left.Direction)
+			return 0, "", err
+		}
 	}
 
 	Left.Links = append(Left.Links, link.ID)
@@ -891,7 +1044,7 @@ func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 			continue
 		}
 		reachable[pair.Key] = false
-		if record.Root {
+		if record.Node != nil && record.Root {
 			reachable[pair.Key] = true
 			queue = append(queue, pair.Key)
 		}
@@ -901,6 +1054,9 @@ func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
 		link := pair.Value
 		if link == nil {
+			continue
+		}
+		if link.Placeholder {
 			continue
 		}
 		if _, present := reachable[link.LeftPortNode]; !present {
@@ -940,6 +1096,9 @@ func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 		}
 		if notify {
 			w.enqueueNodeNotification(NotificationNodeUpdated, pair.Key, nodeSnapshot(record))
+		}
+		if record.Node == nil {
+			continue
 		}
 		if err := record.OnRootStatus(hasRootPath); err != nil {
 			w.log.Debugf("node %d faled in OnRootStatus", record.ID)
@@ -982,6 +1141,183 @@ func validateNodePortOrder(record *nodeRecord, direction string, ports []uint64)
 		available[port] -= 1
 	}
 	return ordered, nil
+}
+
+func (w *Workspace) addPlaceholderPorts(record *nodeRecord, ports []Port) ([]uint64, error) {
+	if err := validatePlaceholderPorts(record.ID, ports); err != nil {
+		return nil, err
+	}
+	prepared := make([]Port, 0, len(ports))
+	for _, port := range ports {
+		port = port.Copy()
+		port.ID = 0
+		port.Node = record.ID
+		port.Links = []uint64{}
+		prepared = append(prepared, port)
+	}
+
+	added := make([]uint64, 0, len(prepared))
+	for _, port := range prepared {
+		port.ID = w.NextID()
+		w.ports.Set(port.ID, &port)
+		if port.Direction == "left" {
+			record.LeftPorts = append(record.LeftPorts, port.ID)
+		} else {
+			record.RightPorts = append(record.RightPorts, port.ID)
+		}
+		added = append(added, port.ID)
+	}
+	return added, nil
+}
+
+func validatePlaceholderPorts(node uint64, ports []Port) error {
+	for _, port := range ports {
+		port = port.Copy()
+		port.ID = 0
+		port.Node = node
+		port.Links = nil
+		if err := port.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) linkIsPlaceholder(link *Link) bool {
+	if link == nil {
+		return false
+	}
+	left, leftPresent := w.nodes.Get(link.LeftPortNode)
+	right, rightPresent := w.nodes.Get(link.RightPortNode)
+	return !leftPresent || left == nil || left.Node == nil ||
+		!rightPresent || right == nil || right.Node == nil
+}
+
+func (w *Workspace) refreshPlaceholderLinks(node uint64, notify bool) {
+	for _, link := range w.linksForNode(node) {
+		placeholder := w.linkIsPlaceholder(link)
+		if link.Placeholder == placeholder {
+			continue
+		}
+		link.Placeholder = placeholder
+		if notify {
+			w.enqueueLinkNotification(NotificationLinkUpdated, link.ID, linkSnapshot(link))
+		}
+	}
+}
+
+func (w *Workspace) deactivateNodeLinks(record *nodeRecord) {
+	for _, link := range w.linksForNode(record.ID) {
+		if link.Placeholder {
+			continue
+		}
+		if link.LeftPortNode != record.ID {
+			w.nodeEvLinkRemoved(link.LeftPortNode, link.ID, link.LeftPort, link.Type, "left")
+		}
+		if link.RightPortNode != record.ID {
+			w.nodeEvLinkRemoved(link.RightPortNode, link.ID, link.RightPort, link.Type, "right")
+		}
+	}
+}
+
+func (w *Workspace) activatePlaceholderLinks(record *nodeRecord) map[uint64]error {
+	failed := make(map[uint64]error)
+	for _, link := range w.linksForNode(record.ID) {
+		if !link.Placeholder || w.linkIsPlaceholder(link) {
+			continue
+		}
+		leftNode, leftOK := w.nodes.Get(link.LeftPortNode)
+		rightNode, rightOK := w.nodes.Get(link.RightPortNode)
+		if !leftOK || !rightOK || leftNode == nil || rightNode == nil {
+			continue
+		}
+		if err := leftNode.PreLinkAdd(link.LeftPort, link.Type, "left"); err != nil {
+			if errors.Is(err, ErrNodePanic) {
+				nodeID := leftNode.ID
+				if nodeID != record.ID {
+					w.AddPendingOp(func() {
+						w.RemoveNode(nodeID)
+					})
+				}
+			}
+			failed[leftNode.ID] = err
+			return failed
+		}
+		if err := rightNode.PreLinkAdd(link.RightPort, link.Type, "right"); err != nil {
+			if errors.Is(err, ErrNodePanic) {
+				nodeID := rightNode.ID
+				if nodeID != record.ID {
+					w.AddPendingOp(func() {
+						w.RemoveNode(nodeID)
+					})
+				}
+			}
+			failed[rightNode.ID] = err
+			return failed
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) notifyActivatedPlaceholderLinks(record *nodeRecord) map[uint64]error {
+	failed := make(map[uint64]error)
+	for _, link := range w.linksForNode(record.ID) {
+		if link.Placeholder || w.linkIsPlaceholder(link) {
+			continue
+		}
+		leftNode, leftOK := w.nodes.Get(link.LeftPortNode)
+		rightNode, rightOK := w.nodes.Get(link.RightPortNode)
+		if !leftOK || !rightOK || leftNode == nil || rightNode == nil {
+			continue
+		}
+		if err := leftNode.OnLinkAdd(link.ID, link.LeftPort, link.Type, "left"); err != nil {
+			if errors.Is(err, ErrNodePanic) {
+				nodeID := leftNode.ID
+				if nodeID != record.ID {
+					w.AddPendingOp(func() {
+						w.RemoveNode(nodeID)
+					})
+				}
+			}
+			failed[leftNode.ID] = err
+			return failed
+		}
+		if err := rightNode.OnLinkAdd(link.ID, link.RightPort, link.Type, "right"); err != nil {
+			if errors.Is(err, ErrNodePanic) {
+				nodeID := rightNode.ID
+				if nodeID != record.ID {
+					w.AddPendingOp(func() {
+						w.RemoveNode(nodeID)
+					})
+				}
+			}
+			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left")
+			failed[rightNode.ID] = err
+			return failed
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) linksForNode(node uint64) []*Link {
+	links := make([]*Link, 0)
+	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
+		link := pair.Value
+		if link == nil {
+			continue
+		}
+		if link.LeftPortNode == node || link.RightPortNode == node {
+			links = append(links, link)
+		}
+	}
+	return links
+}
+
+func firstError(errs map[uint64]error) error {
+	for _, err := range errs {
+		return err
+	}
+	return nil
 }
 
 // postlock executes after top-level unlock (one with recursion == 0).

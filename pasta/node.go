@@ -155,7 +155,7 @@ func (n *nodeRecord) OnInit(
 	w *Workspace,
 	restored *NodeInitData,
 ) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -172,7 +172,7 @@ func (n *nodeRecord) PreLinkAdd(
 	port uint64,
 	linkType, portDirection string,
 ) (rejection error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -189,7 +189,7 @@ func (n *nodeRecord) OnLinkAdd(
 	link, port uint64,
 	linkType, portDirection string,
 ) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -207,7 +207,7 @@ func (n *nodeRecord) OnPortAdd(
 	direction string,
 	types []string,
 ) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -224,7 +224,7 @@ func (n *nodeRecord) OnPortRemoved(
 	port uint64,
 	direction string,
 ) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -241,7 +241,7 @@ func (n *nodeRecord) OnLinkRemoved(
 	link, port uint64,
 	linkType, portDirection string,
 ) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -260,7 +260,7 @@ func (n *nodeRecord) OnEvent(
 	receiverPortTypes []string,
 	receiverPortDirection string,
 ) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -274,7 +274,7 @@ func (n *nodeRecord) OnEvent(
 }
 
 func (n *nodeRecord) OnInbox(message InboxMessage) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -288,7 +288,7 @@ func (n *nodeRecord) OnInbox(message InboxMessage) (err error) {
 }
 
 func (n *nodeRecord) OnReady() (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -302,7 +302,7 @@ func (n *nodeRecord) OnReady() (err error) {
 }
 
 func (n *nodeRecord) OnRootStatus(hasRootPath bool) (err error) {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	defer func() {
@@ -316,7 +316,7 @@ func (n *nodeRecord) OnRootStatus(hasRootPath bool) (err error) {
 }
 
 func (n *nodeRecord) OnStop() {
-	if n.stopped {
+	if n.stopped || n.Node == nil {
 		return
 	}
 	n.stopped = true
@@ -324,6 +324,9 @@ func (n *nodeRecord) OnStop() {
 }
 
 func nodeStop(n Node) {
+	if n == nil {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil { //nolint
 			// Ignore panics on stop

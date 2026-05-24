@@ -570,6 +570,163 @@ func TestWorkspaceReplaceNodeRejectsMissingAndDuplicateNodes(t *testing.T) {
 	}
 }
 
+func TestWorkspacePlaceholderNodeLifecycleAndSnapshots(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	root := &workspaceNode{}
+	rootID, err := w.AddRootNode(root, "example.com/Root")
+	if err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	rootLeft := mustAddPort(t, w, rootID, "left", "example.com/typeA")
+
+	placeholderID, err := w.AddPlaceholderNodeWithRoot("example.com/Missing", true, []pasta.Port{
+		{Direction: "right", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNodeWithRoot: %v", err)
+	}
+	placeholder := w.Snapshot().Nodes[placeholderID]
+	if !placeholder.Placeholder || placeholder.Root || placeholder.HasRootPath {
+		t.Fatalf("placeholder snapshot = %#v, want placeholder with false root state", placeholder)
+	}
+	if err := w.SetNodePrimary(placeholderID, "example.com/typeA"); err != nil {
+		t.Fatalf("SetNodePrimary placeholder: %v", err)
+	}
+	if snapshot := w.Snapshot().Nodes[placeholderID]; snapshot.PrimaryType != "" {
+		t.Fatalf("placeholder primary type snapshot = %q, want empty", snapshot.PrimaryType)
+	}
+
+	placeholderRight := placeholder.RightPorts[0]
+	link, _, err := w.AddLink(rootLeft, placeholderRight)
+	if err != nil {
+		t.Fatalf("AddLink to placeholder: %v", err)
+	}
+	if got := len(root.rootStatus); got != 1 {
+		t.Fatalf("root status callback count after placeholder link = %d, want 1", got)
+	}
+	linkSnapshot, ok := w.LinkSnapshot(link)
+	if !ok || !linkSnapshot.Placeholder {
+		t.Fatalf("placeholder link snapshot = %#v, %v; want placeholder", linkSnapshot, ok)
+	}
+
+	replacement := &workspaceNode{}
+	if err := w.ReplacePlaceholderNode(placeholderID, replacement); err != nil {
+		t.Fatalf("ReplacePlaceholderNode: %v", err)
+	}
+	if replacement.initData == nil || !reflect.DeepEqual(replacement.initData.RightPorts, []uint64{placeholderRight}) {
+		t.Fatalf("replacement init data = %#v, want preserved right port %d", replacement.initData, placeholderRight)
+	}
+	if got, want := replacement.rootStatus, []bool{true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("replacement root status = %v, want %v", got, want)
+	}
+	linkSnapshot, ok = w.LinkSnapshot(link)
+	if !ok || linkSnapshot.Placeholder {
+		t.Fatalf("restored link snapshot = %#v, %v; want non-placeholder", linkSnapshot, ok)
+	}
+	nodeSnapshot := w.Snapshot().Nodes[placeholderID]
+	if nodeSnapshot.Placeholder || !nodeSnapshot.Root || !nodeSnapshot.HasRootPath || nodeSnapshot.PrimaryType != "example.com/typeA" {
+		t.Fatalf("restored node snapshot = %#v, want normal restored state", nodeSnapshot)
+	}
+}
+
+func TestWorkspaceReplaceNodeWithPlaceholderPreservesLinksButRemovesCallbacks(t *testing.T) {
+	logf := &StringLoggerFactory{}
+	w := pasta.NewWorkspace(logf)
+
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeAID, err := w.AddRootNode(nodeA, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddRootNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(nodeB, "example.com/NodeB")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	left := mustAddPort(t, w, nodeAID, "left", "example.com/typeA")
+	right := mustAddPort(t, w, nodeBID, "right", "example.com/typeA")
+	link, _, err := w.AddLink(left, right)
+	if err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+	nodeB.rootStatus = nil
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	if err := w.ReplaceNodeWithPlaceholder(nodeBID, []pasta.Port{
+		{Direction: "right", Types: []string{pasta.AnyType}},
+	}); err != nil {
+		t.Fatalf("ReplaceNodeWithPlaceholder: %v", err)
+	}
+	assertHasNotification(t, notifications, pasta.NotificationLinkUpdated, link)
+	assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeBID)
+	if !strings.Contains(logf.Result(), "example.com/NodeA[debug]link removed") {
+		t.Fatalf("replacement did not notify live peer with OnLinkRemoved; logs:\n%s", logf.Result())
+	}
+	if nodeB.stopCount != 1 {
+		t.Fatalf("replaced node stop count = %d, want 1", nodeB.stopCount)
+	}
+	if snapshot := w.Snapshot(); !snapshot.Nodes[nodeBID].Placeholder || !snapshot.Links[link].Placeholder {
+		t.Fatalf("placeholder replacement snapshot = %#v", snapshot)
+	}
+	if !w.PortsConnected(left, right) || !w.NodesConnected(nodeAID, nodeBID) {
+		t.Fatal("placeholder replacement did not preserve indexed connection")
+	}
+	if got, want := nodeA.rootStatus, []bool{true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("node A root statuses = %v, want %v", got, want)
+	}
+
+	extraRight := w.Snapshot().Nodes[nodeBID].RightPorts[1]
+	extraLeft := mustAddPort(t, w, nodeAID, "left", pasta.AnyType)
+	beforePlaceholderLink := logf.Result()
+	if _, _, err := w.AddLink(extraLeft, extraRight); err != nil {
+		t.Fatalf("AddLink to placeholder extra port: %v", err)
+	}
+	if strings.Contains(strings.TrimPrefix(logf.Result(), beforePlaceholderLink), "pre link add") ||
+		strings.Contains(strings.TrimPrefix(logf.Result(), beforePlaceholderLink), "[debug]link add ") {
+		t.Fatalf("placeholder link attachment called add callbacks; logs:\n%s", strings.TrimPrefix(logf.Result(), beforePlaceholderLink))
+	}
+	if got := len(nodeA.rootStatus); got != 1 {
+		t.Fatalf("root status callback count after new placeholder link = %d, want 1", got)
+	}
+}
+
+func TestWorkspacePlaceholderLinksParticipateInDAGChecks(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeAID, err := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	placeholderID, err := w.AddPlaceholderNode("example.com/Missing", []pasta.Port{
+		{Direction: "left", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode: %v", err)
+	}
+
+	aLeft := mustAddPort(t, w, nodeAID, "left", "example.com/typeA")
+	aRight := mustAddPort(t, w, nodeAID, "right", "example.com/typeA")
+	placeholder := w.Snapshot().Nodes[placeholderID]
+	pLeft := placeholder.LeftPorts[0]
+	pRight := placeholder.RightPorts[0]
+
+	if _, _, err := w.AddLink(aLeft, pRight); err != nil {
+		t.Fatalf("AddLink A->placeholder: %v", err)
+	}
+	beforeCycle := w.Snapshot()
+	if _, _, err := w.AddLink(pLeft, aRight); !errors.Is(err, pasta.ErrCycle) {
+		t.Fatalf("placeholder cycle error = %v, want %v", err, pasta.ErrCycle)
+	}
+	assertWorkspaceSnapshot(t, w, beforeCycle)
+}
+
 func TestWorkspaceSetNodePortOrder(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -936,6 +1093,17 @@ func assertWorkspaceSnapshot(t *testing.T, w *pasta.Workspace, want pasta.Worksp
 	assertJSONSerializable(t, got)
 }
 
+func assertHasNotification(t *testing.T, notifications []pasta.WorkspaceNotification, kind pasta.NotificationKind, id uint64) {
+	t.Helper()
+
+	for _, notification := range notifications {
+		if notification.Kind == kind && notification.ID == id {
+			return
+		}
+	}
+	t.Fatalf("missing notification {%q, %d} in %#v", kind, id, notifications)
+}
+
 func assertJSONSerializable(t *testing.T, value any) {
 	t.Helper()
 
@@ -969,6 +1137,7 @@ func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
 func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {
 	return a.Class == b.Class &&
 		a.PrimaryType == b.PrimaryType &&
+		a.Placeholder == b.Placeholder &&
 		a.Root == b.Root &&
 		a.HasRootPath == b.HasRootPath &&
 		reflect.DeepEqual(emptyIfNil(a.LeftPorts), emptyIfNil(b.LeftPorts)) &&

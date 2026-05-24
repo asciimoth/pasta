@@ -16,6 +16,7 @@ type WorkspaceSnapshot struct {
 type NodeSnapshot struct {
 	Class       string   `json:"class"`
 	PrimaryType string   `json:"primary_type"`
+	Placeholder bool     `json:"placeholder"`
 	Root        bool     `json:"root"`
 	HasRootPath bool     `json:"has_root_path"`
 	LeftPorts   []uint64 `json:"left_ports"`
@@ -34,6 +35,7 @@ type PortSnapshot struct {
 // LinkSnapshot is a JSON-serializable copy of a link.
 type LinkSnapshot struct {
 	Type          string `json:"type"`
+	Placeholder   bool   `json:"placeholder"`
 	LeftPort      uint64 `json:"left_port"`
 	LeftPortNode  uint64 `json:"left_port_node"`
 	RightPort     uint64 `json:"right_port"`
@@ -117,6 +119,14 @@ func (w *Workspace) LinkSnapshot(id uint64) (LinkSnapshot, bool) {
 }
 
 func nodeSnapshot(record *nodeRecord) NodeSnapshot {
+	if record.Node == nil {
+		return NodeSnapshot{
+			Class:       record.Class,
+			Placeholder: true,
+			LeftPorts:   slices.Clone(record.LeftPorts),
+			RightPorts:  slices.Clone(record.RightPorts),
+		}
+	}
 	return NodeSnapshot{
 		Class:       record.Class,
 		PrimaryType: record.PrimaryType,
@@ -140,6 +150,7 @@ func portSnapshot(port *Port) PortSnapshot {
 func linkSnapshot(link *Link) LinkSnapshot {
 	return LinkSnapshot{
 		Type:          link.Type,
+		Placeholder:   link.Placeholder,
 		LeftPort:      link.LeftPort,
 		LeftPortNode:  link.LeftPortNode,
 		RightPort:     link.RightPort,

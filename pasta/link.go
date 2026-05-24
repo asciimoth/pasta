@@ -17,6 +17,9 @@ type Link struct {
 	ID   uint64
 	Type string
 
+	// Placeholder reports that at least one endpoint node is a placeholder.
+	Placeholder bool
+
 	// LeftPort and LeftPortNode identify the left endpoint and its owner node.
 	LeftPort, LeftPortNode uint64
 	// RightPort and RightPortNode identify the right endpoint and its owner node.

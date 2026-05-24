@@ -54,6 +54,9 @@ func (w *Workspace) deliverEvent(event Event) {
 	if link == nil {
 		return
 	}
+	if link.Placeholder {
+		return
+	}
 
 	if err := receiver.OnEvent(
 		event,
