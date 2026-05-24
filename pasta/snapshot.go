@@ -43,6 +43,10 @@ func (w *Workspace) Snapshot() WorkspaceSnapshot {
 	w.Lock()
 	defer w.Unlock()
 
+	return w.snapshotLocked()
+}
+
+func (w *Workspace) snapshotLocked() WorkspaceSnapshot {
 	snapshot := WorkspaceSnapshot{
 		Nodes: make(map[uint64]NodeSnapshot, w.nodes.Len()),
 		Ports: make(map[uint64]PortSnapshot, w.ports.Len()),

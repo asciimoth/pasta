@@ -38,6 +38,10 @@ type Workspace struct {
 	ports *orderedmap.OrderedMap[uint64, *Port]
 	links *orderedmap.OrderedMap[uint64, *Link]
 
+	nextSubscriptionID uint64
+	subscribers        map[uint64]NotificationCallback
+	notifications      []WorkspaceNotification
+
 	log  Logger
 	logf LogFactory
 }
@@ -54,6 +58,10 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		nodes:   orderedmap.New[uint64, *nodeRecord](),
 		ports:   orderedmap.New[uint64, *Port](),
 		links:   orderedmap.New[uint64, *Link](),
+
+		nextSubscriptionID: 1,
+		subscribers:        make(map[uint64]NotificationCallback),
+		notifications:      make([]WorkspaceNotification, 0),
 
 		log:  logf.WorkspaceLogger(),
 		logf: logf,
@@ -146,6 +154,7 @@ func (w *Workspace) RemoveNode(id uint64) {
 	if record, present = w.nodes.Delete(id); !present || record == nil {
 		return
 	}
+	removed := nodeSnapshot(record)
 	record.OnStop()
 
 	for port := range record.Ports() {
@@ -155,7 +164,7 @@ func (w *Workspace) RemoveNode(id uint64) {
 	record.RightPorts = nil
 
 	w.log.Debug("removed node", id)
-	// TODO: Send notification
+	w.enqueueNodeNotification(NotificationNodeRemoved, id, removed)
 }
 
 // RemovePort removes a port and all links attached to it.
@@ -174,6 +183,7 @@ func (w *Workspace) RemovePort(id uint64) {
 	if port, present = w.ports.Delete(id); !present || port == nil {
 		return
 	}
+	removed := portSnapshot(port)
 
 	links := port.Links
 	port.Links = make([]uint64, 0)
@@ -184,7 +194,10 @@ func (w *Workspace) RemovePort(id uint64) {
 	w.nodeEvPortRemoved(port.Node, id, port.Direction)
 
 	w.log.Debug("removed port", id)
-	// TODO: Send notification
+	w.enqueuePortNotification(NotificationPortRemoved, id, removed)
+	if record, present := w.nodes.Get(port.Node); present && record != nil {
+		w.enqueueNodeNotification(NotificationNodeUpdated, port.Node, nodeSnapshot(record))
+	}
 }
 
 // RemoveLink removes a link and updates both endpoint ports and nodes.
@@ -203,21 +216,24 @@ func (w *Workspace) RemoveLink(id uint64) {
 	if link, present = w.links.Delete(id); !present || link == nil {
 		return
 	}
+	removed := linkSnapshot(link)
+	w.enqueueLinkNotification(NotificationLinkRemoved, id, removed)
 
 	port, present := w.ports.Get(link.LeftPort)
 	if present {
 		port.RemoveLink(id)
+		w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
 	}
 	port, present = w.ports.Get(link.RightPort)
 	if present {
 		port.RemoveLink(id)
+		w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
 	}
 
 	w.nodeEvLinkRemoved(link.LeftPortNode, id, link.LeftPort, link.Type, "left")
 	w.nodeEvLinkRemoved(link.RightPortNode, id, link.RightPort, link.Type, "right")
 
 	w.log.Debug("removed link", id)
-	// TODO: Send notification
 }
 
 // AddNode adds node to the workspace and returns its workspace-scoped ID.
@@ -267,7 +283,7 @@ func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
 	}
 
 	w.log.Debug("node added", id)
-	// TODO: Send notification
+	w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
 
 	return id, nil
 }
@@ -309,7 +325,8 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 	}
 
 	w.log.Debug("port added", id)
-	// TODO: Send notification
+	w.enqueuePortNotification(NotificationPortAdded, id, portSnapshot(&port))
+	w.enqueueNodeNotification(NotificationNodeUpdated, record.ID, nodeSnapshot(record))
 
 	return id, nil
 }
@@ -434,7 +451,9 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	Right.Links = append(Right.Links, link.ID)
 
 	w.log.Debug("link added", link.ID)
-	// TODO: Send notification
+	w.enqueueLinkNotification(NotificationLinkAdded, link.ID, linkSnapshot(&link))
+	w.enqueuePortNotification(NotificationPortUpdated, Left.ID, portSnapshot(Left))
+	w.enqueuePortNotification(NotificationPortUpdated, Right.ID, portSnapshot(Right))
 	return link.ID, link.Type, nil
 }
 
@@ -538,6 +557,7 @@ func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
 		return ErrNoNode
 	}
 	record.PrimaryType = typ
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	return nil
 }
 
@@ -551,6 +571,7 @@ func (w *Workspace) SetPortName(id uint64, name string) error {
 		return ErrNoPort
 	}
 	port.Name = name
+	w.enqueuePortNotification(NotificationPortUpdated, id, portSnapshot(port))
 	return nil
 }
 
@@ -607,7 +628,7 @@ func (w *Workspace) postlock() {
 	// It is only place where we should call mu.Lock/mu.Unlock directly instead
 	// of w.Lock/w.Unlock.
 	w.mu.Lock()
-	defer w.mu.Unlock() //nolint
+	defer w.mu.Unlock()
 
 	// Call pending operations
 	for len(w.pending) > 0 {
@@ -617,6 +638,9 @@ func (w *Workspace) postlock() {
 			op()
 		}
 	}
+
+	deliveries := w.drainNotificationDeliveries()
+	deliverNotifications(deliveries)
 }
 
 func (w *Workspace) portsSharedType(portA, portB *Port) string {
