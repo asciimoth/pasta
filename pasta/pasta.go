@@ -113,7 +113,7 @@ func (w *Workspace) AddPendingOp(op func()) {
 	w.Lock()
 	defer w.Unlock()
 	if w.pending == nil {
-		w.pending = []func(){op}
+		w.pending = make([]func(), 0, 1)
 	}
 	w.pending = append(w.pending, op)
 }
@@ -265,7 +265,7 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 
 	// Make sure node exists
 	record, present := w.nodes.Get(port.Node)
-	if !present && record == nil {
+	if !present || record == nil {
 		return 0, ErrNoNode
 	}
 
@@ -280,6 +280,12 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 			w.RemoveNode(record.ID)
 		})
 		return 0, err
+	}
+
+	if port.Direction == "left" {
+		record.LeftPorts = append(record.LeftPorts, port.ID)
+	} else {
+		record.RightPorts = append(record.RightPorts, port.ID)
 	}
 
 	w.log.Debug("port added", id)
@@ -308,7 +314,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		return 0, "", ErrNoPort
 	}
 
-	portB, present := w.ports.Get(pa)
+	portB, present := w.ports.Get(pb)
 	if !present || portB == nil {
 		return 0, "", ErrNoPort
 	}
@@ -346,7 +352,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	if !present || leftNode == nil {
 		return 0, "", ErrNoNode
 	}
-	rightNode, present := w.nodes.Get(Left.Node)
+	rightNode, present := w.nodes.Get(Right.Node)
 	if !present || rightNode == nil {
 		return 0, "", ErrNoNode
 	}
@@ -409,9 +415,12 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		return 0, "", err
 	}
 
+	Left.Links = append(Left.Links, link.ID)
+	Right.Links = append(Right.Links, link.ID)
+
 	w.log.Debug("link added", link.ID)
 	// TODO: Send notification
-	return 0, link.Type, nil
+	return link.ID, link.Type, nil
 }
 
 func (w *Workspace) PortsConnected(pa, pb uint64) bool {
@@ -423,7 +432,7 @@ func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 		return false
 	}
 
-	portB, present := w.ports.Get(pa)
+	portB, present := w.ports.Get(pb)
 	if !present || portB == nil {
 		return false
 	}
@@ -489,7 +498,9 @@ func (w *Workspace) postlock() {
 
 	// Call pending operations
 	for len(w.pending) > 0 {
-		for _, op := range w.pending {
+		ops := w.pending
+		w.pending = make([]func(), 0)
+		for _, op := range ops {
 			op()
 		}
 	}

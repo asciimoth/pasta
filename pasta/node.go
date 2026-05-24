@@ -80,10 +80,10 @@ func (n *nodeRecord) RemovePort(id uint64) {
 		return e == id
 	}
 	if len(n.LeftPorts) > 0 {
-		_ = slices.DeleteFunc(n.LeftPorts, f)
+		n.LeftPorts = slices.DeleteFunc(n.LeftPorts, f)
 	}
 	if len(n.RightPorts) > 0 {
-		_ = slices.DeleteFunc(n.RightPorts, f)
+		n.RightPorts = slices.DeleteFunc(n.RightPorts, f)
 	}
 }
 

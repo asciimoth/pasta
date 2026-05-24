@@ -32,7 +32,7 @@ func (p *Port) RemoveLink(link uint64) {
 	if len(p.Links) < 1 {
 		return
 	}
-	_ = slices.DeleteFunc(p.Links, func(e uint64) bool {
+	p.Links = slices.DeleteFunc(p.Links, func(e uint64) bool {
 		return e == link
 	})
 }
@@ -54,6 +54,7 @@ func (p *Port) Copy() Port {
 		Direction: p.Direction,
 		ID:        p.ID,
 		Node:      p.Node,
+		Name:      p.Name,
 		Types:     p.CopyTypes(),
 		Links:     p.CopyLinks(),
 	}
