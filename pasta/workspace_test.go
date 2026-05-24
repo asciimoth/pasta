@@ -570,6 +570,82 @@ func TestWorkspaceReplaceNodeRejectsMissingAndDuplicateNodes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSetNodePortOrder(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	leftA := mustAddPort(t, w, nodeID, "left", "example.com/typeA")
+	leftB := mustAddPort(t, w, nodeID, "left", "example.com/typeA")
+	leftC := mustAddPort(t, w, nodeID, "left", "example.com/typeA")
+	rightA := mustAddPort(t, w, nodeID, "right", "example.com/typeA")
+	rightB := mustAddPort(t, w, nodeID, "right", "example.com/typeA")
+
+	if err := w.SetNodePortOrder(nodeID, "left", []uint64{leftC, leftA, leftB}); err != nil {
+		t.Fatalf("SetNodePortOrder left: %v", err)
+	}
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeID: {
+				Class:      "example.com/Node",
+				LeftPorts:  []uint64{leftC, leftA, leftB},
+				RightPorts: []uint64{rightA, rightB},
+			},
+		},
+		Ports: map[uint64]pasta.PortSnapshot{
+			leftA:  {Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}},
+			leftB:  {Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}},
+			leftC:  {Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}},
+			rightA: {Node: nodeID, Direction: "right", Types: []string{"example.com/typeA"}},
+			rightB: {Node: nodeID, Direction: "right", Types: []string{"example.com/typeA"}},
+		},
+	})
+
+	beforeInvalid := w.Snapshot()
+	if err := w.SetNodePortOrder(nodeID, "up", []uint64{leftA, leftB, leftC}); !errors.Is(err, pasta.ErrPortDirection) {
+		t.Fatalf("SetNodePortOrder bad direction error = %v, want %v", err, pasta.ErrPortDirection)
+	}
+	if err := w.SetNodePortOrder(nodeID, "left", []uint64{leftA, leftA, leftC}); !errors.Is(err, pasta.ErrPortOrder) {
+		t.Fatalf("SetNodePortOrder duplicate error = %v, want %v", err, pasta.ErrPortOrder)
+	}
+	if err := w.SetNodePortOrder(nodeID, "left", []uint64{leftA, leftB}); !errors.Is(err, pasta.ErrPortOrder) {
+		t.Fatalf("SetNodePortOrder missing error = %v, want %v", err, pasta.ErrPortOrder)
+	}
+	if err := w.SetNodePortOrder(nodeID, "left", []uint64{rightA, leftA, leftB}); !errors.Is(err, pasta.ErrPortOrder) {
+		t.Fatalf("SetNodePortOrder wrong side error = %v, want %v", err, pasta.ErrPortOrder)
+	}
+	assertWorkspaceSnapshot(t, w, beforeInvalid)
+
+	if err := w.SetNodePortsOrder(nodeID, []uint64{leftB, leftC, leftA}, []uint64{rightB, rightA}); err != nil {
+		t.Fatalf("SetNodePortsOrder: %v", err)
+	}
+	afterBoth := w.Snapshot()
+	if !reflect.DeepEqual(afterBoth.Nodes[nodeID].LeftPorts, []uint64{leftB, leftC, leftA}) {
+		t.Fatalf("left port order = %v", afterBoth.Nodes[nodeID].LeftPorts)
+	}
+	if !reflect.DeepEqual(afterBoth.Nodes[nodeID].RightPorts, []uint64{rightB, rightA}) {
+		t.Fatalf("right port order = %v", afterBoth.Nodes[nodeID].RightPorts)
+	}
+
+	if err := w.SetNodePortsOrder(nodeID, []uint64{leftA, leftB, leftC}, []uint64{rightA, rightA}); !errors.Is(err, pasta.ErrPortOrder) {
+		t.Fatalf("SetNodePortsOrder invalid right error = %v, want %v", err, pasta.ErrPortOrder)
+	}
+	assertWorkspaceSnapshot(t, w, afterBoth)
+	if err := w.SetNodePortOrder(999, "left", nil); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("SetNodePortOrder missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+
+	w.Close()
+	if err := w.SetNodePortOrder(nodeID, "left", []uint64{leftA, leftB, leftC}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePortOrder after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetNodePortsOrder(nodeID, []uint64{leftA, leftB, leftC}, []uint64{rightA, rightB}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePortsOrder after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+}
+
 func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -634,6 +710,12 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	}
 	if err := w.SetNodeRoot(nodeAID, true); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeRoot after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetNodePortOrder(nodeAID, "left", []uint64{portA}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePortOrder after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetNodePortsOrder(nodeAID, []uint64{portA}, nil); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePortsOrder after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
 	if err := w.SetPortName(portA, "input"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetPortName after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)

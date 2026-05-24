@@ -16,6 +16,9 @@ var (
 
 	// ErrNoNode reports that a node ID does not exist in the workspace.
 	ErrNoNode = errors.New("node do not exists")
+	// ErrPortOrder reports that a requested node port order does not exactly
+	// match the node's existing ports for that side.
+	ErrPortOrder = errors.New("port order")
 	// ErrCycle reports that a link would create a cycle in the node graph.
 	ErrCycle = errors.New("graph cycle")
 	// ErrSameDirection reports that both ports have the same direction.
@@ -747,6 +750,64 @@ func (w *Workspace) SetNodeRoot(id uint64, root bool) error {
 	return nil
 }
 
+// SetNodePortOrder sets a node's explicit port order for one direction.
+//
+// direction must be "left" or "right". ports must contain exactly the node's
+// current ports for that direction, with no omissions, additions, or duplicates.
+func (w *Workspace) SetNodePortOrder(id uint64, direction string, ports []uint64) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	ordered, err := validateNodePortOrder(record, direction, ports)
+	if err != nil {
+		return err
+	}
+	if direction == "left" {
+		record.LeftPorts = ordered
+	} else {
+		record.RightPorts = ordered
+	}
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
+// SetNodePortsOrder sets a node's explicit left and right port order.
+//
+// Each list must contain exactly the node's current ports for that side, with
+// no omissions, additions, or duplicates.
+func (w *Workspace) SetNodePortsOrder(id uint64, leftPorts, rightPorts []uint64) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	left, err := validateNodePortOrder(record, "left", leftPorts)
+	if err != nil {
+		return err
+	}
+	right, err := validateNodePortOrder(record, "right", rightPorts)
+	if err != nil {
+		return err
+	}
+
+	record.LeftPorts = left
+	record.RightPorts = right
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
 // SetPortName sets a port's display name.
 func (w *Workspace) SetPortName(id uint64, name string) error {
 	w.Lock()
@@ -893,6 +954,34 @@ func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 		return nil
 	}
 	return failed
+}
+
+func validateNodePortOrder(record *nodeRecord, direction string, ports []uint64) ([]uint64, error) {
+	var current []uint64
+	switch direction {
+	case "left":
+		current = record.LeftPorts
+	case "right":
+		current = record.RightPorts
+	default:
+		return nil, errors.Join(ErrPortDirection, errors.New(direction))
+	}
+
+	if len(ports) != len(current) {
+		return nil, ErrPortOrder
+	}
+	available := make(map[uint64]int, len(current))
+	for _, port := range current {
+		available[port] += 1
+	}
+	ordered := slices.Clone(ports)
+	for _, port := range ordered {
+		if available[port] < 1 {
+			return nil, ErrPortOrder
+		}
+		available[port] -= 1
+	}
+	return ordered, nil
 }
 
 // postlock executes after top-level unlock (one with recursion == 0).
