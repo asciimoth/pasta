@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,10 +15,19 @@ type workspaceNode struct {
 	l           pasta.Logger
 	initPrimary string
 	rootStatus  []bool
+	initData    *pasta.NodeInitData
+	readyCount  int
+	stopCount   int
 }
 
-func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string) error {
+func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData) error {
 	n.l = l
+	if restored != nil {
+		data := *restored
+		data.LeftPorts = slices.Clone(restored.LeftPorts)
+		data.RightPorts = slices.Clone(restored.RightPorts)
+		n.initData = &data
+	}
 	l.Debugf("init id=%d class=%s", id, class)
 	if n.initPrimary != "" {
 		return w.SetNodePrimary(id, n.initPrimary)
@@ -26,6 +36,7 @@ func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, cl
 }
 
 func (n *workspaceNode) OnReady() error {
+	n.readyCount += 1
 	n.l.Debug("ready")
 	return nil
 }
@@ -36,6 +47,7 @@ func (n *workspaceNode) OnRootStatus(hasRootPath bool) error {
 }
 
 func (n *workspaceNode) OnStop() {
+	n.stopCount += 1
 	n.l.Debug("stop")
 }
 
@@ -477,6 +489,84 @@ func TestWorkspaceTracksRootPaths(t *testing.T) {
 	}
 	if err := w.SetNodeRoot(999, true); !errors.Is(err, pasta.ErrNoNode) {
 		t.Fatalf("SetNodeRoot missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+}
+
+func TestWorkspaceReplaceNodePreservesRecordState(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	legacy := &workspaceNode{}
+	replacement := &workspaceNode{}
+
+	nodeID, err := w.AddRootNode(legacy, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	left := mustAddPort(t, w, nodeID, "left", "example.com/typeA")
+	right := mustAddPort(t, w, nodeID, "right", "example.com/typeA")
+	if err := w.SetNodePrimary(nodeID, "example.com/typeA"); err != nil {
+		t.Fatalf("SetNodePrimary: %v", err)
+	}
+
+	before := w.Snapshot()
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	if err := w.ReplaceNode(nodeID, replacement); err != nil {
+		t.Fatalf("ReplaceNode: %v", err)
+	}
+
+	if legacy.stopCount != 1 {
+		t.Fatalf("legacy stop count = %d, want 1", legacy.stopCount)
+	}
+	if replacement.readyCount != 1 {
+		t.Fatalf("replacement ready count = %d, want 1", replacement.readyCount)
+	}
+	if got, want := replacement.rootStatus, []bool{true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("replacement root status = %v, want %v", got, want)
+	}
+	if replacement.initData == nil {
+		t.Fatal("replacement OnInit did not receive restored data")
+	}
+	if replacement.initData.PrimaryType != "example.com/typeA" {
+		t.Fatalf("restored primary type = %q, want example.com/typeA", replacement.initData.PrimaryType)
+	}
+	if !reflect.DeepEqual(replacement.initData.LeftPorts, []uint64{left}) {
+		t.Fatalf("restored left ports = %v, want [%d]", replacement.initData.LeftPorts, left)
+	}
+	if !reflect.DeepEqual(replacement.initData.RightPorts, []uint64{right}) {
+		t.Fatalf("restored right ports = %v, want [%d]", replacement.initData.RightPorts, right)
+	}
+	assertWorkspaceSnapshot(t, w, before)
+	if len(notifications) != 0 {
+		t.Fatalf("replacement emitted notifications: %#v", notifications)
+	}
+}
+
+func TestWorkspaceReplaceNodeRejectsMissingAndDuplicateNodes(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeAID, err := w.AddNode(nodeA, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	if _, err := w.AddNode(nodeB, "example.com/NodeB"); err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+
+	if err := w.ReplaceNode(999, &workspaceNode{}); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("ReplaceNode missing error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.ReplaceNode(nodeAID, nodeA); !errors.Is(err, pasta.ErrNodeDup) {
+		t.Fatalf("ReplaceNode same node error = %v, want %v", err, pasta.ErrNodeDup)
+	}
+	if err := w.ReplaceNode(nodeAID, nodeB); !errors.Is(err, pasta.ErrNodeDup) {
+		t.Fatalf("ReplaceNode duplicate error = %v, want %v", err, pasta.ErrNodeDup)
 	}
 }
 

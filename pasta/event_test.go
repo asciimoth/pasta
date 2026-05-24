@@ -28,7 +28,7 @@ type calcNode struct {
 	right uint64
 }
 
-func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string) error {
+func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData) error {
 	n.w = w
 	n.l = l
 	n.id = id

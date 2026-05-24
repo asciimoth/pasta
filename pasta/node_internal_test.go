@@ -17,7 +17,7 @@ func (n *internalNode) call(name string) {
 	n.calls = append(n.calls, name)
 }
 
-func (n *internalNode) OnInit(w *Workspace, l Logger, id uint64, class string) error {
+func (n *internalNode) OnInit(w *Workspace, l Logger, id uint64, class string, restored *NodeInitData) error {
 	n.call("init")
 	return nil
 }

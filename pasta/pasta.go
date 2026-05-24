@@ -282,7 +282,7 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 	}
 	w.nodes.Set(id, &rec)
 
-	if err := rec.OnInit(w); err != nil {
+	if err := rec.OnInit(w, nil); err != nil {
 		w.RemoveNode(id)
 		return 0, err
 	}
@@ -308,6 +308,57 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 	w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
 
 	return id, nil
+}
+
+// ReplaceNode replaces the Node implementation in an existing node record.
+//
+// The workspace keeps the node ID, class, primary type, ports, root state, and
+// current root-path status. A successful replacement does not enqueue workspace
+// notifications because the snapshot-observable node state is unchanged.
+func (w *Workspace) ReplaceNode(id uint64, node Node) error {
+	if id < 1 {
+		return ErrNoNode
+	}
+
+	w.Lock()
+	defer w.Unlock()
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	if record.Node == node {
+		return ErrNodeDup
+	}
+	for pair := w.nodes.Newest(); pair != nil; pair = pair.Prev() {
+		if pair.Key != id && pair.Value != nil && pair.Value.Node == node {
+			return ErrNodeDup
+		}
+	}
+
+	old := record.Node
+	restored := record.InitData()
+	nodeStop(old)
+
+	record.Node = node
+	record.stopped = false
+	if err := record.OnInit(w, &restored); err != nil {
+		w.RemoveNode(id)
+		return err
+	}
+	if w.isReady {
+		if err := record.OnReady(); err != nil {
+			w.RemoveNode(id)
+			w.log.Debugf("node %d faled in OnReady", id)
+			return err
+		}
+		if err := record.OnRootStatus(record.HasRootPath); err != nil {
+			w.RemoveNode(id)
+			w.log.Debugf("node %d faled in OnRootStatus", id)
+			return err
+		}
+	}
+	return nil
 }
 
 // AddPort adds a port to its owner node and returns the new port ID.

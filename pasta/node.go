@@ -27,7 +27,7 @@ type Node interface {
 		l Logger,
 		id uint64,
 		class string,
-		// TODO: when restoring from config, pass restored
+		restored *NodeInitData,
 	) error
 
 	// OnReady is called once the workspace is ready to run.
@@ -87,6 +87,17 @@ type Node interface {
 	OnInbox(message InboxMessage) error
 }
 
+// NodeInitData carries existing node-owned workspace state into OnInit.
+//
+// It is nil for ordinary node additions. Workspace operations that preserve an
+// existing node record, such as node replacement, pass a snapshot of the state
+// the new Node implementation inherits.
+type NodeInitData struct {
+	PrimaryType string
+	LeftPorts   []uint64
+	RightPorts  []uint64
+}
+
 type nodeRecord struct {
 	ID    uint64 // must be Workspace unique
 	Node  Node
@@ -132,8 +143,17 @@ func (n *nodeRecord) Ports() iter.Seq[uint64] {
 	}
 }
 
+func (n *nodeRecord) InitData() NodeInitData {
+	return NodeInitData{
+		PrimaryType: n.PrimaryType,
+		LeftPorts:   slices.Clone(n.LeftPorts),
+		RightPorts:  slices.Clone(n.RightPorts),
+	}
+}
+
 func (n *nodeRecord) OnInit(
 	w *Workspace,
+	restored *NodeInitData,
 ) (err error) {
 	if n.stopped {
 		return
@@ -144,7 +164,7 @@ func (n *nodeRecord) OnInit(
 			err = ErrNodePanic
 		}
 	}()
-	err = n.Node.OnInit(w, n.L, n.ID, n.Class)
+	err = n.Node.OnInit(w, n.L, n.ID, n.Class, restored)
 	return
 }
 
