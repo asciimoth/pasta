@@ -225,6 +225,61 @@ func TestWorkspaceNotificationMultipleSubscriptions(t *testing.T) {
 	}
 }
 
+func TestWorkspaceNotificationSubscriberCanRequestFullSnapshot(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	var first []pasta.WorkspaceNotification
+	firstID := w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		first = append(first, notification)
+	})
+	var second []pasta.WorkspaceNotification
+	secondID := w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		second = append(second, notification)
+	})
+	first = nil
+	second = nil
+
+	w.Lock()
+	if !w.RequestFullSnapshot(firstID) {
+		t.Fatalf("RequestFullSnapshot(%d) returned false", firstID)
+	}
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode while snapshot request pending: %v", err)
+	}
+	w.Unlock()
+
+	assertNotificationMatches(t, first, []notificationMatch{
+		{kind: pasta.NotificationWorkspaceSnapshot},
+		{kind: pasta.NotificationNodeAdded, id: nodeID},
+	})
+	assertNotificationMatches(t, second, []notificationMatch{
+		{kind: pasta.NotificationNodeAdded, id: nodeID},
+	})
+	if first[0].Snapshot == nil {
+		t.Fatal("requested full snapshot notification has nil snapshot")
+	}
+	if _, present := first[0].Snapshot.Nodes[nodeID]; !present {
+		t.Fatalf("requested snapshot = %#v, want node %d added after request", first[0].Snapshot, nodeID)
+	}
+	if !w.RequestFullSnapshot(secondID) {
+		t.Fatalf("RequestFullSnapshot(%d) returned false", secondID)
+	}
+	if got := second[len(second)-1]; got.Kind != pasta.NotificationWorkspaceSnapshot || got.Snapshot == nil {
+		t.Fatalf("second last notification = %#v, want full snapshot", got)
+	}
+
+	if w.RequestFullSnapshot(999) {
+		t.Fatal("RequestFullSnapshot missing subscription returned true")
+	}
+	if !w.UnsubscribeNotifications(firstID) {
+		t.Fatalf("UnsubscribeNotifications(%d) returned false", firstID)
+	}
+	if w.RequestFullSnapshot(firstID) {
+		t.Fatal("RequestFullSnapshot unsubscribed subscription returned true")
+	}
+}
+
 type notificationMatch struct {
 	kind pasta.NotificationKind
 	id   uint64

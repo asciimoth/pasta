@@ -37,6 +37,8 @@ type WorkspaceNotification struct {
 	Node     *NodeSnapshot      `json:"node,omitempty"`
 	Port     *PortSnapshot      `json:"port,omitempty"`
 	Link     *LinkSnapshot      `json:"link,omitempty"`
+
+	snapshotRequest bool
 }
 
 // NotificationCallback receives workspace notifications synchronously.
@@ -98,6 +100,32 @@ func (w *Workspace) UnsubscribeNotifications(id uint64) bool {
 	return true
 }
 
+// RequestFullSnapshot schedules a full workspace snapshot notification for one
+// notification subscription.
+//
+// The snapshot is formed when notifications are drained for delivery, not when
+// the request is made.
+func (w *Workspace) RequestFullSnapshot(subscriptionID uint64) bool {
+	if subscriptionID < 1 {
+		return false
+	}
+
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return false
+	}
+	if _, present := w.subscribers[subscriptionID]; !present {
+		return false
+	}
+	w.enqueueNotification(WorkspaceNotification{
+		SubscriptionID:  subscriptionID,
+		Kind:            NotificationWorkspaceSnapshot,
+		snapshotRequest: true,
+	})
+	return true
+}
+
 func (w *Workspace) enqueueNotification(notification WorkspaceNotification) {
 	if len(w.subscribers) == 0 {
 		return
@@ -141,7 +169,15 @@ func (w *Workspace) drainNotificationDeliveries() []notificationDelivery {
 			if callback == nil {
 				continue
 			}
+			if notification.SubscriptionID != 0 && notification.SubscriptionID != id {
+				continue
+			}
 			notification.SubscriptionID = id
+			if notification.snapshotRequest {
+				snapshot := w.snapshotLocked()
+				notification.Snapshot = &snapshot
+				notification.snapshotRequest = false
+			}
 			deliveries = append(deliveries, notificationDelivery{
 				callback:     callback,
 				notification: notification,
