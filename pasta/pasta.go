@@ -223,6 +223,67 @@ func (w *Workspace) RemoveNode(id uint64) {
 	w.enqueueNodeNotification(NotificationNodeRemoved, id, removed)
 }
 
+// NodesByClass returns IDs of all nodes with class.
+func (w *Workspace) NodesByClass(class string) ([]uint64, error) {
+	if err := ValidateClassName(class); err != nil {
+		return nil, err
+	}
+
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return nil, nil
+	}
+
+	nodes := make([]uint64, 0)
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value == nil || pair.Value.Class != class {
+			continue
+		}
+		nodes = append(nodes, pair.Key)
+	}
+	return nodes, nil
+}
+
+// RemoveNodesByClass removes all nodes with class.
+func (w *Workspace) RemoveNodesByClass(class string) error {
+	if err := ValidateClassName(class); err != nil {
+		return err
+	}
+
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	for _, id := range w.nodeIDsByClassLocked(class) {
+		w.RemoveNode(id)
+	}
+	return nil
+}
+
+// ReplaceNodesByClassWithPlaceholders replaces all nodes with class by
+// placeholders, preserving their ports and links.
+func (w *Workspace) ReplaceNodesByClassWithPlaceholders(class string) error {
+	if err := ValidateClassName(class); err != nil {
+		return err
+	}
+
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	for _, id := range w.nodeIDsByClassLocked(class) {
+		if err := w.ReplaceNodeWithPlaceholder(id, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RemovePort removes a port and all links attached to it.
 func (w *Workspace) RemovePort(id uint64) {
 	if id < 1 {
@@ -1141,6 +1202,17 @@ func validateNodePortOrder(record *nodeRecord, direction string, ports []uint64)
 		available[port] -= 1
 	}
 	return ordered, nil
+}
+
+func (w *Workspace) nodeIDsByClassLocked(class string) []uint64 {
+	nodes := make([]uint64, 0)
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value == nil || pair.Value.Class != class {
+			continue
+		}
+		nodes = append(nodes, pair.Key)
+	}
+	return nodes
 }
 
 func (w *Workspace) addPlaceholderPorts(record *nodeRecord, ports []Port) ([]uint64, error) {

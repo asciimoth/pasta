@@ -387,6 +387,114 @@ func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 	}
 }
 
+func TestWorkspaceClassWideNodeOperations(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeC := &workspaceNode{}
+	nodeAID, err := w.AddNode(nodeA, "example.com/Target")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(nodeB, "example.com/Other")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	nodeCID, err := w.AddNode(nodeC, "example.com/Target")
+	if err != nil {
+		t.Fatalf("AddNode C: %v", err)
+	}
+	placeholderID, err := w.AddPlaceholderNode("example.com/Target", []pasta.Port{
+		{Direction: "right", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode: %v", err)
+	}
+
+	got, err := w.NodesByClass("example.com/Target")
+	if err != nil {
+		t.Fatalf("NodesByClass: %v", err)
+	}
+	if want := []uint64{nodeAID, nodeCID, placeholderID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("NodesByClass = %v, want %v", got, want)
+	}
+	got, err = w.NodesByClass("example.com/Other")
+	if err != nil {
+		t.Fatalf("NodesByClass other: %v", err)
+	}
+	if want := []uint64{nodeBID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("NodesByClass other = %v, want %v", got, want)
+	}
+	if _, err := w.NodesByClass("example.com/target"); !errors.Is(err, pasta.ErrClassName) {
+		t.Fatalf("NodesByClass invalid class error = %v, want %v", err, pasta.ErrClassName)
+	}
+
+	if err := w.RemoveNodesByClass("example.com/Target"); err != nil {
+		t.Fatalf("RemoveNodesByClass: %v", err)
+	}
+	if got, err := w.NodesByClass("example.com/Target"); err != nil || len(got) != 0 {
+		t.Fatalf("NodesByClass target after remove = %v, %v; want empty, nil", got, err)
+	}
+	if got, err := w.NodesByClass("example.com/Other"); err != nil || !reflect.DeepEqual(got, []uint64{nodeBID}) {
+		t.Fatalf("NodesByClass other after remove = %v, %v; want [%d], nil", got, err, nodeBID)
+	}
+	if nodeA.stopCount != 1 || nodeC.stopCount != 1 {
+		t.Fatalf("removed target stop counts = %d, %d; want 1, 1", nodeA.stopCount, nodeC.stopCount)
+	}
+}
+
+func TestWorkspaceReplaceNodesByClassWithPlaceholders(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeC := &workspaceNode{}
+	nodeAID, err := w.AddNode(nodeA, "example.com/Target")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(nodeB, "example.com/Other")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	nodeCID, err := w.AddNode(nodeC, "example.com/Target")
+	if err != nil {
+		t.Fatalf("AddNode C: %v", err)
+	}
+	aLeft := mustAddPort(t, w, nodeAID, "left", "example.com/typeA")
+	bRight := mustAddPort(t, w, nodeBID, "right", "example.com/typeA")
+	link, _, err := w.AddLink(aLeft, bRight)
+	if err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+	cRight := mustAddPort(t, w, nodeCID, "right", pasta.AnyType)
+
+	if err := w.ReplaceNodesByClassWithPlaceholders("example.com/Target"); err != nil {
+		t.Fatalf("ReplaceNodesByClassWithPlaceholders: %v", err)
+	}
+
+	snapshot := w.Snapshot()
+	if !snapshot.Nodes[nodeAID].Placeholder || !snapshot.Nodes[nodeCID].Placeholder {
+		t.Fatalf("target nodes not placeholders: %#v %#v", snapshot.Nodes[nodeAID], snapshot.Nodes[nodeCID])
+	}
+	if snapshot.Nodes[nodeBID].Placeholder {
+		t.Fatalf("non-target node became placeholder: %#v", snapshot.Nodes[nodeBID])
+	}
+	if !snapshot.Links[link].Placeholder {
+		t.Fatalf("preserved link = %#v, want placeholder", snapshot.Links[link])
+	}
+	if !reflect.DeepEqual(snapshot.Nodes[nodeCID].RightPorts, []uint64{cRight}) {
+		t.Fatalf("node C ports = %v, want [%d]", snapshot.Nodes[nodeCID].RightPorts, cRight)
+	}
+	if nodeA.stopCount != 1 || nodeC.stopCount != 1 || nodeB.stopCount != 0 {
+		t.Fatalf("stop counts = %d, %d, %d; want 1, 0, 1", nodeA.stopCount, nodeB.stopCount, nodeC.stopCount)
+	}
+	if err := w.ReplaceNodesByClassWithPlaceholders("example.com/target"); !errors.Is(err, pasta.ErrClassName) {
+		t.Fatalf("ReplaceNodesByClassWithPlaceholders invalid class error = %v, want %v", err, pasta.ErrClassName)
+	}
+}
+
 func TestWorkspaceNodeCanSetPrimaryTypeInOnInit(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -965,6 +1073,15 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	}
 	if err := w.SetPortName(portA, "input"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetPortName after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodesByClass("example.com/NodeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodesByClass after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.ReplaceNodesByClassWithPlaceholders("example.com/NodeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("ReplaceNodesByClassWithPlaceholders after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if got, err := w.NodesByClass("example.com/NodeA"); err != nil || len(got) != 0 {
+		t.Fatalf("NodesByClass after Close = %v, %v; want empty, nil", got, err)
 	}
 
 	w.RemoveLink(link)
