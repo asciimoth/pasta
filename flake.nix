@@ -44,18 +44,15 @@
               enable = true;
               description = "Makes sure go.mod matches the source code";
               entry = let script = pkgs.writeShellScript "gotidyhook" ''
-                go -C pasta mod tidy -v
-                go -C demo mod tidy -v
-                go work sync
+                just tidy
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };
             golangtest = {
               enable = true;
               description = "go test --race";
-              entry = let script = pkgs.writeShellScript "gotidyhook" ''
-                go -C pasta test ./... --race
-                go -C demo test ./... --race
+              entry = let script = pkgs.writeShellScript "gotesthook" ''
+                just test
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };

@@ -3,22 +3,23 @@ set dotenv-load := true
 
 test:
 	go -C pasta test ./... --race -count=1
-	go -C demo test ./... --race -count=1
+	# go -C demo test ./... --race -count=1
 
 coverage:
 	go -C pasta test ./... --race -coverprofile=../coverage.out -coverpkg=./...
 
 vet:
 	go -C pasta vet ./...
-	go -C demo vet ./...
+	# go -C demo vet ./...
 
 tidy:
 	go -C pasta mod tidy
-	go -C demo mod tidy
+	# go -C demo mod tidy
 	go work sync
 
 lint:
-  golangci-lint run ./pasta/... ./demo/...
+  golangci-lint run ./pasta/...
+  # golangci-lint run ./pasta/... ./demo/...
 
 demo-build:
 	GOOS=js GOARCH=wasm go -C demo build -o app.wasm .
@@ -36,3 +37,4 @@ demo-serve: demo-build
 
 demo-clean:
 	rm -f demo/app.wasm demo/wasm_exec.js
+

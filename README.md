@@ -17,60 +17,10 @@ directed links.
 
 Pasta does not ship an out-of-the-box GUI and is not bound to a specific UI
 library or application framework. Instead, it owns the graph data structures,
-validation rules, state management, persistence, scoped mutation APIs, runtime
+validation rules, state management, persistence, runtime
 lifecycle hooks, and test helpers that a GUI, API server, runtime host, or other
 frontend can build on top of.
 
-## What Pasta Provides
-- A concurrent-safe `Workspace` that owns libraries, node classes, nodes, links,
-  ID generation, snapshots, copy/paste, save/restore, and close/inactivation.
-- Directed links from output ports to input ports, with DAG validation, endpoint
-  validation, input multiplicity checks, and type compatibility checks.
-- Application-defined libraries and node classes with default state, typed ports,
-  metadata, optional single-node cardinality, optional key-node status, and
-  optional runtime factories.
-- Runtime lifecycle hooks for node initialization, link attach/detach,
-  key-node access, inactivation, deletion, private-state import/export, and
-  runtime-provided link objects.
-- Persistent graph model data through `Save`, `Restore`, config-backed save
-  helpers, and clipboard-oriented `Copy`/`Paste`.
-- Opaque editor values for node coordinates and link waypoints, so each UI can
-  use its own layout and routing format.
-- Workspace change notifications for reactive UIs that refresh from snapshots
-  instead of polling.
-- Ephemeral node menus and messages for GUI controls, popups, diagnostics, and
-  other transient frontend state.
-- Preservation of inactive nodes and links when their model endpoints still
-  exist, allowing editors to recover graphs after missing libraries, class
-  recall, or library unregister events.
-
-Pasta intentionally does not decide whether a graph is push-based, pull-based, or
-mixed. Link objects and node runtimes are application-owned Go values, so a
-library can implement callbacks, channels, interface contracts, shared objects,
-or any other communication model appropriate for its domain.
-
-Classes can opt into single-node cardinality with `ClassSpec.SingleNode`.
-Workspaces then allow zero or one node of that class. `CreateNode` rejects
-additional nodes with `ErrMultiplicity`, `Paste` skips duplicated single-node
-class nodes while preserving the rest of the clipboard, and restore only keeps
-the lowest-ID persisted node before running initialization hooks.
-
-Classes can opt into key-node status with `ClassSpec.KeyNode`. Active key nodes
-mark graph regions that are meaningful for application work; active nodes expose
-`HasKeyNodeAccess` when they are key nodes or connected to one through active
-links. Runtimes can implement `NodeKeyAccessHook` to start or stop background
-workers based on that access.
-
-## Repository Contents
-- `pasta/`: the Go framework package.
-- `pasta/examples/`: a calculator node library showing push, pull, mixed flow,
-  menus, save/restore, and copy/paste.
-- `pasta/pastatest/`: reusable conformance tests and helpers for downstream
-  Pasta libraries.
-- `demo/`: a static web demo using Pasta compiled to WebAssembly as the backend
-  and LiteGraph as the browser editor.
-- `tutorials/`: step-by-step guides for workspace usage, library creation, and
-  UI integration.
 
 ## License
 Files in this repository are distributed under the CC0 license.  
