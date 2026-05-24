@@ -107,6 +107,11 @@ func (n *calcNode) OnEvent(event pasta.Event, linkType string, receiverPortTypes
 	return nil
 }
 
+func (n *calcNode) OnInbox(message pasta.InboxMessage) error {
+	n.log("inbox receiver=%d payload=%v", message.ReceiverNode, message.Payload)
+	return nil
+}
+
 func (n *calcNode) recalcAndBroadcast() {
 	old := n.value
 	n.value = n.recalc()

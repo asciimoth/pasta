@@ -63,6 +63,11 @@ func (n *workspaceNode) OnEvent(event pasta.Event, linkType string, receiverPort
 	return nil
 }
 
+func (n *workspaceNode) OnInbox(message pasta.InboxMessage) error {
+	n.l.Debugf("inbox receiver=%d payload=%v", message.ReceiverNode, message.Payload)
+	return nil
+}
+
 func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	logf := &StringLoggerFactory{}
 	w := pasta.NewWorkspace(logf)

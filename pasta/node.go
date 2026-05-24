@@ -78,6 +78,9 @@ type Node interface {
 		receiverPortTypes []string,
 		receiverPortDirection string,
 	) error
+
+	// OnInbox is called when a message is delivered directly to this node.
+	OnInbox(message InboxMessage) error
 }
 
 type nodeRecord struct {
@@ -240,6 +243,20 @@ func (n *nodeRecord) OnEvent(
 		}
 	}()
 	err = n.Node.OnEvent(event, linkType, receiverPortTypes, receiverPortDirection)
+	return
+}
+
+func (n *nodeRecord) OnInbox(message InboxMessage) (err error) {
+	if n.stopped {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			n.stopped = true
+			err = ErrNodePanic
+		}
+	}()
+	err = n.Node.OnInbox(message)
 	return
 }
 

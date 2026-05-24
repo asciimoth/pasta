@@ -61,6 +61,11 @@ func (n *internalNode) OnEvent(event Event, linkType string, receiverPortTypes [
 	return nil
 }
 
+func (n *internalNode) OnInbox(message InboxMessage) error {
+	n.call("inbox")
+	return nil
+}
+
 func TestNodeRecordRemovePortAndPorts(t *testing.T) {
 	record := nodeRecord{
 		LeftPorts:  []uint64{1, 2, 3},
