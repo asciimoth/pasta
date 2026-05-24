@@ -70,6 +70,14 @@ type Node interface {
 		link, port uint64,
 		linkType, portDirection string,
 	) error
+
+	// OnEvent is called when another node sends an event through an existing link.
+	OnEvent(
+		event Event,
+		linkType string,
+		receiverPortTypes []string,
+		receiverPortDirection string,
+	) error
 }
 
 type nodeRecord struct {
@@ -213,6 +221,25 @@ func (n *nodeRecord) OnLinkRemoved(
 		}
 	}()
 	err = n.Node.OnLinkRemoved(link, port, linkType, portDirection)
+	return
+}
+
+func (n *nodeRecord) OnEvent(
+	event Event,
+	linkType string,
+	receiverPortTypes []string,
+	receiverPortDirection string,
+) (err error) {
+	if n.stopped {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			n.stopped = true
+			err = ErrNodePanic
+		}
+	}()
+	err = n.Node.OnEvent(event, linkType, receiverPortTypes, receiverPortDirection)
 	return
 }
 

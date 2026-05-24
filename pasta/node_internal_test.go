@@ -56,6 +56,11 @@ func (n *internalNode) OnLinkRemoved(link, port uint64, linkType, portDirection 
 	return nil
 }
 
+func (n *internalNode) OnEvent(event Event, linkType string, receiverPortTypes []string, receiverPortDirection string) error {
+	n.call("event")
+	return nil
+}
+
 func TestNodeRecordRemovePortAndPorts(t *testing.T) {
 	record := nodeRecord{
 		LeftPorts:  []uint64{1, 2, 3},

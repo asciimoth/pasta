@@ -58,6 +58,11 @@ func (n *workspaceNode) OnLinkRemoved(link, port uint64, linkType, portDirection
 	return nil
 }
 
+func (n *workspaceNode) OnEvent(event pasta.Event, linkType string, receiverPortTypes []string, receiverPortDirection string) error {
+	n.l.Debugf("event sender=%d:%d receiver=%d:%d type=%s receiver_types=%v receiver_direction=%s payload=%v", event.SenderNode, event.SenderPort, event.ReceiverNode, event.ReceiverPort, linkType, receiverPortTypes, receiverPortDirection, event.Payload)
+	return nil
+}
+
 func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	logf := &StringLoggerFactory{}
 	w := pasta.NewWorkspace(logf)
