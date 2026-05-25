@@ -1,5 +1,7 @@
 github.com/asciimoth/badlock v0.1.1 h1:XO7bHuC/U+o8FAaQzSD92hnuPzaAKW/HYTEmQGGb6Zo=
 github.com/asciimoth/badlock v0.1.1/go.mod h1:cLiOGSU1lNHVYytvc5Uy87gmeeP6b+aDbvm6M4YGnV0=
+github.com/asciimoth/formular v0.2.0 h1:uBABJ9QLbUqG6irdtc/y9tG/xywMwMGt6HZl34N7YPE=
+github.com/asciimoth/formular v0.2.0/go.mod h1:6VBEx4KTWp18mpkQn7d3Buoojzf9II5+ZAVuc4DF8AE=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=

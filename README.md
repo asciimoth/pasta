@@ -21,6 +21,32 @@ validation rules, state management, persistence, runtime
 lifecycle hooks, and test helpers that a GUI, API server, runtime host, or other
 frontend can build on top of.
 
+## Node menus
+Nodes can expose interactive per-node menus using the
+[`github.com/asciimoth/formular`](https://pkg.go.dev/github.com/asciimoth/formular)
+JSON protocol types. In this model the node is the Formular backend, the
+workspace is a cache plus demultiplexer, and external GUI, TUI, web, or RPC code
+is the frontend.
+
+Each node menu uses `NodeMenuID(nodeID)`, which formats menu IDs as
+`NODE{{NODE ID}}MENU`, for example `NODE12MENU`. Menus are not part of workspace
+snapshots, are not supplied by node-add APIs, and are cleared when a node
+implementation is replaced. A node should build its menu from `OnInit` or later
+by calling `Workspace.SendNodeMenuMsg(nodeID, formularMessage)`. The workspace
+applies cacheable messages to that node's `formular.MenuSnapshotState` and then
+forwards copies only to watchers subscribed to that node menu.
+
+Workspace notification subscribers do not receive node menu traffic by default.
+A frontend that wants to show a clicked node menu should call
+`SubscribeNotifications`, then `SubscribeNodeMenu(nodeID, subscriptionID)`.
+If the workspace already has cached menu state, the subscriber immediately
+receives a `NotificationNodeMenu` carrying a forced Formular `menu.snapshot`.
+Call `UnsubscribeNodeMenu` when the menu is hidden.
+
+Frontend-to-backend Formular messages should be sent with
+`Workspace.SendNodeFormularMsg(nodeID, message)`. Missing nodes, placeholders,
+closed workspaces, and nil messages are dropped silently. Live nodes receive the
+message through `Node.OnFormularMsg`.
 
 ## License
 Files in this repository are distributed under the CC0 license.  

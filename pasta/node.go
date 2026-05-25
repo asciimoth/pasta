@@ -4,6 +4,8 @@ import (
 	"errors"
 	"iter"
 	"slices"
+
+	"github.com/asciimoth/formular"
 )
 
 var (
@@ -120,6 +122,10 @@ type Node interface {
 
 	// OnInbox is called when a message is delivered directly to this node.
 	OnInbox(message InboxMessage) error
+
+	// OnFormularMsg is called when external code sends a Formular
+	// frontend-to-backend message to this node's menu.
+	OnFormularMsg(message any) error
 }
 
 // NodeInitData carries existing node-owned workspace state into OnInit.
@@ -144,6 +150,7 @@ type nodeRecord struct {
 	Popups      []NodePopup
 	Root        bool
 	HasRootPath bool
+	Menu        *formular.MenuSnapshotState
 
 	LeftPorts  []uint64
 	RightPorts []uint64
@@ -323,6 +330,20 @@ func (n *nodeRecord) OnInbox(message InboxMessage) (err error) {
 		}
 	}()
 	err = n.Node.OnInbox(message)
+	return
+}
+
+func (n *nodeRecord) OnFormularMsg(message any) (err error) {
+	if n.stopped || n.Node == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			n.stopped = true
+			err = ErrNodePanic
+		}
+	}()
+	err = n.Node.OnFormularMsg(copyFormularMessage(message))
 	return
 }
 

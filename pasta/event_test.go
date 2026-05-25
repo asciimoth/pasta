@@ -1,12 +1,14 @@
 package pasta_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/asciimoth/formular"
 	"github.com/asciimoth/pasta/pasta"
 )
 
@@ -33,7 +35,11 @@ func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class s
 	n.l = l
 	n.id = id
 	n.log("init")
-	return n.updateLabel()
+	if err := n.updateLabel(); err != nil {
+		return err
+	}
+	n.sendMenuSnapshot()
+	return nil
 }
 
 func (n *calcNode) OnReady() error {
@@ -101,7 +107,11 @@ func (n *calcNode) OnEvent(event pasta.Event, linkType string, receiverPortTypes
 	if n.kind == "result" {
 		n.value = value
 		n.log("result state=%g", n.value)
-		return n.updateLabel()
+		if err := n.updateLabel(); err != nil {
+			return err
+		}
+		n.sendMenuBlock()
+		return nil
 	}
 
 	if n.isMiddleware() {
@@ -116,6 +126,28 @@ func (n *calcNode) OnInbox(message pasta.InboxMessage) error {
 	return nil
 }
 
+func (n *calcNode) OnFormularMsg(message any) error {
+	msg, ok := message.(formular.FieldUpdateMessage)
+	if !ok || n.kind != "constant" || msg.MenuID != pasta.NodeMenuID(n.id) {
+		return nil
+	}
+	if msg.Field.BlockID != "state" || msg.Field.FieldID != "value" {
+		return nil
+	}
+	value, ok := formularFloat(msg.Value)
+	if !ok {
+		return nil
+	}
+	n.log("formular value=%g", value)
+	n.value = value
+	if err := n.updateLabel(); err != nil {
+		return err
+	}
+	n.sendMenuBlock()
+	n.sendAll()
+	return nil
+}
+
 func (n *calcNode) recalcAndBroadcast() {
 	old := n.value
 	n.value = n.recalc()
@@ -123,6 +155,7 @@ func (n *calcNode) recalcAndBroadcast() {
 	if err := n.updateLabel(); err != nil {
 		n.log("label update failed: %v", err)
 	}
+	n.sendMenuBlock()
 	if n.value != old {
 		n.sendAll()
 	}
@@ -207,6 +240,73 @@ func (n *calcNode) updateLabel() error {
 		return nil
 	}
 	return n.w.SetNodeLabel(n.id, fmt.Sprintf("%g", n.value))
+}
+
+func (n *calcNode) sendMenuSnapshot() {
+	if n.w == nil || n.id == 0 {
+		return
+	}
+	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+		MessageBase: formular.MessageBase{
+			Type:           formular.MessageMenuSnapshot,
+			MenuID:         pasta.NodeMenuID(n.id),
+			MenuGeneration: 1,
+		},
+		Blocks: []formular.Block{n.menuBlock()},
+	})
+}
+
+func (n *calcNode) sendMenuBlock() {
+	if n.w == nil || n.id == 0 {
+		return
+	}
+	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+		MessageBase: formular.MessageBase{
+			Type:            formular.MessageBlockSnapshot,
+			MenuID:          pasta.NodeMenuID(n.id),
+			MenuGeneration:  1,
+			BlockGeneration: 1,
+		},
+		Block: n.menuBlock(),
+	})
+}
+
+func (n *calcNode) menuBlock() formular.Block {
+	return formular.Block{
+		ID:         "state",
+		Order:      10,
+		Generation: 1,
+		Items: []formular.Item{
+			{
+				Type:  formular.ItemField,
+				ID:    "value",
+				Label: "Value",
+				Field: &formular.Field{
+					Kind:     formular.FieldFloat,
+					Value:    n.value,
+					Readonly: n.kind != "constant",
+				},
+			},
+		},
+	}
+}
+
+func formularFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }
 
 type calcGraph struct {

@@ -20,13 +20,19 @@ const (
 	NotificationLinkAdded   NotificationKind = "link_added"
 	NotificationLinkRemoved NotificationKind = "link_removed"
 	NotificationLinkUpdated NotificationKind = "link_updated"
+
+	// NotificationNodeMenu carries one Formular backend-to-frontend message for
+	// a node menu. It is delivered only to notification subscribers that
+	// explicitly subscribed to that node menu.
+	NotificationNodeMenu NotificationKind = "node_menu"
 )
 
 // WorkspaceNotification describes one observable workspace state change.
 //
 // Snapshot is set for NotificationWorkspaceSnapshot. Node, Port, or Link is set
-// for matching node/port/link notifications. Removed notifications carry the
-// last snapshot of the removed entity.
+// for matching node/port/link notifications. Formular is set for
+// NotificationNodeMenu. Removed notifications carry the last snapshot of the
+// removed entity.
 type WorkspaceNotification struct {
 	SubscriptionID uint64 `json:"-"`
 
@@ -37,6 +43,7 @@ type WorkspaceNotification struct {
 	Node     *NodeSnapshot      `json:"node,omitempty"`
 	Port     *PortSnapshot      `json:"port,omitempty"`
 	Link     *LinkSnapshot      `json:"link,omitempty"`
+	Formular any                `json:"formular,omitempty"`
 
 	snapshotRequest bool
 }
@@ -97,6 +104,12 @@ func (w *Workspace) UnsubscribeNotifications(id uint64) bool {
 		return false
 	}
 	delete(w.subscribers, id)
+	for nodeID, subscribers := range w.nodeMenuSubscribers {
+		delete(subscribers, id)
+		if len(subscribers) == 0 {
+			delete(w.nodeMenuSubscribers, nodeID)
+		}
+	}
 	return true
 }
 

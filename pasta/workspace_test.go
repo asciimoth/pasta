@@ -94,6 +94,11 @@ func (n *workspaceNode) OnInbox(message pasta.InboxMessage) error {
 	return n.maybeFail("OnInbox")
 }
 
+func (n *workspaceNode) OnFormularMsg(message any) error {
+	n.l.Debugf("formular payload=%v", message)
+	return n.maybeFail("OnFormularMsg")
+}
+
 func (n *workspaceNode) maybeFail(callback string) error {
 	if n.panicOn != nil && n.panicOn[callback] {
 		panic(callback)
@@ -875,6 +880,29 @@ func TestWorkspaceNodeCallbackFailuresBecomePlaceholders(t *testing.T) {
 
 		w.SendInbox(pasta.InboxMessage{ReceiverNode: nodeID, Payload: "payload"})
 		assertFailedPlaceholder(t, w, nodeID, "OnInbox", "boom")
+		assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
+		if got := notifications[len(notifications)-1].Node.Popups; len(got) != 1 || got[0].Type != pasta.NodePopupErr {
+			t.Fatalf("failure notification popups = %#v, want one error popup", got)
+		}
+	})
+
+	t.Run("OnFormularMsg", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnFormularMsg": failErr}}
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		addOldPopup(t, w, nodeID)
+
+		var notifications []pasta.WorkspaceNotification
+		w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+			notifications = append(notifications, notification)
+		})
+		notifications = nil
+
+		w.SendNodeFormularMsg(nodeID, "payload")
+		assertFailedPlaceholder(t, w, nodeID, "OnFormularMsg", "boom")
 		assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
 		if got := notifications[len(notifications)-1].Node.Popups; len(got) != 1 || got[0].Type != pasta.NodePopupErr {
 			t.Fatalf("failure notification popups = %#v, want one error popup", got)

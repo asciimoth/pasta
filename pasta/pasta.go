@@ -45,9 +45,10 @@ type Workspace struct {
 	ports *orderedmap.OrderedMap[uint64, *Port]
 	links *orderedmap.OrderedMap[uint64, *Link]
 
-	nextSubscriptionID uint64
-	subscribers        map[uint64]NotificationCallback
-	notifications      []WorkspaceNotification
+	nextSubscriptionID  uint64
+	subscribers         map[uint64]NotificationCallback
+	nodeMenuSubscribers map[uint64]map[uint64]struct{}
+	notifications       []WorkspaceNotification
 
 	log  Logger
 	logf LogFactory
@@ -66,9 +67,10 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		ports:   orderedmap.New[uint64, *Port](),
 		links:   orderedmap.New[uint64, *Link](),
 
-		nextSubscriptionID: 1,
-		subscribers:        make(map[uint64]NotificationCallback),
-		notifications:      make([]WorkspaceNotification, 0),
+		nextSubscriptionID:  1,
+		subscribers:         make(map[uint64]NotificationCallback),
+		nodeMenuSubscribers: make(map[uint64]map[uint64]struct{}),
+		notifications:       make([]WorkspaceNotification, 0),
 
 		log:  logf.WorkspaceLogger(),
 		logf: logf,
@@ -185,6 +187,7 @@ func (w *Workspace) Close() {
 	w.enqueueNotification(WorkspaceNotification{Kind: NotificationWorkspaceStopped})
 	deliveries := w.drainNotificationDeliveries()
 	w.subscribers = make(map[uint64]NotificationCallback)
+	w.nodeMenuSubscribers = make(map[uint64]map[uint64]struct{})
 	w.Unlock()
 
 	deliverNotifications(deliveries)
@@ -211,6 +214,7 @@ func (w *Workspace) RemoveNode(id uint64) {
 	}
 	removed := nodeSnapshot(record)
 	record.OnStop()
+	delete(w.nodeMenuSubscribers, id)
 
 	for port := range record.Ports() {
 		w.RemovePort(port)
@@ -556,6 +560,7 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	old := record.Node
 	clearedPopups := len(record.Popups) > 0
 	record.Popups = nil
+	record.Menu = nil
 	restored := record.InitData()
 	nodeStop(old)
 
@@ -646,6 +651,7 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 		nodeStop(old)
 	}
 	record.Popups = nil
+	record.Menu = nil
 	record.Node = nil
 	record.stopped = false
 	added, err := w.addPlaceholderPorts(record, ports)

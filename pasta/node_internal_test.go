@@ -91,6 +91,11 @@ func (n *internalNode) OnInbox(message InboxMessage) error {
 	return nil
 }
 
+func (n *internalNode) OnFormularMsg(message any) error {
+	n.call("formular")
+	return nil
+}
+
 func TestNodeRecordRemovePortAndPorts(t *testing.T) {
 	record := nodeRecord{
 		LeftPorts:  []uint64{1, 2, 3},
