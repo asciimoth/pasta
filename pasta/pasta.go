@@ -12,6 +12,8 @@ import (
 var (
 	// ErrNodeDup reports that the same Node instance is already present in a workspace.
 	ErrNodeDup = errors.New("node duplicate")
+	// ErrUniqueNodeClassDup reports that a unique node class already has a node.
+	ErrUniqueNodeClassDup = errors.New("unique node class duplicate")
 	// ErrLinkDup reports that two ports are already connected by a link.
 	ErrLinkDup = errors.New("link duplicate")
 
@@ -453,6 +455,9 @@ func (w *Workspace) addNodeLocked(node Node, class string, root bool, primaryTyp
 			return 0, ErrNodeDup
 		}
 	}
+	if err := w.rejectUniqueNodeDuplicateLocked(class, 0); err != nil {
+		return 0, err
+	}
 
 	id := w.NextID()
 	log := w.logf.NodeLogger(id, class)
@@ -548,6 +553,9 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
+	if err := w.rejectUniqueNodeDuplicateLocked(class, 0); err != nil {
+		return 0, err
+	}
 
 	id := w.NextID()
 	rec := nodeRecord{
@@ -606,6 +614,9 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 		if pair.Key != id && pair.Value != nil && pair.Value.Node == node {
 			return ErrNodeDup
 		}
+	}
+	if err := w.rejectUniqueNodeDuplicateLocked(record.Class, id); err != nil {
+		return err
 	}
 
 	wasPlaceholder := record.Node == nil
@@ -697,6 +708,9 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 	if err := validatePlaceholderPorts(id, ports); err != nil {
 		return err
 	}
+	if err := w.rejectUniqueNodeDuplicateLocked(record.Class, id); err != nil {
+		return err
+	}
 
 	old := record.Node
 	if old != nil {
@@ -748,6 +762,9 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 		if pair.Key != id && pair.Value != nil && pair.Value.Node == node {
 			return ErrNodeDup
 		}
+	}
+	if err := w.rejectUniqueNodeDuplicateLocked(class, id); err != nil {
+		return err
 	}
 	if err := w.applyPlaceholderClassState(record, state); err != nil {
 		return err
@@ -1517,6 +1534,40 @@ func (w *Workspace) nodeIDsByClassLocked(class string) []uint64 {
 		nodes = append(nodes, pair.Key)
 	}
 	return nodes
+}
+
+func (w *Workspace) nodeClassIsUniqueLocked(class string) bool {
+	nodeClass, present := w.classes.Get(class)
+	if !present || nodeClass == nil {
+		return false
+	}
+	return nodeClass.DefaultNodeParams().Unique
+}
+
+func (w *Workspace) rejectUniqueNodeDuplicateLocked(class string, except uint64) error {
+	if !w.nodeClassIsUniqueLocked(class) {
+		return nil
+	}
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value == nil || pair.Value.Class != class || pair.Key == except {
+			continue
+		}
+		return errors.Join(ErrUniqueNodeClassDup, errors.New(class))
+	}
+	return nil
+}
+
+func (w *Workspace) removeUniqueNodeClassDuplicatesLocked(class string) {
+	nodes := w.nodeIDsByClassLocked(class)
+	if len(nodes) < 2 {
+		return
+	}
+	keep := slices.Min(nodes)
+	for _, id := range nodes {
+		if id != keep {
+			w.RemoveNode(id)
+		}
+	}
 }
 
 type nodeClassPlaceholderCandidate struct {

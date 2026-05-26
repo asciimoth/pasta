@@ -26,9 +26,11 @@ type NodeClass interface {
 // Root is used as the initial explicit root status for nodes created with
 // AddNodeByClass. PrimaryType may be empty or a valid type name. InitialPorts
 // are created before OnInit runs; their assigned IDs are passed to OnInit via
-// NodeInitData.LeftPorts and NodeInitData.RightPorts.
+// NodeInitData.LeftPorts and NodeInitData.RightPorts. Unique allows only one
+// node of this class in a workspace.
 type NodeClassParams struct {
 	Root         bool
+	Unique       bool
 	PrimaryType  string
 	InitialPorts []Port
 }
@@ -89,6 +91,9 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 	_, wasPresent := w.classes.Get(name)
 	w.classes.Set(name, class)
 	w.enqueueNodeClassNotification(NotificationNodeClassAdded, name, nodeClassSnapshot(class))
+	if params.Unique {
+		w.removeUniqueNodeClassDuplicatesLocked(name)
+	}
 	placeholders := []nodeClassPlaceholderCandidate{}
 	if !wasPresent {
 		placeholders = w.nodeClassPlaceholderCandidatesLocked(name)
@@ -183,6 +188,15 @@ func (w *Workspace) AddNodeByClass(class string) (uint64, error) {
 		return 0, ErrWorkspaceClosed
 	}
 	nodeClass, present := w.classes.Get(class)
+	if present && nodeClass != nil {
+		params := nodeClass.DefaultNodeParams()
+		if params.Unique {
+			if err := w.rejectUniqueNodeDuplicateLocked(class, 0); err != nil {
+				w.Unlock()
+				return 0, err
+			}
+		}
+	}
 	w.Unlock()
 	if !present || nodeClass == nil {
 		return 0, ErrNoNodeClass
@@ -211,6 +225,7 @@ func nodeClassSnapshot(class NodeClass) NodeClassSnapshot {
 	return NodeClassSnapshot{
 		Class:            class.ClassName(),
 		ShortDescription: class.ShortDescription(),
+		Unique:           params.Unique,
 		PrimaryType:      params.PrimaryType,
 		InitialPorts:     nodeClassPortSnapshots(params.InitialPorts),
 	}

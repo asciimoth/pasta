@@ -21,6 +21,7 @@ type WorkspaceSnapshot struct {
 type NodeClassSnapshot struct {
 	Class            string                  `json:"class"`
 	ShortDescription string                  `json:"short_description"`
+	Unique           bool                    `json:"unique"`
 	PrimaryType      string                  `json:"primary_type"`
 	InitialPorts     []NodeClassPortSnapshot `json:"initial_ports"`
 }

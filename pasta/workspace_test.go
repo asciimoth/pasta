@@ -831,6 +831,282 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 	})
 }
 
+func TestWorkspaceUniqueNodeClassRegistrationRemovesDuplicatesBeforePlaceholderReplacement(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	keep := &workspaceNode{}
+	remove := &workspaceNode{}
+	keepID, err := w.AddNode(keep, "example.com/UniqueRestored")
+	if err != nil {
+		t.Fatalf("AddNode keep: %v", err)
+	}
+	removeID, err := w.AddNode(remove, "example.com/UniqueRestored")
+	if err != nil {
+		t.Fatalf("AddNode remove: %v", err)
+	}
+	placeholderID, err := w.AddPlaceholderNode("example.com/UniqueRestored", nil)
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode: %v", err)
+	}
+
+	replacementCalls := 0
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{
+			name: "example.com/UniqueRestored",
+			params: pasta.NodeClassParams{
+				Unique: true,
+			},
+		},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			replacementCalls += 1
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  &workspaceNode{},
+				State: state,
+			}, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass unique: %v", err)
+	}
+
+	nodes, err := w.NodesByClass("example.com/UniqueRestored")
+	if err != nil {
+		t.Fatalf("NodesByClass: %v", err)
+	}
+	if !reflect.DeepEqual(nodes, []uint64{keepID}) {
+		t.Fatalf("unique class nodes = %v, want [%d]", nodes, keepID)
+	}
+	if replacementCalls != 0 {
+		t.Fatalf("placeholder replacements = %d, want 0", replacementCalls)
+	}
+	if remove.stopCount != 1 {
+		t.Fatalf("removed duplicate stop count = %d, want 1", remove.stopCount)
+	}
+	if _, ok := w.NodeSnapshot(removeID); ok {
+		t.Fatalf("removed duplicate node %d still exists", removeID)
+	}
+	if _, ok := w.NodeSnapshot(placeholderID); ok {
+		t.Fatalf("removed duplicate placeholder %d still exists", placeholderID)
+	}
+	if got := w.Snapshot().Classes["example.com/UniqueRestored"]; !got.Unique {
+		t.Fatalf("unique class snapshot = %#v, want Unique true", got)
+	}
+}
+
+func TestWorkspaceUniqueNodeClassKeepsSmallestIDPlaceholderThenReplacesIt(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	placeholderID, err := w.AddPlaceholderNodeWithRoot("example.com/UniquePlaceholderFirst", true, []pasta.Port{
+		{Direction: "right", Name: "legacy", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNodeWithRoot: %v", err)
+	}
+	removed := &workspaceNode{}
+	removedID, err := w.AddNode(removed, "example.com/UniquePlaceholderFirst")
+	if err != nil {
+		t.Fatalf("AddNode removed: %v", err)
+	}
+	removedPlaceholderID, err := w.AddPlaceholderNode("example.com/UniquePlaceholderFirst", nil)
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode removed: %v", err)
+	}
+
+	var restored *workspaceNode
+	replacementCalls := 0
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{
+			name: "example.com/UniquePlaceholderFirst",
+			params: pasta.NodeClassParams{
+				Unique: true,
+			},
+		},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			replacementCalls += 1
+			state.Label = "restored"
+			restored = &workspaceNode{}
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  restored,
+				State: state,
+			}, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass unique: %v", err)
+	}
+
+	nodes, err := w.NodesByClass("example.com/UniquePlaceholderFirst")
+	if err != nil {
+		t.Fatalf("NodesByClass: %v", err)
+	}
+	if !reflect.DeepEqual(nodes, []uint64{placeholderID}) {
+		t.Fatalf("unique class nodes = %v, want [%d]", nodes, placeholderID)
+	}
+	if replacementCalls != 1 {
+		t.Fatalf("placeholder replacements = %d, want 1", replacementCalls)
+	}
+	snapshot := w.Snapshot().Nodes[placeholderID]
+	if snapshot.Placeholder || !snapshot.Root || snapshot.Label != "restored" {
+		t.Fatalf("kept placeholder replacement snapshot = %#v", snapshot)
+	}
+	if got, want := restored.initFlags, (workspaceNodeInitFlags{
+		isReplacement:            true,
+		isPlaceholderReplacement: true,
+		isClassConstructed:       true,
+	}); got != want {
+		t.Fatalf("restored init flags = %#v, want %#v", got, want)
+	}
+	if removed.stopCount != 1 {
+		t.Fatalf("removed live node stop count = %d, want 1", removed.stopCount)
+	}
+	if _, ok := w.NodeSnapshot(removedID); ok {
+		t.Fatalf("removed live node %d still exists", removedID)
+	}
+	if _, ok := w.NodeSnapshot(removedPlaceholderID); ok {
+		t.Fatalf("removed placeholder node %d still exists", removedPlaceholderID)
+	}
+}
+
+func TestWorkspaceUniqueNodeClassReAddExistingClassRemovesDuplicates(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	if err := w.AddNodeClass(testNodeClass{name: "example.com/ReaddedUnique"}); err != nil {
+		t.Fatalf("AddNodeClass initial: %v", err)
+	}
+	keepID, err := w.AddNode(&workspaceNode{}, "example.com/ReaddedUnique")
+	if err != nil {
+		t.Fatalf("AddNode keep: %v", err)
+	}
+	remove := &workspaceNode{}
+	removeID, err := w.AddNode(remove, "example.com/ReaddedUnique")
+	if err != nil {
+		t.Fatalf("AddNode remove: %v", err)
+	}
+
+	if err := w.AddNodeClass(testNodeClass{
+		name: "example.com/ReaddedUnique",
+		params: pasta.NodeClassParams{
+			Unique: true,
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass re-add unique: %v", err)
+	}
+
+	nodes, err := w.NodesByClass("example.com/ReaddedUnique")
+	if err != nil {
+		t.Fatalf("NodesByClass: %v", err)
+	}
+	if !reflect.DeepEqual(nodes, []uint64{keepID}) {
+		t.Fatalf("unique class nodes = %v, want [%d]", nodes, keepID)
+	}
+	if remove.stopCount != 1 {
+		t.Fatalf("removed node stop count = %d, want 1", remove.stopCount)
+	}
+	if _, ok := w.NodeSnapshot(removeID); ok {
+		t.Fatalf("removed node %d still exists", removeID)
+	}
+}
+
+func TestWorkspaceUniqueNodeClassRejectsAddingNodes(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	newNodeCalls := 0
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{
+			name: "example.com/UniqueNode",
+			params: pasta.NodeClassParams{
+				Unique: true,
+			},
+		},
+		newNode: func() (pasta.Node, error) {
+			newNodeCalls += 1
+			return &workspaceNode{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	if _, err := w.AddNodeByClass("example.com/UniqueNode"); err != nil {
+		t.Fatalf("AddNodeByClass first: %v", err)
+	}
+	if _, err := w.AddNodeByClass("example.com/UniqueNode"); !errors.Is(err, pasta.ErrUniqueNodeClassDup) {
+		t.Fatalf("AddNodeByClass duplicate error = %v, want %v", err, pasta.ErrUniqueNodeClassDup)
+	}
+	if newNodeCalls != 1 {
+		t.Fatalf("factory new node calls = %d, want 1", newNodeCalls)
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/UniqueNode"); !errors.Is(err, pasta.ErrUniqueNodeClassDup) {
+		t.Fatalf("AddNode duplicate unique class error = %v, want %v", err, pasta.ErrUniqueNodeClassDup)
+	}
+	if _, err := w.AddPlaceholderNode("example.com/UniqueNode", nil); !errors.Is(err, pasta.ErrUniqueNodeClassDup) {
+		t.Fatalf("AddPlaceholderNode duplicate unique class error = %v, want %v", err, pasta.ErrUniqueNodeClassDup)
+	}
+}
+
+func TestWorkspaceUniqueNodeClassAllowsReplacingOnlyNode(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	if err := w.AddNodeClass(testNodeClass{
+		name: "example.com/OnlyUniqueNode",
+		params: pasta.NodeClassParams{
+			Unique: true,
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	nodeID, err := w.AddPlaceholderNode("example.com/OnlyUniqueNode", nil)
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode first: %v", err)
+	}
+	if err := w.ReplacePlaceholderNode(nodeID, &workspaceNode{}); err != nil {
+		t.Fatalf("ReplacePlaceholderNode only unique node: %v", err)
+	}
+	if err := w.ReplaceNode(nodeID, &workspaceNode{}); err != nil {
+		t.Fatalf("ReplaceNode only unique node: %v", err)
+	}
+	if err := w.ReplaceNodeWithPlaceholder(nodeID, nil); err != nil {
+		t.Fatalf("ReplaceNodeWithPlaceholder only unique node: %v", err)
+	}
+	if err := w.ReplacePlaceholderNode(nodeID, &workspaceNode{}); err != nil {
+		t.Fatalf("ReplacePlaceholderNode after placeholder conversion: %v", err)
+	}
+
+	nodes, err := w.NodesByClass("example.com/OnlyUniqueNode")
+	if err != nil {
+		t.Fatalf("NodesByClass: %v", err)
+	}
+	if !reflect.DeepEqual(nodes, []uint64{nodeID}) {
+		t.Fatalf("unique class nodes = %v, want [%d]", nodes, nodeID)
+	}
+}
+
+func TestWorkspaceUniqueNodeClassRejectsReplacementWhenDuplicateExists(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	class := &testNodeClass{name: "example.com/MutableUniqueNode"}
+	if err := w.AddNodeClass(class); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	nodeAID, err := w.AddNode(&workspaceNode{}, "example.com/MutableUniqueNode")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/MutableUniqueNode"); err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+
+	class.params.Unique = true
+	if err := w.ReplaceNode(nodeAID, &workspaceNode{}); !errors.Is(err, pasta.ErrUniqueNodeClassDup) {
+		t.Fatalf("ReplaceNode duplicate unique class error = %v, want %v", err, pasta.ErrUniqueNodeClassDup)
+	}
+	if err := w.ReplaceNodeWithPlaceholder(nodeAID, nil); !errors.Is(err, pasta.ErrUniqueNodeClassDup) {
+		t.Fatalf("ReplaceNodeWithPlaceholder duplicate unique class error = %v, want %v", err, pasta.ErrUniqueNodeClassDup)
+	}
+}
+
 func TestWorkspaceNodeClassSnapshotCopiesAndReplacement(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -2400,6 +2676,7 @@ func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
 func equalNodeClassSnapshot(a, b pasta.NodeClassSnapshot) bool {
 	return a.Class == b.Class &&
 		a.ShortDescription == b.ShortDescription &&
+		a.Unique == b.Unique &&
 		a.PrimaryType == b.PrimaryType &&
 		reflect.DeepEqual(emptyClassPortsIfNil(a.InitialPorts), emptyClassPortsIfNil(b.InitialPorts))
 }
