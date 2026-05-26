@@ -3,6 +3,8 @@ package pasta
 import (
 	"errors"
 	"testing"
+
+	"github.com/asciimoth/configer/configer"
 )
 
 type internalNode struct {
@@ -93,6 +95,11 @@ func (n *internalNode) OnInbox(message InboxMessage) error {
 
 func (n *internalNode) OnFormularMsg(message any) error {
 	n.call("formular")
+	return nil
+}
+
+func (n *internalNode) OnSave(cfg configer.Config) error {
+	n.call("save")
 	return nil
 }
 

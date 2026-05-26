@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/formular"
 	"github.com/asciimoth/pasta/pasta"
 )
@@ -182,6 +183,13 @@ func (n *calcNode) OnFormularMsg(message any) error {
 	n.sendMenuBlock()
 	n.sendAll()
 	return nil
+}
+
+func (n *calcNode) OnSave(cfg configer.Config) error {
+	if n.kind != "constant" {
+		return nil
+	}
+	return cfg.Set(configer.Path{"value"}, fmt.Sprintf("%g", n.value))
 }
 
 func (n *calcNode) recalcAndBroadcast() {

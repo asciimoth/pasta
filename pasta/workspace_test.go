@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/pasta/pasta"
 )
 
@@ -110,6 +111,10 @@ func (n *workspaceNode) OnInbox(message pasta.InboxMessage) error {
 func (n *workspaceNode) OnFormularMsg(message any) error {
 	n.l.Debugf("formular payload=%v", message)
 	return n.maybeFail("OnFormularMsg")
+}
+
+func (n *workspaceNode) OnSave(cfg configer.Config) error {
+	return n.maybeFail("OnSave")
 }
 
 func (n *workspaceNode) maybeFail(callback string) error {

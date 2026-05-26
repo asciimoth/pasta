@@ -5,6 +5,7 @@ import (
 	"iter"
 	"slices"
 
+	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/formular"
 )
 
@@ -134,6 +135,13 @@ type Node interface {
 	// OnFormularMsg is called when external code sends a Formular
 	// frontend-to-backend message to this node's menu.
 	OnFormularMsg(message any) error
+
+	// OnSave is called when the workspace is explicitly saved to a Config.
+	//
+	// The Config is rooted at this node's object. Workspace-owned keys use
+	// CamelCase names, so node implementations should prefer lower-case keys
+	// for their own state.
+	OnSave(cfg configer.Config) error
 }
 
 // NodeInitData carries existing node-owned workspace state into OnInit.
@@ -360,6 +368,19 @@ func (n *nodeRecord) OnFormularMsg(message any) (err error) {
 		}
 	}()
 	err = n.Node.OnFormularMsg(copyFormularMessage(message))
+	return
+}
+
+func (n *nodeRecord) OnSave(cfg configer.Config) (err error) {
+	if n.stopped || n.Node == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ErrNodePanic
+		}
+	}()
+	err = n.Node.OnSave(cfg)
 	return
 }
 
