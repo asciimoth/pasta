@@ -36,6 +36,7 @@ type NodeClassPortSnapshot struct {
 // NodeSnapshot is a JSON-serializable copy of node metadata and port IDs.
 type NodeSnapshot struct {
 	Class       string      `json:"class"`
+	Name        string      `json:"name"`
 	PrimaryType string      `json:"primary_type"`
 	Label       string      `json:"label"`
 	Popups      []NodePopup `json:"popups"`
@@ -168,6 +169,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 	if record.Node == nil {
 		return NodeSnapshot{
 			Class:       record.Class,
+			Name:        record.Name,
 			Label:       record.Label,
 			Popups:      slices.Clone(record.Popups),
 			Placeholder: true,
@@ -177,6 +179,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 	}
 	return NodeSnapshot{
 		Class:       record.Class,
+		Name:        record.Name,
 		PrimaryType: record.PrimaryType,
 		Label:       record.Label,
 		Popups:      slices.Clone(record.Popups),

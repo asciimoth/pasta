@@ -1046,6 +1046,47 @@ func TestWorkspaceUniqueNodeClassRejectsAddingNodes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAddNodeByClassNameValidationPrecedesFactory(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	newNodeCalls := 0
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/NamedFactory"},
+		newNode: func() (pasta.Node, error) {
+			newNodeCalls += 1
+			return &workspaceNode{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Peer", "taken"); err != nil {
+		t.Fatalf("AddNode peer: %v", err)
+	}
+	before := w.Snapshot()
+
+	if _, err := w.AddNodeByClass("example.com/NamedFactory", "bad[name"); !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("AddNodeByClass invalid name error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	if _, err := w.AddNodeByClass("example.com/NamedFactory", "taken"); !errors.Is(err, pasta.ErrNodeNameDup) {
+		t.Fatalf("AddNodeByClass duplicate name error = %v, want %v", err, pasta.ErrNodeNameDup)
+	}
+	if newNodeCalls != 0 {
+		t.Fatalf("factory new node calls after rejected names = %d, want 0", newNodeCalls)
+	}
+	assertWorkspaceSnapshot(t, w, before)
+
+	nodeID, err := w.AddNodeByClass("example.com/NamedFactory", "created")
+	if err != nil {
+		t.Fatalf("AddNodeByClass explicit name: %v", err)
+	}
+	if newNodeCalls != 1 {
+		t.Fatalf("factory new node calls after valid name = %d, want 1", newNodeCalls)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Name; got != "created" {
+		t.Fatalf("factory node name = %q, want %q", got, "created")
+	}
+}
+
 func TestWorkspaceUniqueNodeClassAllowsReplacingOnlyNode(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -1363,6 +1404,266 @@ func TestWorkspaceNodeLabelSnapshots(t *testing.T) {
 	if err := w.SetNodeLabel(999, "missing"); !errors.Is(err, pasta.ErrNoNode) {
 		t.Fatalf("SetNodeLabel missing node error = %v, want %v", err, pasta.ErrNoNode)
 	}
+}
+
+func TestWorkspaceNodeNamesAreUniqueAndObservable(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeA, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv")
+	if err != nil {
+		t.Fatalf("AddNode generic: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeA].Name; got != "CalcDiv 1" {
+		t.Fatalf("generic node name = %q, want %q", got, "CalcDiv 1")
+	}
+
+	nodeB, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv", "custom []")
+	if !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("AddNode invalid name error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	if nodeB != 0 {
+		t.Fatalf("AddNode invalid name id = %d, want 0", nodeB)
+	}
+
+	nodeB, err = w.AddNode(&workspaceNode{}, "example.com/CalcDiv", "custom name")
+	if err != nil {
+		t.Fatalf("AddNode explicit: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeB].Name; got != "custom name" {
+		t.Fatalf("explicit node name = %q, want %q", got, "custom name")
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv", "custom name"); !errors.Is(err, pasta.ErrNodeNameDup) {
+		t.Fatalf("AddNode duplicate name error = %v, want %v", err, pasta.ErrNodeNameDup)
+	}
+	if err := w.SetNodeName(nodeB, "CalcDiv 1"); !errors.Is(err, pasta.ErrNodeNameDup) {
+		t.Fatalf("SetNodeName duplicate error = %v, want %v", err, pasta.ErrNodeNameDup)
+	}
+	if err := w.SetNodeName(nodeB, "renamed"); err != nil {
+		t.Fatalf("SetNodeName: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeB].Name; got != "renamed" {
+		t.Fatalf("renamed node name = %q, want %q", got, "renamed")
+	}
+	if err := w.SetNodeName(nodeB, ""); !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("SetNodeName empty error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	if err := w.SetNodeName(nodeB, "bad[name"); !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("SetNodeName left bracket error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	if err := w.SetNodeName(nodeB, "bad]name"); !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("SetNodeName right bracket error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	if err := w.SetNodeName(999, "missing"); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("SetNodeName missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+}
+
+func TestWorkspaceNodeNameValidationDoesNotConsumeIDs(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Node", "bad[name"); !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("AddNode invalid name error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode after invalid name: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Name; got != "Node 1" {
+		t.Fatalf("name after invalid add = %q, want %q", got, "Node 1")
+	}
+	if nodeID != 1 {
+		t.Fatalf("node id after invalid add = %d, want 1", nodeID)
+	}
+}
+
+func TestWorkspaceNodeNameChangeNotifies(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	if err := w.SetNodeName(nodeID, "visible header"); err != nil {
+		t.Fatalf("SetNodeName: %v", err)
+	}
+
+	got := notifications[len(notifications)-1]
+	if got.Kind != pasta.NotificationNodeUpdated || got.ID != nodeID || got.Node == nil || got.Node.Name != "visible header" {
+		t.Fatalf("last notification = %#v, want node update with changed name", got)
+	}
+}
+
+func TestWorkspaceReplacementCanSetOrRegenerateNodeName(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node", "old name")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	replacement := &workspaceNode{}
+	if err := w.ReplaceNodeWithName(nodeID, replacement, "new name"); err != nil {
+		t.Fatalf("ReplaceNodeWithName explicit: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Name; got != "new name" {
+		t.Fatalf("replacement name = %q, want %q", got, "new name")
+	}
+	if replacement.initData == nil || replacement.initData.Name != "new name" {
+		t.Fatalf("replacement init data = %#v, want name %q", replacement.initData, "new name")
+	}
+
+	if err := w.ReplaceNodeWithPlaceholderWithName(nodeID, nil, ""); err != nil {
+		t.Fatalf("ReplaceNodeWithPlaceholderWithName generic: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Name; got != "Node 1" {
+		t.Fatalf("generic replacement name = %q, want %q", got, "Node 1")
+	}
+}
+
+func TestWorkspaceReplacementNameFailuresDoNotMutate(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeA := &workspaceNode{}
+	nodeB := &workspaceNode{}
+	nodeAID, err := w.AddNode(nodeA, "example.com/NodeA", "alpha")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeBID, err := w.AddNode(nodeB, "example.com/NodeB", "beta")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	before := w.Snapshot()
+
+	if err := w.ReplaceNodeWithName(nodeAID, &workspaceNode{}, "beta"); !errors.Is(err, pasta.ErrNodeNameDup) {
+		t.Fatalf("ReplaceNodeWithName duplicate error = %v, want %v", err, pasta.ErrNodeNameDup)
+	}
+	if got := w.Snapshot(); !equalWorkspaceSnapshot(got, before) {
+		t.Fatalf("duplicate replacement name mutated workspace: before=%#v after=%#v", before, got)
+	}
+	if nodeA.stopCount != 0 {
+		t.Fatalf("duplicate replacement stopped old node = %d, want 0", nodeA.stopCount)
+	}
+
+	if err := w.ReplaceNodeWithPlaceholderWithName(nodeBID, nil, "bad]name"); !errors.Is(err, pasta.ErrNodeName) {
+		t.Fatalf("ReplaceNodeWithPlaceholderWithName invalid error = %v, want %v", err, pasta.ErrNodeName)
+	}
+	if got := w.Snapshot(); !equalWorkspaceSnapshot(got, before) {
+		t.Fatalf("invalid placeholder name mutated workspace: before=%#v after=%#v", before, got)
+	}
+	if nodeB.stopCount != 0 {
+		t.Fatalf("invalid placeholder replacement stopped old node = %d, want 0", nodeB.stopCount)
+	}
+}
+
+func TestWorkspacePlaceholderNameStateIsSuggestedAndApplied(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	placeholderID, err := w.AddPlaceholderNode("example.com/NamedRestore", nil, "legacy header")
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode: %v", err)
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Peer", "peer header"); err != nil {
+		t.Fatalf("AddNode peer: %v", err)
+	}
+
+	var suggested pasta.NodeClassPlaceholderState
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/NamedRestore"},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			suggested = state
+			state.Name = "restored header"
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  &workspaceNode{},
+				State: state,
+			}, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	if suggested.Name != "legacy header" {
+		t.Fatalf("suggested placeholder name = %q, want %q", suggested.Name, "legacy header")
+	}
+	if got := w.Snapshot().Nodes[placeholderID].Name; got != "restored header" {
+		t.Fatalf("restored node name = %q, want %q", got, "restored header")
+	}
+}
+
+func TestWorkspacePlaceholderNameReplacementFailuresDoNotMutate(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	placeholderID, err := w.AddPlaceholderNode("example.com/InvalidNameRestore", nil, "legacy header")
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode: %v", err)
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Peer", "peer header"); err != nil {
+		t.Fatalf("AddNode peer: %v", err)
+	}
+	before := w.Snapshot()
+
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/InvalidNameRestore"},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			state.Name = "peer header"
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  &workspaceNode{},
+				State: state,
+			}, nil
+		},
+	}); !errors.Is(err, pasta.ErrNodeNameDup) {
+		t.Fatalf("AddNodeClass duplicate placeholder replacement name error = %v, want %v", err, pasta.ErrNodeNameDup)
+	}
+	after := w.Snapshot()
+	if !after.Nodes[placeholderID].Placeholder || !equalNodeSnapshot(after.Nodes[placeholderID], before.Nodes[placeholderID]) {
+		t.Fatalf("duplicate placeholder replacement name mutated node: before=%#v after=%#v", before.Nodes[placeholderID], after.Nodes[placeholderID])
+	}
+	if len(after.Ports) != len(before.Ports) || len(after.Links) != len(before.Links) {
+		t.Fatalf("duplicate placeholder replacement name mutated graph: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestWorkspaceGeneratesDeterministicRandomNodeNameFallback(t *testing.T) {
+	first := pasta.NewWorkspace(&StringLoggerFactory{})
+	second := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	firstName := forceGenericNameCollision(t, first)
+	secondName := forceGenericNameCollision(t, second)
+	if firstName != secondName {
+		t.Fatalf("fallback names = %q and %q, want deterministic per workspace", firstName, secondName)
+	}
+	if strings.HasPrefix(firstName, "CalcDiv 3") || !strings.HasPrefix(firstName, "CalcDiv ") {
+		t.Fatalf("fallback name = %q, want CalcDiv plus non-ID suffix", firstName)
+	}
+	suffix := strings.TrimPrefix(firstName, "CalcDiv ")
+	if suffix == "" || !isASCIIAlpha(suffix[0]) {
+		t.Fatalf("fallback suffix = %q, want first character to be a letter", suffix)
+	}
+}
+
+func forceGenericNameCollision(t *testing.T, w *pasta.Workspace) string {
+	t.Helper()
+
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Other", "CalcDiv 3"); err != nil {
+		t.Fatalf("AddNode colliding name holder: %v", err)
+	}
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Other"); err != nil {
+		t.Fatalf("AddNode ID spacer: %v", err)
+	}
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv")
+	if err != nil {
+		t.Fatalf("AddNode fallback: %v", err)
+	}
+	return w.Snapshot().Nodes[nodeID].Name
+}
+
+func isASCIIAlpha(c byte) bool {
+	return ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z')
 }
 
 func TestWorkspaceNodePopupSnapshotsAndMutations(t *testing.T) {
@@ -2386,6 +2687,9 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	if err := w.SetNodeLabel(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeLabel after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
+	if err := w.SetNodeName(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodeName after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
 	if _, err := w.AddNodePopup(nodeAID, pasta.NodePopupInfo, "closed", false); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("AddNodePopup after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
@@ -2690,6 +2994,7 @@ func emptyClassPortsIfNil(values []pasta.NodeClassPortSnapshot) []pasta.NodeClas
 
 func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {
 	return a.Class == b.Class &&
+		(b.Name == "" || a.Name == b.Name) &&
 		a.PrimaryType == b.PrimaryType &&
 		a.Label == b.Label &&
 		reflect.DeepEqual(emptyPopupsIfNil(a.Popups), emptyPopupsIfNil(b.Popups)) &&

@@ -48,6 +48,7 @@ type NodeClassFactory interface {
 type NodeClassPlaceholderState struct {
 	Root        bool
 	PrimaryType string
+	Name        string
 	Label       string
 	LeftPorts   []Port
 	RightPorts  []Port
@@ -177,15 +178,28 @@ func (w *Workspace) NodeClassLongDescription(name string) (string, bool) {
 }
 
 // AddNodeByClass constructs and adds a node using a registered class factory.
-func (w *Workspace) AddNodeByClass(class string) (uint64, error) {
+//
+// If name is empty or omitted, a generic unique name is generated.
+func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error) {
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
+	requestedName := optionalName(name)
 
 	w.Lock()
 	if w.closed {
 		w.Unlock()
 		return 0, ErrWorkspaceClosed
+	}
+	if requestedName != "" {
+		if err := ValidateNodeName(requestedName); err != nil {
+			w.Unlock()
+			return 0, err
+		}
+		if err := w.rejectNodeNameDuplicateLocked(requestedName, 0); err != nil {
+			w.Unlock()
+			return 0, err
+		}
 	}
 	nodeClass, present := w.classes.Get(class)
 	if present && nodeClass != nil {
@@ -214,7 +228,7 @@ func (w *Workspace) AddNodeByClass(class string) (uint64, error) {
 		return 0, ErrNoNode
 	}
 	params := nodeClass.DefaultNodeParams()
-	return w.addNodeByClassWithParams(node, class, params)
+	return w.addNodeByClassWithParams(node, class, params, requestedName)
 }
 
 func nodeClassSnapshot(class NodeClass) NodeClassSnapshot {

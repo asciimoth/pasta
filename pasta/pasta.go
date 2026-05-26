@@ -3,7 +3,9 @@ package pasta
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"slices"
+	"strings"
 
 	"github.com/asciimoth/badlock"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
@@ -12,6 +14,8 @@ import (
 var (
 	// ErrNodeDup reports that the same Node instance is already present in a workspace.
 	ErrNodeDup = errors.New("node duplicate")
+	// ErrNodeNameDup reports that a node name is already present in a workspace.
+	ErrNodeNameDup = errors.New("node name duplicate")
 	// ErrUniqueNodeClassDup reports that a unique node class already has a node.
 	ErrUniqueNodeClassDup = errors.New("unique node class duplicate")
 	// ErrLinkDup reports that two ports are already connected by a link.
@@ -43,10 +47,11 @@ type Workspace struct {
 
 	pending []func()
 
-	nodes   *orderedmap.OrderedMap[uint64, *nodeRecord]
-	ports   *orderedmap.OrderedMap[uint64, *Port]
-	links   *orderedmap.OrderedMap[uint64, *Link]
-	classes *orderedmap.OrderedMap[string, NodeClass]
+	nodes    *orderedmap.OrderedMap[uint64, *nodeRecord]
+	ports    *orderedmap.OrderedMap[uint64, *Port]
+	links    *orderedmap.OrderedMap[uint64, *Link]
+	classes  *orderedmap.OrderedMap[string, NodeClass]
+	nameRand *rand.Rand
 
 	nextSubscriptionID  uint64
 	subscribers         map[uint64]NotificationCallback
@@ -65,11 +70,12 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		nextid:  1,
 		isReady: true,
 
-		pending: make([]func(), 0),
-		nodes:   orderedmap.New[uint64, *nodeRecord](),
-		ports:   orderedmap.New[uint64, *Port](),
-		links:   orderedmap.New[uint64, *Link](),
-		classes: orderedmap.New[string, NodeClass](),
+		pending:  make([]func(), 0),
+		nodes:    orderedmap.New[uint64, *nodeRecord](),
+		ports:    orderedmap.New[uint64, *Port](),
+		links:    orderedmap.New[uint64, *Link](),
+		classes:  orderedmap.New[string, NodeClass](),
+		nameRand: rand.New(rand.NewSource(1)),
 
 		nextSubscriptionID:  1,
 		subscribers:         make(map[uint64]NotificationCallback),
@@ -403,24 +409,24 @@ func (w *Workspace) RemoveLink(id uint64) {
 //
 // class must be a valid class name. Nodes can configure their primary type
 // and label from OnInit or later callbacks with SetNodePrimary and
-// SetNodeLabel.
-func (w *Workspace) AddNode(node Node, class string) (uint64, error) {
-	return w.AddNodeWithRoot(node, class, false)
+// SetNodeLabel. If name is empty or omitted, a generic unique name is generated.
+func (w *Workspace) AddNode(node Node, class string, name ...string) (uint64, error) {
+	return w.AddNodeWithRoot(node, class, false, optionalName(name))
 }
 
 // AddRootNode adds node to the workspace as a root node.
-func (w *Workspace) AddRootNode(node Node, class string) (uint64, error) {
-	return w.AddNodeWithRoot(node, class, true)
+func (w *Workspace) AddRootNode(node Node, class string, name ...string) (uint64, error) {
+	return w.AddNodeWithRoot(node, class, true, optionalName(name))
 }
 
 // AddNodeWithRoot adds node to the workspace and sets its initial root status.
-func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64, error) {
+func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool, name ...string) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
-	return w.addNodeLocked(node, class, root, "", nil, nil, false)
+	return w.addNodeLocked(node, class, root, optionalName(name), "", nil, nil, false)
 }
 
-func (w *Workspace) addNodeByClassWithParams(node Node, class string, params NodeClassParams) (uint64, error) {
+func (w *Workspace) addNodeByClassWithParams(node Node, class string, params NodeClassParams, name string) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
 	if err := validateNodeClassParams(params); err != nil {
@@ -429,10 +435,10 @@ func (w *Workspace) addNodeByClassWithParams(node Node, class string, params Nod
 	initData := &NodeInitData{
 		PrimaryType: params.PrimaryType,
 	}
-	return w.addNodeLocked(node, class, params.Root, params.PrimaryType, params.InitialPorts, initData, true)
+	return w.addNodeLocked(node, class, params.Root, name, params.PrimaryType, params.InitialPorts, initData, true)
 }
 
-func (w *Workspace) addNodeLocked(node Node, class string, root bool, primaryType string, initialPorts []Port, initData *NodeInitData, isClassConstructed bool) (uint64, error) {
+func (w *Workspace) addNodeLocked(node Node, class string, root bool, name string, primaryType string, initialPorts []Port, initData *NodeInitData, isClassConstructed bool) (uint64, error) {
 	if w.closed {
 		return 0, ErrWorkspaceClosed
 	}
@@ -458,13 +464,25 @@ func (w *Workspace) addNodeLocked(node Node, class string, root bool, primaryTyp
 	if err := w.rejectUniqueNodeDuplicateLocked(class, 0); err != nil {
 		return 0, err
 	}
+	if name != "" {
+		if err := ValidateNodeName(name); err != nil {
+			return 0, err
+		}
+		if err := w.rejectNodeNameDuplicateLocked(name, 0); err != nil {
+			return 0, err
+		}
+	}
 
 	id := w.NextID()
+	if name == "" {
+		name = w.generateNodeNameLocked(id, class, 0)
+	}
 	log := w.logf.NodeLogger(id, class)
 	rec := nodeRecord{
 		ID:          id,
 		Node:        node,
 		Class:       class,
+		Name:        name,
 		PrimaryType: primaryType,
 		Label:       "",
 		Popups:      []NodePopup{},
@@ -480,6 +498,7 @@ func (w *Workspace) addNodeLocked(node Node, class string, root bool, primaryTyp
 	}
 	if initData != nil {
 		initData.PrimaryType = rec.PrimaryType
+		initData.Name = rec.Name
 		initData.Label = rec.Label
 		initData.LeftPorts = slices.Clone(rec.LeftPorts)
 		initData.RightPorts = slices.Clone(rec.RightPorts)
@@ -537,14 +556,14 @@ func (w *Workspace) addNodeLocked(node Node, class string, root bool, primaryTyp
 }
 
 // AddPlaceholderNode adds a placeholder node with predefined ports.
-func (w *Workspace) AddPlaceholderNode(class string, ports []Port) (uint64, error) {
-	return w.AddPlaceholderNodeWithRoot(class, false, ports)
+func (w *Workspace) AddPlaceholderNode(class string, ports []Port, name ...string) (uint64, error) {
+	return w.AddPlaceholderNodeWithRoot(class, false, ports, optionalName(name))
 }
 
 // AddPlaceholderNodeWithRoot adds a placeholder node with predefined ports and
 // an initial root flag. Placeholder root state is stored but ignored by
 // snapshots and root-path tracing until the node is replaced by a normal node.
-func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []Port) (uint64, error) {
+func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []Port, name ...string) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
 	if w.closed {
@@ -556,12 +575,25 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 	if err := w.rejectUniqueNodeDuplicateLocked(class, 0); err != nil {
 		return 0, err
 	}
+	nodeName := optionalName(name)
+	if nodeName != "" {
+		if err := ValidateNodeName(nodeName); err != nil {
+			return 0, err
+		}
+		if err := w.rejectNodeNameDuplicateLocked(nodeName, 0); err != nil {
+			return 0, err
+		}
+	}
 
 	id := w.NextID()
+	if nodeName == "" {
+		nodeName = w.generateNodeNameLocked(id, class, 0)
+	}
 	rec := nodeRecord{
 		ID:          id,
 		Node:        nil,
 		Class:       class,
+		Name:        nodeName,
 		PrimaryType: "",
 		Label:       "",
 		Popups:      []NodePopup{},
@@ -591,6 +623,17 @@ func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []
 // the replacement node starts; any popups added by the replacement are treated
 // as new observable state.
 func (w *Workspace) ReplaceNode(id uint64, node Node) error {
+	return w.replaceNode(id, node, "", false)
+}
+
+// ReplaceNodeWithName replaces the Node implementation and sets the node name.
+//
+// If name is empty, a generic unique name is generated.
+func (w *Workspace) ReplaceNodeWithName(id uint64, node Node, name string) error {
+	return w.replaceNode(id, node, name, true)
+}
+
+func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) error {
 	w.Lock()
 	defer w.Unlock()
 	if w.closed {
@@ -618,6 +661,15 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	if err := w.rejectUniqueNodeDuplicateLocked(record.Class, id); err != nil {
 		return err
 	}
+	if rename {
+		prepared, err := w.prepareNodeNameLocked(id, record.Class, name, id)
+		if err != nil {
+			return err
+		}
+		name = prepared
+	} else if err := w.rejectNodeNameDuplicateLocked(record.Name, id); err != nil {
+		return err
+	}
 
 	wasPlaceholder := record.Node == nil
 	old := record.Node
@@ -628,6 +680,10 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 	nodeStop(old)
 
 	record.Node = node
+	if rename {
+		record.Name = name
+		restored.Name = name
+	}
 	record.stopped = false
 	if err := record.OnInit(w, &restored, true, wasPlaceholder, false); err != nil {
 		w.log.Debugf("node %d faled in OnInit", id)
@@ -686,7 +742,7 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 		w.refreshPlaceholderLinks(id, true)
 		w.recomputeRootPaths(true)
 		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
-	} else if clearedPopups {
+	} else if clearedPopups || rename {
 		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	}
 	return nil
@@ -696,6 +752,17 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 // placeholder record while preserving existing ports and links. Any supplied
 // ports are added to the placeholder.
 func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
+	return w.replaceNodeWithPlaceholder(id, ports, "", false)
+}
+
+// ReplaceNodeWithPlaceholderWithName replaces an existing node implementation
+// with a placeholder record and sets the node name. If name is empty, a generic
+// unique name is generated.
+func (w *Workspace) ReplaceNodeWithPlaceholderWithName(id uint64, ports []Port, name string) error {
+	return w.replaceNodeWithPlaceholder(id, ports, name, true)
+}
+
+func (w *Workspace) replaceNodeWithPlaceholder(id uint64, ports []Port, name string, rename bool) error {
 	w.Lock()
 	defer w.Unlock()
 	if w.closed {
@@ -711,6 +778,15 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 	if err := w.rejectUniqueNodeDuplicateLocked(record.Class, id); err != nil {
 		return err
 	}
+	if rename {
+		prepared, err := w.prepareNodeNameLocked(id, record.Class, name, id)
+		if err != nil {
+			return err
+		}
+		name = prepared
+	} else if err := w.rejectNodeNameDuplicateLocked(record.Name, id); err != nil {
+		return err
+	}
 
 	old := record.Node
 	if old != nil {
@@ -719,6 +795,9 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 	record.Popups = nil
 	record.Menu = nil
 	record.Node = nil
+	if rename {
+		record.Name = name
+	}
 	record.stopped = false
 	added, err := w.addPlaceholderPorts(record, ports)
 	if err != nil {
@@ -740,6 +819,12 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 // ReplacePlaceholderNode replaces a placeholder node with a normal Node.
 func (w *Workspace) ReplacePlaceholderNode(id uint64, node Node) error {
 	return w.ReplaceNode(id, node)
+}
+
+// ReplacePlaceholderNodeWithName replaces a placeholder node with a normal Node
+// and sets the node name. If name is empty, a generic unique name is generated.
+func (w *Workspace) ReplacePlaceholderNodeWithName(id uint64, node Node, name string) error {
+	return w.ReplaceNodeWithName(id, node, name)
 }
 
 func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, node Node, state NodeClassPlaceholderState) error {
@@ -1135,6 +1220,29 @@ func (w *Workspace) SetNodeLabel(id uint64, label string) error {
 		return ErrNoNode
 	}
 	record.Label = label
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
+// SetNodeName sets a node's unique name.
+func (w *Workspace) SetNodeName(id uint64, name string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+	if err := ValidateNodeName(name); err != nil {
+		return err
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	if err := w.rejectNodeNameDuplicateLocked(name, id); err != nil {
+		return err
+	}
+	record.Name = name
 	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	return nil
 }
@@ -1557,6 +1665,94 @@ func (w *Workspace) rejectUniqueNodeDuplicateLocked(class string, except uint64)
 	return nil
 }
 
+func (w *Workspace) prepareNodeNameLocked(id uint64, class, name string, except uint64) (string, error) {
+	if name != "" {
+		if err := ValidateNodeName(name); err != nil {
+			return "", err
+		}
+		if err := w.rejectNodeNameDuplicateLocked(name, except); err != nil {
+			return "", err
+		}
+		return name, nil
+	}
+	return w.generateNodeNameLocked(id, class, except), nil
+}
+
+func (w *Workspace) rejectNodeNameDuplicateLocked(name string, except uint64) error {
+	if err := ValidateNodeName(name); err != nil {
+		return err
+	}
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Key == except || pair.Value == nil {
+			continue
+		}
+		if pair.Value.Name == name {
+			return ErrNodeNameDup
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) generateNodeNameLocked(id uint64, class string, except uint64) string {
+	base := shortClassName(class)
+	candidate := fmt.Sprintf("%s %d", base, id)
+	if w.nodeNameAvailableLocked(candidate, except) {
+		return candidate
+	}
+	for length := 2; ; length++ {
+		for attempt := 0; attempt < 16; attempt++ {
+			candidate = base + " " + w.randomNodeNameSuffix(length)
+			if w.nodeNameAvailableLocked(candidate, except) {
+				return candidate
+			}
+		}
+	}
+}
+
+func (w *Workspace) nodeNameAvailableLocked(name string, except uint64) bool {
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Key == except || pair.Value == nil {
+			continue
+		}
+		if pair.Value.Name == name {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *Workspace) randomNodeNameSuffix(length int) string {
+	if length < 1 {
+		length = 1
+	}
+	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	const alphaNumeric = letters + "0123456789"
+	if w.nameRand == nil {
+		w.nameRand = rand.New(rand.NewSource(1))
+	}
+	buf := make([]byte, length)
+	buf[0] = letters[w.nameRand.Intn(len(letters))]
+	for i := 1; i < length; i++ {
+		buf[i] = alphaNumeric[w.nameRand.Intn(len(alphaNumeric))]
+	}
+	return string(buf)
+}
+
+func shortClassName(class string) string {
+	_, suffix, ok := strings.Cut(class, "/")
+	if !ok || suffix == "" {
+		return class
+	}
+	return suffix
+}
+
+func optionalName(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
 func (w *Workspace) removeUniqueNodeClassDuplicatesLocked(class string) {
 	nodes := w.nodeIDsByClassLocked(class)
 	if len(nodes) < 2 {
@@ -1593,6 +1789,7 @@ func (w *Workspace) placeholderClassStateLocked(record *nodeRecord) NodeClassPla
 	state := NodeClassPlaceholderState{
 		Root:        record.Root,
 		PrimaryType: record.PrimaryType,
+		Name:        record.Name,
 		Label:       record.Label,
 		LeftPorts:   make([]Port, 0, len(record.LeftPorts)),
 		RightPorts:  make([]Port, 0, len(record.RightPorts)),
@@ -1616,6 +1813,10 @@ func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeCla
 			return err
 		}
 	}
+	name, err := w.prepareNodeNameLocked(record.ID, record.Class, state.Name, record.ID)
+	if err != nil {
+		return err
+	}
 	leftPorts, err := w.preparePlaceholderClassPorts(record, state.LeftPorts, "left")
 	if err != nil {
 		return err
@@ -1627,6 +1828,7 @@ func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeCla
 
 	record.Root = state.Root
 	record.PrimaryType = state.PrimaryType
+	record.Name = name
 	record.Label = state.Label
 
 	w.removeOmittedPlaceholderClassPorts(record, leftPorts, record.LeftPorts)

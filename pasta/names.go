@@ -10,6 +10,8 @@ var (
 	ErrClassName = errors.New("invalid class name")
 	// ErrTypeName reports that a type name is malformed.
 	ErrTypeName = errors.New("invalid type name")
+	// ErrNodeName reports that a node name is malformed.
+	ErrNodeName = errors.New("invalid node name")
 )
 
 const (
@@ -42,6 +44,16 @@ func ValidateTypeName(name string) error {
 		return nil
 	}
 	return validateName(name, isLower, ErrTypeName)
+}
+
+// ValidateNodeName reports whether name is a valid node name.
+//
+// Node names must be non-empty and may contain any characters except '[' and ']'.
+func ValidateNodeName(name string) error {
+	if name == "" || strings.ContainsAny(name, "[]") {
+		return ErrNodeName
+	}
+	return nil
 }
 
 func validateName(name string, firstNameChar func(byte) bool, err error) error {
