@@ -829,6 +829,11 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddLink deleted port: %v", err)
 	}
+	peerLeft2 := mustAddPort(t, w, peerID, "left", "example.com/typeA")
+	incompatibleLink, _, err := w.AddLink(peerLeft2, right)
+	if err != nil {
+		t.Fatalf("AddLink incompatible kept port: %v", err)
+	}
 	if err := w.SetNodePrimary(replaceID, "example.com/typeA"); err != nil {
 		t.Fatalf("SetNodePrimary placeholder: %v", err)
 	}
@@ -916,6 +921,9 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 	if _, ok := snapshot.Links[deletedLink]; ok {
 		t.Fatalf("link %d attached to deleted placeholder port remains in snapshot", deletedLink)
 	}
+	if _, ok := snapshot.Links[incompatibleLink]; ok {
+		t.Fatalf("link %d incompatible with restored placeholder port remains in snapshot", incompatibleLink)
+	}
 	if !equalPortSnapshot(snapshot.Ports[left], pasta.PortSnapshot{
 		Node:      replaceID,
 		Direction: "left",
@@ -953,6 +961,131 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 	assertNotificationMatches(t, notifications, []notificationMatch{
 		{kind: pasta.NotificationNodeClassAdded},
 	})
+}
+
+func TestWorkspaceNodeClassReplacementKeepsCompatibleAnyLinks(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	peerSingleID, err := w.AddNode(&workspaceNode{}, "example.com/PeerSingle")
+	if err != nil {
+		t.Fatalf("AddNode peer single: %v", err)
+	}
+	peerSingle := mustAddPort(t, w, peerSingleID, "left", "example.com/typeA")
+
+	peerMultiID, err := w.AddNode(&workspaceNode{}, "example.com/PeerMulti")
+	if err != nil {
+		t.Fatalf("AddNode peer multi: %v", err)
+	}
+	peerMulti, err := w.AddPort(pasta.Port{
+		Node:      peerMultiID,
+		Direction: "left",
+		Name:      "left1",
+		Types:     []string{"example.com/typeB", "example.com/typeC"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort peer multi: %v", err)
+	}
+
+	peerAnyID, err := w.AddNode(&workspaceNode{}, "example.com/PeerAny")
+	if err != nil {
+		t.Fatalf("AddNode peer any: %v", err)
+	}
+	peerAny, err := w.AddPort(pasta.Port{
+		Node:      peerAnyID,
+		Direction: "left",
+		Name:      "left1",
+		Types:     []string{pasta.AnyType, "example.com/typeF"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort peer any: %v", err)
+	}
+
+	keepConcrete, keepConcreteRight := mustAddAnyPlaceholder(t, w, "keep concrete")
+	keepAny, keepAnyRight := mustAddAnyPlaceholder(t, w, "keep any")
+	removeAny, removeAnyRight := mustAddAnyPlaceholder(t, w, "remove any")
+	specializeAny, specializeAnyRight := mustAddAnyPlaceholder(t, w, "specialize any")
+	keepViaPeerAny, keepViaPeerAnyRight := mustAddAnyPlaceholder(t, w, "keep via peer any")
+
+	keepConcreteLink, linkType, err := w.AddLink(peerSingle, keepConcreteRight)
+	if err != nil {
+		t.Fatalf("AddLink keep concrete: %v", err)
+	}
+	if linkType != "example.com/typeA" {
+		t.Fatalf("keep concrete link type = %q, want example.com/typeA", linkType)
+	}
+	keepAnyLink, linkType, err := w.AddLink(peerMulti, keepAnyRight)
+	if err != nil {
+		t.Fatalf("AddLink keep any: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("keep any link type = %q, want %q", linkType, pasta.AnyType)
+	}
+	removeAnyLink, linkType, err := w.AddLink(peerMulti, removeAnyRight)
+	if err != nil {
+		t.Fatalf("AddLink remove any: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("remove any link type = %q, want %q", linkType, pasta.AnyType)
+	}
+	specializeAnyLink, linkType, err := w.AddLink(peerMulti, specializeAnyRight)
+	if err != nil {
+		t.Fatalf("AddLink specialize any: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("specialize any link type = %q, want %q", linkType, pasta.AnyType)
+	}
+	keepViaPeerAnyLink, linkType, err := w.AddLink(peerAny, keepViaPeerAnyRight)
+	if err != nil {
+		t.Fatalf("AddLink keep via peer any: %v", err)
+	}
+	if linkType != pasta.AnyType {
+		t.Fatalf("keep via peer any link type = %q, want %q", linkType, pasta.AnyType)
+	}
+
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/AnyRestored"},
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) > 0 {
+				switch previous[0].Label {
+				case "keep concrete", "keep any":
+					previous[0].RightPorts[0].Types = []string{pasta.AnyType}
+				case "specialize any", "keep via peer any":
+					previous[0].RightPorts[0].Types = []string{"example.com/typeB"}
+				case "remove any":
+					previous[0].RightPorts[0].Types = []string{"example.com/typeD"}
+				}
+			}
+			return &workspaceNode{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+
+	snapshot := w.Snapshot()
+	for id, linkID := range map[uint64]uint64{
+		keepConcrete:   keepConcreteLink,
+		keepAny:        keepAnyLink,
+		keepViaPeerAny: keepViaPeerAnyLink,
+	} {
+		if snapshot.Nodes[id].Placeholder {
+			t.Fatalf("node %d remains placeholder", id)
+		}
+		if _, ok := snapshot.Links[linkID]; !ok {
+			t.Fatalf("compatible any link %d was removed", linkID)
+		}
+	}
+	if snapshot.Nodes[removeAny].Placeholder {
+		t.Fatalf("remove-any node %d remains placeholder", removeAny)
+	}
+	if _, ok := snapshot.Links[removeAnyLink]; ok {
+		t.Fatalf("incompatible any link %d remains", removeAnyLink)
+	}
+	if snapshot.Nodes[specializeAny].Placeholder {
+		t.Fatalf("specialize-any node %d remains placeholder", specializeAny)
+	}
+	if got, ok := snapshot.Links[specializeAnyLink]; !ok || got.Type != "example.com/typeB" {
+		t.Fatalf("specialized any link = %#v, %v; want type example.com/typeB", got, ok)
+	}
 }
 
 func TestWorkspaceUniqueNodeClassRegistrationRemovesDuplicatesBeforePlaceholderReplacement(t *testing.T) {
@@ -3165,4 +3298,23 @@ func mustAddPort(t *testing.T, w *pasta.Workspace, node uint64, direction, typ s
 		t.Fatalf("AddPort(%d, %s, %s): %v", node, direction, typ, err)
 	}
 	return id
+}
+
+func mustAddAnyPlaceholder(t *testing.T, w *pasta.Workspace, label string) (uint64, uint64) {
+	t.Helper()
+
+	id, err := w.AddPlaceholderNode("example.com/AnyRestored", []pasta.Port{
+		{Direction: "right", Name: "right1", Types: []string{pasta.AnyType}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode %q: %v", label, err)
+	}
+	if err := w.SetNodeLabel(id, label); err != nil {
+		t.Fatalf("SetNodeLabel %q: %v", label, err)
+	}
+	snapshot, ok := w.NodeSnapshot(id)
+	if !ok || len(snapshot.RightPorts) != 1 {
+		t.Fatalf("placeholder %q snapshot = %#v, %v", label, snapshot, ok)
+	}
+	return id, snapshot.RightPorts[0]
 }

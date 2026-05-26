@@ -1956,7 +1956,54 @@ func (w *Workspace) updatePlaceholderClassPort(replacement Port) {
 	port.Name = replacement.Name
 	port.Types = replacement.CopyTypes()
 	port.Links = links
+	w.removeIncompatiblePlaceholderPortLinks(port)
 	w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
+}
+
+func (w *Workspace) removeIncompatiblePlaceholderPortLinks(port *Port) {
+	if port == nil {
+		return
+	}
+	for _, linkID := range port.CopyLinks() {
+		link, present := w.links.Get(linkID)
+		if !present || link == nil {
+			continue
+		}
+		var peerID uint64
+		switch port.ID {
+		case link.LeftPort:
+			peerID = link.RightPort
+		case link.RightPort:
+			peerID = link.LeftPort
+		default:
+			continue
+		}
+		peer, present := w.ports.Get(peerID)
+		if !present || peer == nil {
+			w.RemoveLink(linkID)
+			continue
+		}
+		if link.Type == AnyType && !portsSupportLinkType(port, peer, link.Type) {
+			linkType := w.portsSharedType(port, peer)
+			if linkType != "" {
+				link.Type = linkType
+				w.enqueueLinkNotification(NotificationLinkUpdated, link.ID, linkSnapshot(link))
+				continue
+			}
+		}
+		if !portsSupportLinkType(port, peer, link.Type) {
+			w.RemoveLink(linkID)
+		}
+	}
+}
+
+func portsSupportLinkType(portA, portB *Port, linkType string) bool {
+	if linkType == AnyType {
+		return slices.Contains(portA.Types, AnyType) || slices.Contains(portB.Types, AnyType)
+	}
+	portASupports := slices.Contains(portA.Types, linkType) || slices.Contains(portA.Types, AnyType)
+	portBSupports := slices.Contains(portB.Types, linkType) || slices.Contains(portB.Types, AnyType)
+	return portASupports && portBSupports
 }
 
 func portIDs(ports []Port) []uint64 {
