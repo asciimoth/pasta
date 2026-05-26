@@ -827,7 +827,7 @@ func (w *Workspace) ReplacePlaceholderNodeWithName(id uint64, node Node, name st
 	return w.ReplaceNodeWithName(id, node, name)
 }
 
-func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, node Node, state NodeClassPlaceholderState) error {
+func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, node Node, state NodeClassState) error {
 	w.Lock()
 	defer w.Unlock()
 	if w.closed {
@@ -1800,7 +1800,7 @@ func (w *Workspace) removeUniqueNodeClassDuplicatesLocked(class string) {
 
 type nodeClassPlaceholderCandidate struct {
 	id    uint64
-	state NodeClassPlaceholderState
+	state NodeClassState
 }
 
 func (w *Workspace) nodeClassPlaceholderCandidatesLocked(class string) []nodeClassPlaceholderCandidate {
@@ -1817,8 +1817,8 @@ func (w *Workspace) nodeClassPlaceholderCandidatesLocked(class string) []nodeCla
 	return placeholders
 }
 
-func (w *Workspace) placeholderClassStateLocked(record *nodeRecord) NodeClassPlaceholderState {
-	state := NodeClassPlaceholderState{
+func (w *Workspace) placeholderClassStateLocked(record *nodeRecord) NodeClassState {
+	state := NodeClassState{
 		Root:        record.Root,
 		PrimaryType: record.PrimaryType,
 		Name:        record.Name,
@@ -1839,7 +1839,7 @@ func (w *Workspace) placeholderClassStateLocked(record *nodeRecord) NodeClassPla
 	return state
 }
 
-func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeClassPlaceholderState) error {
+func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeClassState) error {
 	if state.PrimaryType != "" {
 		if err := ValidateTypeName(state.PrimaryType); err != nil {
 			return err

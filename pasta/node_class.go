@@ -38,32 +38,25 @@ type NodeClassParams struct {
 // NodeClassFactory is the optional node-construction capability for NodeClass.
 //
 // Classes that implement this interface can be used with AddNodeByClass.
+// NewNode is called without previous state for fresh nodes. When restoring an
+// existing record, the workspace passes one NodeClassState pointer; factories
+// may mutate it before returning the replacement node. Returning nil for a
+// restore leaves the existing record unchanged.
 type NodeClassFactory interface {
-	NewNode() (Node, error)
-	ReplacePlaceholder(NodeClassPlaceholderState) (*NodeClassPlaceholderReplacement, error)
+	NewNode(previous ...*NodeClassState) (Node, error)
 }
 
-// NodeClassPlaceholderState describes a placeholder node that can be migrated
-// when its class is registered.
-type NodeClassPlaceholderState struct {
+// NodeClassState describes existing workspace state that can be used to
+// construct or restore a node. Ports with existing IDs are kept and updated,
+// ports omitted from the state are removed with their links, and ports with ID
+// 0 are added as new ports.
+type NodeClassState struct {
 	Root        bool
 	PrimaryType string
 	Name        string
 	Label       string
 	LeftPorts   []Port
 	RightPorts  []Port
-}
-
-// NodeClassPlaceholderReplacement is a factory suggestion for replacing one
-// placeholder with a live node.
-//
-// State is the desired replacement state. Ports with existing placeholder IDs
-// are kept and updated, ports omitted from State are removed with their links,
-// and ports with ID 0 are added as new ports. Returning nil from
-// ReplacePlaceholder leaves the placeholder unchanged.
-type NodeClassPlaceholderReplacement struct {
-	Node  Node
-	State NodeClassPlaceholderState
 }
 
 // AddNodeClass adds or replaces a registered node class.
@@ -106,14 +99,15 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 		return nil
 	}
 	for _, placeholder := range placeholders {
-		replacement, err := factory.ReplacePlaceholder(placeholder.state)
+		state := placeholder.state
+		node, err := factory.NewNode(&state)
 		if err != nil {
 			return err
 		}
-		if replacement == nil {
+		if node == nil {
 			continue
 		}
-		if err := w.replacePlaceholderWithClassState(placeholder.id, name, replacement.Node, replacement.State); err != nil {
+		if err := w.replacePlaceholderWithClassState(placeholder.id, name, node, state); err != nil {
 			return err
 		}
 	}

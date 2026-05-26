@@ -538,7 +538,7 @@ func buildCalcGraph(t *testing.T, linkOrder []string) (*calcGraph, string) {
 				short:  "Calculator " + spec.name,
 				params: pasta.NodeClassParams{InitialPorts: calcDefaultPorts(spec.kind)},
 			},
-			newNode: func() (pasta.Node, error) {
+			newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
 				node := &calcNode{kind: spec.kind, value: spec.value, inputs: make(map[uint64]float64)}
 				graph.nodes[spec.name] = node
 				return node, nil

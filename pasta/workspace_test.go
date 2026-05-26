@@ -526,16 +526,16 @@ func TestWorkspacePortNameValidationAndScopedUniqueness(t *testing.T) {
 	before := w.Snapshot()
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/DuplicateReplacementPorts"},
-		newNode: func() (pasta.Node, error) {
-			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-			state.LeftPorts = append(state.LeftPorts, pasta.Port{
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
+			previous[0].LeftPorts = append(previous[0].LeftPorts, pasta.Port{
 				Direction: "left",
 				Name:      "input",
 				Types:     []string{"example.com/typeA"},
 			})
-			return &pasta.NodeClassPlaceholderReplacement{Node: &workspaceNode{}, State: state}, nil
+			return &workspaceNode{}, nil
 		},
 	}); !errors.Is(err, pasta.ErrPortName) {
 		t.Fatalf("AddNodeClass duplicate replacement port error = %v, want %v", err, pasta.ErrPortName)
@@ -635,19 +635,14 @@ func (c testNodeClass) DefaultNodeParams() pasta.NodeClassParams {
 
 type testFactoryNodeClass struct {
 	testNodeClass
-	newNode            func() (pasta.Node, error)
-	replacePlaceholder func(pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error)
+	newNode func(previous ...*pasta.NodeClassState) (pasta.Node, error)
 }
 
-func (c testFactoryNodeClass) NewNode() (pasta.Node, error) {
-	return c.newNode()
-}
-
-func (c testFactoryNodeClass) ReplacePlaceholder(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-	if c.replacePlaceholder == nil {
+func (c testFactoryNodeClass) NewNode(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+	if c.newNode == nil {
 		return nil, nil
 	}
-	return c.replacePlaceholder(state)
+	return c.newNode(previous...)
 }
 
 func TestWorkspaceNodeClassesSnapshotsFactoriesAndNotifications(t *testing.T) {
@@ -693,7 +688,7 @@ func TestWorkspaceNodeClassesSnapshotsFactoriesAndNotifications(t *testing.T) {
 				},
 			},
 		},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			factoryNode = &workspaceNode{}
 			return factoryNode, nil
 		},
@@ -842,17 +837,18 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 	}
 
 	var restored *workspaceNode
-	var suggestions []pasta.NodeClassPlaceholderState
+	var suggestions []pasta.NodeClassState
 	class := testFactoryNodeClass{
 		testNodeClass: testNodeClass{
 			name:  "example.com/RestoredNode",
 			short: "Restored node",
 		},
-		newNode: func() (pasta.Node, error) {
-			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-			suggestions = append(suggestions, state)
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
+			state := previous[0]
+			suggestions = append(suggestions, *state)
 			if state.Label != "legacy" {
 				return nil, nil
 			}
@@ -870,10 +866,7 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 			state.RightPorts[0].Types = []string{"example.com/typeB"}
 			state.RightPorts = state.RightPorts[:1]
 			restored = &workspaceNode{}
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  restored,
-				State: state,
-			}, nil
+			return restored, nil
 		},
 	}
 
@@ -988,15 +981,12 @@ func TestWorkspaceUniqueNodeClassRegistrationRemovesDuplicatesBeforePlaceholderR
 				Unique: true,
 			},
 		},
-		newNode: func() (pasta.Node, error) {
-			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
 			replacementCalls += 1
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  &workspaceNode{},
-				State: state,
-			}, nil
+			return &workspaceNode{}, nil
 		},
 	}); err != nil {
 		t.Fatalf("AddNodeClass unique: %v", err)
@@ -1054,17 +1044,14 @@ func TestWorkspaceUniqueNodeClassKeepsSmallestIDPlaceholderThenReplacesIt(t *tes
 				Unique: true,
 			},
 		},
-		newNode: func() (pasta.Node, error) {
-			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
 			replacementCalls += 1
-			state.Label = "restored"
+			previous[0].Label = "restored"
 			restored = &workspaceNode{}
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  restored,
-				State: state,
-			}, nil
+			return restored, nil
 		},
 	}); err != nil {
 		t.Fatalf("AddNodeClass unique: %v", err)
@@ -1153,7 +1140,7 @@ func TestWorkspaceUniqueNodeClassRejectsAddingNodes(t *testing.T) {
 				Unique: true,
 			},
 		},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			newNodeCalls += 1
 			return &workspaceNode{}, nil
 		},
@@ -1183,7 +1170,7 @@ func TestWorkspaceAddNodeByClassNameValidationPrecedesFactory(t *testing.T) {
 	newNodeCalls := 0
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/NamedFactory"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			newNodeCalls += 1
 			return &workspaceNode{}, nil
 		},
@@ -1337,7 +1324,7 @@ func TestWorkspaceAddNodeByClassFactoryFailuresDoNotMutate(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/FailFactoryNode"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			return nil, failErr
 		},
 	}); err != nil {
@@ -1351,7 +1338,7 @@ func TestWorkspaceAddNodeByClassFactoryFailuresDoNotMutate(t *testing.T) {
 
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/NilFactoryNode"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			return nil, nil
 		},
 	}); err != nil {
@@ -1364,7 +1351,7 @@ func TestWorkspaceAddNodeByClassFactoryFailuresDoNotMutate(t *testing.T) {
 	assertWorkspaceSnapshot(t, w, before)
 }
 
-func TestWorkspaceNodeClassPlaceholderReplacementEdgeCases(t *testing.T) {
+func TestWorkspaceNodeClassReplacementEdgeCases(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
 	metadataPlaceholder, err := w.AddPlaceholderNode("example.com/MetadataOnly", []pasta.Port{
@@ -1390,15 +1377,12 @@ func TestWorkspaceNodeClassPlaceholderReplacementEdgeCases(t *testing.T) {
 	invalidBefore := w.Snapshot()
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/InvalidReplacement"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
+			previous[0].LeftPorts = append(previous[0].LeftPorts, previous[0].LeftPorts[0])
 			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-			state.LeftPorts = append(state.LeftPorts, state.LeftPorts[0])
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  &workspaceNode{},
-				State: state,
-			}, nil
 		},
 	}); !errors.Is(err, pasta.ErrPortOrder) {
 		t.Fatalf("AddNodeClass duplicate replacement port error = %v, want %v", err, pasta.ErrPortOrder)
@@ -1424,15 +1408,12 @@ func TestWorkspaceNodeClassPlaceholderReplacementEdgeCases(t *testing.T) {
 	badPortBefore := w.Snapshot()
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/BadNewPortReplacement"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
+			previous[0].LeftPorts = append(previous[0].LeftPorts, pasta.Port{Direction: "left"})
 			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-			state.LeftPorts = append(state.LeftPorts, pasta.Port{Direction: "left"})
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  &workspaceNode{},
-				State: state,
-			}, nil
 		},
 	}); !errors.Is(err, pasta.ErrNoPortTypes) {
 		t.Fatalf("AddNodeClass bad new replacement port error = %v, want %v", err, pasta.ErrNoPortTypes)
@@ -1699,19 +1680,16 @@ func TestWorkspacePlaceholderNameStateIsSuggestedAndApplied(t *testing.T) {
 		t.Fatalf("AddNode peer: %v", err)
 	}
 
-	var suggested pasta.NodeClassPlaceholderState
+	var suggested pasta.NodeClassState
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/NamedRestore"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
+			suggested = *previous[0]
+			previous[0].Name = "restored header"
 			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-			suggested = state
-			state.Name = "restored header"
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  &workspaceNode{},
-				State: state,
-			}, nil
 		},
 	}); err != nil {
 		t.Fatalf("AddNodeClass: %v", err)
@@ -1737,15 +1715,12 @@ func TestWorkspacePlaceholderNameReplacementFailuresDoNotMutate(t *testing.T) {
 
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/InvalidNameRestore"},
-		newNode: func() (pasta.Node, error) {
+		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			if len(previous) == 0 {
+				return &workspaceNode{}, nil
+			}
+			previous[0].Name = "peer header"
 			return &workspaceNode{}, nil
-		},
-		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
-			state.Name = "peer header"
-			return &pasta.NodeClassPlaceholderReplacement{
-				Node:  &workspaceNode{},
-				State: state,
-			}, nil
 		},
 	}); !errors.Is(err, pasta.ErrNodeNameDup) {
 		t.Fatalf("AddNodeClass duplicate placeholder replacement name error = %v, want %v", err, pasta.ErrNodeNameDup)
