@@ -39,6 +39,7 @@ type NodeSnapshot struct {
 	Name        string      `json:"name"`
 	PrimaryType string      `json:"primary_type"`
 	Label       string      `json:"label"`
+	Position    string      `json:"position"`
 	Popups      []NodePopup `json:"popups"`
 	Placeholder bool        `json:"placeholder"`
 	Root        bool        `json:"root"`
@@ -171,6 +172,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 			Class:       record.Class,
 			Name:        record.Name,
 			Label:       record.Label,
+			Position:    record.Position,
 			Popups:      slices.Clone(record.Popups),
 			Placeholder: true,
 			LeftPorts:   slices.Clone(record.LeftPorts),
@@ -182,6 +184,7 @@ func nodeSnapshot(record *nodeRecord) NodeSnapshot {
 		Name:        record.Name,
 		PrimaryType: record.PrimaryType,
 		Label:       record.Label,
+		Position:    record.Position,
 		Popups:      slices.Clone(record.Popups),
 		Root:        record.Root,
 		HasRootPath: record.HasRootPath,

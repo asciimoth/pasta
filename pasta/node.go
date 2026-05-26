@@ -158,6 +158,7 @@ type nodeRecord struct {
 
 	PrimaryType string
 	Label       string
+	Position    string
 	Popups      []NodePopup
 	Root        bool
 	HasRootPath bool

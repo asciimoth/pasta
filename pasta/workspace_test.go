@@ -253,6 +253,19 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	if err := w.SetNodePrimary(nodeAID, "example.com/typeA"); err != nil {
 		t.Fatalf("SetNodePrimary: %v", err)
 	}
+	if err := w.SetNodePosition(nodeAID, `{"x":12.5,"y":-3}`); err != nil {
+		t.Fatalf("SetNodePosition: %v", err)
+	}
+	withLink.Nodes[nodeAID] = pasta.NodeSnapshot{
+		Class:       "example.com/NodeA",
+		PrimaryType: "example.com/typeA",
+		Position:    `{"x":12.5,"y":-3}`,
+		LeftPorts:   []uint64{left},
+	}
+	assertWorkspaceSnapshot(t, w, withLink)
+	if err := w.SetNodePosition(nodeAID, ""); err != nil {
+		t.Fatalf("SetNodePosition clear: %v", err)
+	}
 	withLink.Nodes[nodeAID] = pasta.NodeSnapshot{
 		Class:       "example.com/NodeA",
 		PrimaryType: "example.com/typeA",
@@ -275,6 +288,9 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	}
 	if err := w.SetNodePrimary(999, ""); !errors.Is(err, pasta.ErrNoNode) {
 		t.Fatalf("SetNodePrimary missing node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if err := w.SetNodePosition(999, "ignored"); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("SetNodePosition missing node error = %v, want %v", err, pasta.ErrNoNode)
 	}
 	if err := w.SetPortName(999, "missing"); !errors.Is(err, pasta.ErrNoPort) {
 		t.Fatalf("SetPortName missing port error = %v, want %v", err, pasta.ErrNoPort)
@@ -3115,6 +3131,7 @@ func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {
 		(b.Name == "" || a.Name == b.Name) &&
 		a.PrimaryType == b.PrimaryType &&
 		a.Label == b.Label &&
+		a.Position == b.Position &&
 		reflect.DeepEqual(emptyPopupsIfNil(a.Popups), emptyPopupsIfNil(b.Popups)) &&
 		a.Placeholder == b.Placeholder &&
 		a.Root == b.Root &&

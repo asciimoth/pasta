@@ -72,6 +72,9 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 	if err := w.SetNodeLabel(nodeAID, "waiting"); err != nil {
 		t.Fatalf("SetNodeLabel: %v", err)
 	}
+	if err := w.SetNodePosition(nodeAID, "screen=main;x=10;y=-4"); err != nil {
+		t.Fatalf("SetNodePosition: %v", err)
+	}
 	if err := w.SetPortName(left, "input"); err != nil {
 		t.Fatalf("SetPortName: %v", err)
 	}
@@ -89,6 +92,7 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 		{kind: pasta.NotificationLinkAdded, id: link},
 		{kind: pasta.NotificationPortUpdated, id: left},
 		{kind: pasta.NotificationPortUpdated, id: right},
+		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
 		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
 		{kind: pasta.NotificationNodeUpdated, id: nodeAID},
 		{kind: pasta.NotificationPortUpdated, id: left},
@@ -138,27 +142,34 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 		Label:       "waiting",
 		LeftPorts:   []uint64{left},
 	})
-	assertPortNotification(t, notifications[11], pasta.PortSnapshot{
+	assertNodeNotification(t, notifications[11], pasta.NodeSnapshot{
+		Class:       "example.com/NodeA",
+		PrimaryType: "example.com/typeA",
+		Label:       "waiting",
+		Position:    "screen=main;x=10;y=-4",
+		LeftPorts:   []uint64{left},
+	})
+	assertPortNotification(t, notifications[12], pasta.PortSnapshot{
 		Node:      nodeAID,
 		Direction: "left",
 		Name:      "input",
 		Types:     []string{"example.com/typeA"},
 		Links:     []uint64{link},
 	})
-	assertLinkNotification(t, notifications[12], pasta.LinkSnapshot{
+	assertLinkNotification(t, notifications[13], pasta.LinkSnapshot{
 		Type:          "example.com/typeA",
 		LeftPort:      left,
 		LeftPortNode:  nodeAID,
 		RightPort:     right,
 		RightPortNode: nodeBID,
 	})
-	assertPortNotification(t, notifications[15], pasta.PortSnapshot{
+	assertPortNotification(t, notifications[16], pasta.PortSnapshot{
 		Node:      nodeAID,
 		Direction: "left",
 		Name:      "input",
 		Types:     []string{"example.com/typeA"},
 	})
-	assertNodeNotification(t, notifications[18], pasta.NodeSnapshot{
+	assertNodeNotification(t, notifications[19], pasta.NodeSnapshot{
 		Class:      "example.com/NodeB",
 		RightPorts: []uint64{right},
 	})

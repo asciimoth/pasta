@@ -1226,6 +1226,26 @@ func (w *Workspace) SetNodeLabel(id uint64, label string) error {
 	return nil
 }
 
+// SetNodePosition sets a node's opaque frontend position string.
+//
+// position may be empty. The workspace stores it without interpreting its
+// coordinate system or format.
+func (w *Workspace) SetNodePosition(id uint64, position string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	record, present := w.nodes.Get(id)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	record.Position = position
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
+}
+
 // SetNodeName sets a node's unique name.
 func (w *Workspace) SetNodeName(id uint64, name string) error {
 	w.Lock()
