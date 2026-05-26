@@ -7,9 +7,29 @@ import "slices"
 // Nodes, ports, and links are keyed by their workspace-scoped IDs. Individual
 // snapshot values do not include their own IDs.
 type WorkspaceSnapshot struct {
-	Nodes map[uint64]NodeSnapshot `json:"nodes"`
-	Ports map[uint64]PortSnapshot `json:"ports"`
-	Links map[uint64]LinkSnapshot `json:"links"`
+	Classes map[string]NodeClassSnapshot `json:"classes"`
+	Nodes   map[uint64]NodeSnapshot      `json:"nodes"`
+	Ports   map[uint64]PortSnapshot      `json:"ports"`
+	Links   map[uint64]LinkSnapshot      `json:"links"`
+}
+
+// NodeClassSnapshot is a JSON-serializable class-list entry.
+//
+// It intentionally omits the long description and root default. Long class
+// descriptions may contain Markdown and remain on the registered NodeClass
+// instance.
+type NodeClassSnapshot struct {
+	Class            string                  `json:"class"`
+	ShortDescription string                  `json:"short_description"`
+	PrimaryType      string                  `json:"primary_type"`
+	InitialPorts     []NodeClassPortSnapshot `json:"initial_ports"`
+}
+
+// NodeClassPortSnapshot is a JSON-serializable class default port.
+type NodeClassPortSnapshot struct {
+	Direction string   `json:"direction"`
+	Name      string   `json:"name"`
+	Types     []string `json:"types"`
 }
 
 // NodeSnapshot is a JSON-serializable copy of node metadata and port IDs.
@@ -57,11 +77,18 @@ func (w *Workspace) Snapshot() WorkspaceSnapshot {
 
 func (w *Workspace) snapshotLocked() WorkspaceSnapshot {
 	snapshot := WorkspaceSnapshot{
-		Nodes: make(map[uint64]NodeSnapshot, w.nodes.Len()),
-		Ports: make(map[uint64]PortSnapshot, w.ports.Len()),
-		Links: make(map[uint64]LinkSnapshot, w.links.Len()),
+		Classes: make(map[string]NodeClassSnapshot, w.classes.Len()),
+		Nodes:   make(map[uint64]NodeSnapshot, w.nodes.Len()),
+		Ports:   make(map[uint64]PortSnapshot, w.ports.Len()),
+		Links:   make(map[uint64]LinkSnapshot, w.links.Len()),
 	}
 
+	for pair := w.classes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value == nil {
+			continue
+		}
+		snapshot.Classes[pair.Key] = nodeClassSnapshot(pair.Value)
+	}
 	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
 		if pair.Value == nil {
 			continue
@@ -82,6 +109,22 @@ func (w *Workspace) snapshotLocked() WorkspaceSnapshot {
 	}
 
 	return snapshot
+}
+
+// NodeClassSnapshot returns a JSON-serializable copy of one registered node class.
+func (w *Workspace) NodeClassSnapshot(name string) (NodeClassSnapshot, bool) {
+	if err := ValidateClassName(name); err != nil {
+		return NodeClassSnapshot{}, false
+	}
+
+	w.Lock()
+	defer w.Unlock()
+
+	class, present := w.classes.Get(name)
+	if w.closed || !present || class == nil {
+		return NodeClassSnapshot{}, false
+	}
+	return nodeClassSnapshot(class), true
 }
 
 // NodeSnapshot returns a JSON-serializable copy of one node.

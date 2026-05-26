@@ -19,12 +19,24 @@ type workspaceNode struct {
 	panicOn     map[string]bool
 	rootStatus  []bool
 	initData    *pasta.NodeInitData
+	initFlags   workspaceNodeInitFlags
 	readyCount  int
 	stopCount   int
 }
 
-func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData) error {
+type workspaceNodeInitFlags struct {
+	isReplacement            bool
+	isPlaceholderReplacement bool
+	isClassConstructed       bool
+}
+
+func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool) error {
 	n.l = l
+	n.initFlags = workspaceNodeInitFlags{
+		isReplacement:            isReplacement,
+		isPlaceholderReplacement: isPlaceholderReplacement,
+		isClassConstructed:       isClassConstructed,
+	}
 	if restored != nil {
 		data := *restored
 		data.LeftPorts = slices.Clone(restored.LeftPorts)
@@ -464,6 +476,524 @@ func TestWorkspaceClassWideNodeOperations(t *testing.T) {
 	}
 	if nodeA.stopCount != 1 || nodeC.stopCount != 1 {
 		t.Fatalf("removed target stop counts = %d, %d; want 1, 1", nodeA.stopCount, nodeC.stopCount)
+	}
+}
+
+type testNodeClass struct {
+	name   string
+	short  string
+	long   string
+	params pasta.NodeClassParams
+}
+
+func (c testNodeClass) ClassName() string {
+	return c.name
+}
+
+func (c testNodeClass) ShortDescription() string {
+	return c.short
+}
+
+func (c testNodeClass) LongDescription() string {
+	return c.long
+}
+
+func (c testNodeClass) DefaultNodeParams() pasta.NodeClassParams {
+	return c.params
+}
+
+type testFactoryNodeClass struct {
+	testNodeClass
+	newNode            func() (pasta.Node, error)
+	replacePlaceholder func(pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error)
+}
+
+func (c testFactoryNodeClass) NewNode() (pasta.Node, error) {
+	return c.newNode()
+}
+
+func (c testFactoryNodeClass) ReplacePlaceholder(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+	if c.replacePlaceholder == nil {
+		return nil, nil
+	}
+	return c.replacePlaceholder(state)
+}
+
+func TestWorkspaceNodeClassesSnapshotsFactoriesAndNotifications(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	metadata := testNodeClass{
+		name:  "example.com/MetadataNode",
+		short: "Metadata node",
+		long:  "**Metadata** node class.",
+	}
+	if err := w.AddNodeClass(metadata); err != nil {
+		t.Fatalf("AddNodeClass metadata: %v", err)
+	}
+	if got, ok := w.NodeClassSnapshot("example.com/MetadataNode"); !ok || !equalNodeClassSnapshot(got, pasta.NodeClassSnapshot{
+		Class:            "example.com/MetadataNode",
+		ShortDescription: "Metadata node",
+	}) {
+		t.Fatalf("NodeClassSnapshot = %#v, %v", got, ok)
+	}
+	if got, ok := w.NodeClassLongDescription("example.com/MetadataNode"); !ok || got != "**Metadata** node class." {
+		t.Fatalf("NodeClassLongDescription = %#v, %v", got, ok)
+	}
+	assertWorkspaceSnapshot(t, w, pasta.WorkspaceSnapshot{
+		Classes: map[string]pasta.NodeClassSnapshot{
+			"example.com/MetadataNode": {
+				Class:            "example.com/MetadataNode",
+				ShortDescription: "Metadata node",
+			},
+		},
+	})
+
+	var factoryNode *workspaceNode
+	factory := testFactoryNodeClass{
+		testNodeClass: testNodeClass{
+			name:  "example.com/FactoryNode",
+			short: "Factory node",
+			params: pasta.NodeClassParams{
+				Root:        true,
+				PrimaryType: "example.com/typeA",
+				InitialPorts: []pasta.Port{
+					{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
+					{Direction: "right", Name: "output", Types: []string{"example.com/typeA"}},
+				},
+			},
+		},
+		newNode: func() (pasta.Node, error) {
+			factoryNode = &workspaceNode{}
+			return factoryNode, nil
+		},
+	}
+	if err := w.AddNodeClass(factory); err != nil {
+		t.Fatalf("AddNodeClass factory: %v", err)
+	}
+	nodeID, err := w.AddNodeByClass("example.com/FactoryNode")
+	if err != nil {
+		t.Fatalf("AddNodeByClass: %v", err)
+	}
+	snapshot := w.Snapshot()
+	nodeSnapshot := snapshot.Nodes[nodeID]
+	if nodeSnapshot.Class != "example.com/FactoryNode" || !nodeSnapshot.Root || nodeSnapshot.PrimaryType != "example.com/typeA" {
+		t.Fatalf("factory node snapshot = %#v", snapshot.Nodes[nodeID])
+	}
+	if len(nodeSnapshot.LeftPorts) != 1 || len(nodeSnapshot.RightPorts) != 1 {
+		t.Fatalf("factory node ports = %#v, want one left and one right", nodeSnapshot)
+	}
+	leftPort := nodeSnapshot.LeftPorts[0]
+	rightPort := nodeSnapshot.RightPorts[0]
+	if !equalPortSnapshot(snapshot.Ports[leftPort], pasta.PortSnapshot{
+		Node:      nodeID,
+		Direction: "left",
+		Name:      "input",
+		Types:     []string{"example.com/typeA"},
+	}) {
+		t.Fatalf("left default port = %#v", snapshot.Ports[leftPort])
+	}
+	if !equalPortSnapshot(snapshot.Ports[rightPort], pasta.PortSnapshot{
+		Node:      nodeID,
+		Direction: "right",
+		Name:      "output",
+		Types:     []string{"example.com/typeA"},
+	}) {
+		t.Fatalf("right default port = %#v", snapshot.Ports[rightPort])
+	}
+	if factoryNode.initData == nil || factoryNode.initData.PrimaryType != "example.com/typeA" ||
+		!reflect.DeepEqual(factoryNode.initData.LeftPorts, []uint64{leftPort}) ||
+		!reflect.DeepEqual(factoryNode.initData.RightPorts, []uint64{rightPort}) {
+		t.Fatalf("factory init data = %#v", factoryNode.initData)
+	}
+	if got, want := factoryNode.initFlags, (workspaceNodeInitFlags{isClassConstructed: true}); got != want {
+		t.Fatalf("factory init flags = %#v, want %#v", got, want)
+	}
+	if got := snapshot.Classes["example.com/FactoryNode"]; got.PrimaryType != "example.com/typeA" ||
+		!reflect.DeepEqual(got.InitialPorts, []pasta.NodeClassPortSnapshot{
+			{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
+			{Direction: "right", Name: "output", Types: []string{"example.com/typeA"}},
+		}) {
+		t.Fatalf("factory class snapshot = %#v", got)
+	}
+	if _, err := w.AddNodeByClass("example.com/MissingNode"); !errors.Is(err, pasta.ErrNoNodeClass) {
+		t.Fatalf("AddNodeByClass missing error = %v, want %v", err, pasta.ErrNoNodeClass)
+	}
+	if _, err := w.AddNodeByClass("example.com/MetadataNode"); !errors.Is(err, pasta.ErrNodeClassFactory) {
+		t.Fatalf("AddNodeByClass metadata error = %v, want %v", err, pasta.ErrNodeClassFactory)
+	}
+	if _, err := w.AddNodeByClass("example.com/metadataNode"); !errors.Is(err, pasta.ErrClassName) {
+		t.Fatalf("AddNodeByClass invalid name error = %v, want %v", err, pasta.ErrClassName)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	replacement := testNodeClass{
+		name:  "example.com/MetadataNode",
+		short: "Updated metadata node",
+		long:  "Updated **metadata**.",
+	}
+	if err := w.AddNodeClass(replacement); err != nil {
+		t.Fatalf("AddNodeClass replacement: %v", err)
+	}
+	if err := w.RemoveNodeClass("example.com/MetadataNode"); err != nil {
+		t.Fatalf("RemoveNodeClass: %v", err)
+	}
+	if err := w.RemoveNodeClass("example.com/MetadataNode"); !errors.Is(err, pasta.ErrNoNodeClass) {
+		t.Fatalf("RemoveNodeClass missing error = %v, want %v", err, pasta.ErrNoNodeClass)
+	}
+	if err := w.AddNodeClass(testNodeClass{name: "example.com/metadataNode"}); !errors.Is(err, pasta.ErrClassName) {
+		t.Fatalf("AddNodeClass invalid name error = %v, want %v", err, pasta.ErrClassName)
+	}
+	if err := w.AddNodeClass(testNodeClass{
+		name:   "example.com/BadPrimaryNode",
+		params: pasta.NodeClassParams{PrimaryType: "example.com/BadType"},
+	}); !errors.Is(err, pasta.ErrTypeName) {
+		t.Fatalf("AddNodeClass invalid primary error = %v, want %v", err, pasta.ErrTypeName)
+	}
+	if err := w.AddNodeClass(testNodeClass{
+		name:   "example.com/BadPortNode",
+		params: pasta.NodeClassParams{InitialPorts: []pasta.Port{{Direction: "left"}}},
+	}); !errors.Is(err, pasta.ErrNoPortTypes) {
+		t.Fatalf("AddNodeClass invalid port error = %v, want %v", err, pasta.ErrNoPortTypes)
+	}
+
+	if len(notifications) != 2 {
+		t.Fatalf("class notifications = %#v, want 2", notifications)
+	}
+	assertClassNotification(t, notifications[0], pasta.NotificationNodeClassAdded, "example.com/MetadataNode", pasta.NodeClassSnapshot{
+		Class:            "example.com/MetadataNode",
+		ShortDescription: "Updated metadata node",
+	})
+	assertClassNotification(t, notifications[1], pasta.NotificationNodeClassRemoved, "example.com/MetadataNode", pasta.NodeClassSnapshot{
+		Class:            "example.com/MetadataNode",
+		ShortDescription: "Updated metadata node",
+	})
+}
+
+func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	replaceID, err := w.AddPlaceholderNodeWithRoot("example.com/RestoredNode", false, []pasta.Port{
+		{Direction: "left", Name: "legacy in", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "legacy out", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "delete out", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNodeWithRoot replace: %v", err)
+	}
+	leaveID, err := w.AddPlaceholderNode("example.com/RestoredNode", []pasta.Port{
+		{Direction: "right", Name: "leave", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode leave: %v", err)
+	}
+	left := w.Snapshot().Nodes[replaceID].LeftPorts[0]
+	right := w.Snapshot().Nodes[replaceID].RightPorts[0]
+	deletedRight := w.Snapshot().Nodes[replaceID].RightPorts[1]
+	peerID, err := w.AddNode(&workspaceNode{}, "example.com/PeerNode")
+	if err != nil {
+		t.Fatalf("AddNode peer: %v", err)
+	}
+	peerLeft := mustAddPort(t, w, peerID, "left", "example.com/typeA")
+	deletedLink, _, err := w.AddLink(peerLeft, deletedRight)
+	if err != nil {
+		t.Fatalf("AddLink deleted port: %v", err)
+	}
+	if err := w.SetNodePrimary(replaceID, "example.com/typeA"); err != nil {
+		t.Fatalf("SetNodePrimary placeholder: %v", err)
+	}
+	if err := w.SetNodeLabel(replaceID, "legacy"); err != nil {
+		t.Fatalf("SetNodeLabel placeholder: %v", err)
+	}
+
+	var restored *workspaceNode
+	var suggestions []pasta.NodeClassPlaceholderState
+	class := testFactoryNodeClass{
+		testNodeClass: testNodeClass{
+			name:  "example.com/RestoredNode",
+			short: "Restored node",
+		},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			suggestions = append(suggestions, state)
+			if state.Label != "legacy" {
+				return nil, nil
+			}
+			state.Root = true
+			state.PrimaryType = "example.com/typeB"
+			state.Label = "restored"
+			state.LeftPorts[0].Name = "input"
+			state.LeftPorts[0].Types = []string{"example.com/typeB"}
+			state.LeftPorts = append(state.LeftPorts, pasta.Port{
+				Direction: "left",
+				Name:      "aux",
+				Types:     []string{"example.com/typeB"},
+			})
+			state.RightPorts[0].Name = "output"
+			state.RightPorts[0].Types = []string{"example.com/typeB"}
+			state.RightPorts = state.RightPorts[:1]
+			restored = &workspaceNode{}
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  restored,
+				State: state,
+			}, nil
+		},
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	if err := w.AddNodeClass(class); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	if len(suggestions) != 2 {
+		t.Fatalf("placeholder suggestions = %d, want 2", len(suggestions))
+	}
+	if restored == nil || restored.initData == nil {
+		t.Fatalf("restored node/init data = %#v", restored)
+	}
+	if restored.initData.PrimaryType != "example.com/typeB" ||
+		restored.initData.Label != "restored" ||
+		len(restored.initData.LeftPorts) != 2 ||
+		restored.initData.LeftPorts[0] != left ||
+		!reflect.DeepEqual(restored.initData.RightPorts, []uint64{right}) {
+		t.Fatalf("restored init data = %#v", restored.initData)
+	}
+	if got, want := restored.initFlags, (workspaceNodeInitFlags{
+		isReplacement:            true,
+		isPlaceholderReplacement: true,
+		isClassConstructed:       true,
+	}); got != want {
+		t.Fatalf("restored init flags = %#v, want %#v", got, want)
+	}
+	addedLeft := restored.initData.LeftPorts[1]
+	snapshot := w.Snapshot()
+	if snapshot.Nodes[replaceID].Placeholder ||
+		!snapshot.Nodes[replaceID].Root ||
+		snapshot.Nodes[replaceID].PrimaryType != "example.com/typeB" ||
+		snapshot.Nodes[replaceID].Label != "restored" {
+		t.Fatalf("replaced placeholder snapshot = %#v", snapshot.Nodes[replaceID])
+	}
+	if !snapshot.Nodes[leaveID].Placeholder {
+		t.Fatalf("skipped placeholder snapshot = %#v, want placeholder", snapshot.Nodes[leaveID])
+	}
+	if _, ok := snapshot.Ports[deletedRight]; ok {
+		t.Fatalf("deleted placeholder port %d remains in snapshot", deletedRight)
+	}
+	if _, ok := snapshot.Links[deletedLink]; ok {
+		t.Fatalf("link %d attached to deleted placeholder port remains in snapshot", deletedLink)
+	}
+	if !equalPortSnapshot(snapshot.Ports[left], pasta.PortSnapshot{
+		Node:      replaceID,
+		Direction: "left",
+		Name:      "input",
+		Types:     []string{"example.com/typeB"},
+	}) {
+		t.Fatalf("restored left port = %#v", snapshot.Ports[left])
+	}
+	if !equalPortSnapshot(snapshot.Ports[addedLeft], pasta.PortSnapshot{
+		Node:      replaceID,
+		Direction: "left",
+		Name:      "aux",
+		Types:     []string{"example.com/typeB"},
+	}) {
+		t.Fatalf("added left port = %#v", snapshot.Ports[addedLeft])
+	}
+	if !equalPortSnapshot(snapshot.Ports[right], pasta.PortSnapshot{
+		Node:      replaceID,
+		Direction: "right",
+		Name:      "output",
+		Types:     []string{"example.com/typeB"},
+	}) {
+		t.Fatalf("restored right port = %#v", snapshot.Ports[right])
+	}
+	assertHasNotification(t, notifications, pasta.NotificationNodeClassAdded, 0)
+	assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, replaceID)
+
+	notifications = nil
+	if err := w.AddNodeClass(class); err != nil {
+		t.Fatalf("re-add NodeClass: %v", err)
+	}
+	if len(suggestions) != 2 {
+		t.Fatalf("placeholder suggestions after re-add = %d, want still 2", len(suggestions))
+	}
+	assertNotificationMatches(t, notifications, []notificationMatch{
+		{kind: pasta.NotificationNodeClassAdded},
+	})
+}
+
+func TestWorkspaceNodeClassSnapshotCopiesAndReplacement(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	class := testNodeClass{
+		name:  "example.com/CopyNode",
+		short: "Copy node",
+		params: pasta.NodeClassParams{
+			PrimaryType: "example.com/typeA",
+			InitialPorts: []pasta.Port{
+				{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
+			},
+		},
+	}
+	if err := w.AddNodeClass(class); err != nil {
+		t.Fatalf("AddNodeClass: %v", err)
+	}
+	snapshot, ok := w.NodeClassSnapshot("example.com/CopyNode")
+	if !ok {
+		t.Fatal("NodeClassSnapshot returned false")
+	}
+	snapshot.InitialPorts[0].Types[0] = "example.com/changed"
+	snapshot.InitialPorts[0].Name = "changed"
+	state := w.Snapshot()
+	if got := state.Classes["example.com/CopyNode"].InitialPorts[0]; got.Name != "input" || got.Types[0] != "example.com/typeA" {
+		t.Fatalf("class snapshot was mutated through returned copy: %#v", got)
+	}
+
+	replacement := testNodeClass{
+		name:  "example.com/CopyNode",
+		short: "Updated copy node",
+		params: pasta.NodeClassParams{
+			PrimaryType: "example.com/typeB",
+			InitialPorts: []pasta.Port{
+				{Direction: "right", Name: "output", Types: []string{"example.com/typeB"}},
+			},
+		},
+	}
+	if err := w.AddNodeClass(replacement); err != nil {
+		t.Fatalf("AddNodeClass replacement: %v", err)
+	}
+	got := w.Snapshot().Classes["example.com/CopyNode"]
+	if !equalNodeClassSnapshot(got, pasta.NodeClassSnapshot{
+		Class:            "example.com/CopyNode",
+		ShortDescription: "Updated copy node",
+		PrimaryType:      "example.com/typeB",
+		InitialPorts: []pasta.NodeClassPortSnapshot{
+			{Direction: "right", Name: "output", Types: []string{"example.com/typeB"}},
+		},
+	}) {
+		t.Fatalf("replacement class snapshot = %#v", got)
+	}
+}
+
+func TestWorkspaceAddNodeByClassFactoryFailuresDoNotMutate(t *testing.T) {
+	failErr := errors.New("factory boom")
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/FailFactoryNode"},
+		newNode: func() (pasta.Node, error) {
+			return nil, failErr
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass fail factory: %v", err)
+	}
+	before := w.Snapshot()
+	if _, err := w.AddNodeByClass("example.com/FailFactoryNode"); !errors.Is(err, failErr) {
+		t.Fatalf("AddNodeByClass factory error = %v, want %v", err, failErr)
+	}
+	assertWorkspaceSnapshot(t, w, before)
+
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/NilFactoryNode"},
+		newNode: func() (pasta.Node, error) {
+			return nil, nil
+		},
+	}); err != nil {
+		t.Fatalf("AddNodeClass nil factory: %v", err)
+	}
+	before = w.Snapshot()
+	if _, err := w.AddNodeByClass("example.com/NilFactoryNode"); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("AddNodeByClass nil node error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	assertWorkspaceSnapshot(t, w, before)
+}
+
+func TestWorkspaceNodeClassPlaceholderReplacementEdgeCases(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	metadataPlaceholder, err := w.AddPlaceholderNode("example.com/MetadataOnly", []pasta.Port{
+		{Direction: "right", Name: "out", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode metadata: %v", err)
+	}
+	if err := w.AddNodeClass(testNodeClass{name: "example.com/MetadataOnly"}); err != nil {
+		t.Fatalf("AddNodeClass metadata: %v", err)
+	}
+	if snapshot := w.Snapshot().Nodes[metadataPlaceholder]; !snapshot.Placeholder {
+		t.Fatalf("metadata-only class replaced placeholder: %#v", snapshot)
+	}
+
+	invalidID, err := w.AddPlaceholderNode("example.com/InvalidReplacement", []pasta.Port{
+		{Direction: "left", Name: "in", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "out", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode invalid: %v", err)
+	}
+	invalidBefore := w.Snapshot()
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/InvalidReplacement"},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			state.LeftPorts = append(state.LeftPorts, state.LeftPorts[0])
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  &workspaceNode{},
+				State: state,
+			}, nil
+		},
+	}); !errors.Is(err, pasta.ErrPortOrder) {
+		t.Fatalf("AddNodeClass duplicate replacement port error = %v, want %v", err, pasta.ErrPortOrder)
+	}
+	afterInvalid := w.Snapshot()
+	if !afterInvalid.Nodes[invalidID].Placeholder ||
+		!reflect.DeepEqual(afterInvalid.Nodes[invalidID].LeftPorts, invalidBefore.Nodes[invalidID].LeftPorts) ||
+		!reflect.DeepEqual(afterInvalid.Nodes[invalidID].RightPorts, invalidBefore.Nodes[invalidID].RightPorts) {
+		t.Fatalf("invalid replacement mutated placeholder: before=%#v after=%#v", invalidBefore.Nodes[invalidID], afterInvalid.Nodes[invalidID])
+	}
+	for id, port := range invalidBefore.Ports {
+		if !equalPortSnapshot(afterInvalid.Ports[id], port) {
+			t.Fatalf("invalid replacement mutated port %d: before=%#v after=%#v", id, port, afterInvalid.Ports[id])
+		}
+	}
+
+	badPortID, err := w.AddPlaceholderNode("example.com/BadNewPortReplacement", []pasta.Port{
+		{Direction: "right", Name: "out", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode bad new port: %v", err)
+	}
+	badPortBefore := w.Snapshot()
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/BadNewPortReplacement"},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			state.LeftPorts = append(state.LeftPorts, pasta.Port{Direction: "left"})
+			return &pasta.NodeClassPlaceholderReplacement{
+				Node:  &workspaceNode{},
+				State: state,
+			}, nil
+		},
+	}); !errors.Is(err, pasta.ErrNoPortTypes) {
+		t.Fatalf("AddNodeClass bad new replacement port error = %v, want %v", err, pasta.ErrNoPortTypes)
+	}
+	afterBadPort := w.Snapshot()
+	if !afterBadPort.Nodes[badPortID].Placeholder ||
+		!reflect.DeepEqual(afterBadPort.Nodes[badPortID].RightPorts, badPortBefore.Nodes[badPortID].RightPorts) ||
+		len(afterBadPort.Ports) != len(badPortBefore.Ports) {
+		t.Fatalf("bad new port replacement mutated workspace: before=%#v after=%#v", badPortBefore, afterBadPort)
 	}
 }
 
@@ -1046,6 +1576,9 @@ func TestWorkspaceReplaceNodePreservesRecordState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddRootNode: %v", err)
 	}
+	if got, want := legacy.initFlags, (workspaceNodeInitFlags{}); got != want {
+		t.Fatalf("legacy init flags = %#v, want %#v", got, want)
+	}
 	left := mustAddPort(t, w, nodeID, "left", "example.com/typeA")
 	right := mustAddPort(t, w, nodeID, "right", "example.com/typeA")
 	if err := w.SetNodePrimary(nodeID, "example.com/typeA"); err != nil {
@@ -1071,6 +1604,9 @@ func TestWorkspaceReplaceNodePreservesRecordState(t *testing.T) {
 	}
 	if replacement.readyCount != 1 {
 		t.Fatalf("replacement ready count = %d, want 1", replacement.readyCount)
+	}
+	if got, want := replacement.initFlags, (workspaceNodeInitFlags{isReplacement: true}); got != want {
+		t.Fatalf("replacement init flags = %#v, want %#v", got, want)
 	}
 	if got, want := replacement.rootStatus, []bool{true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("replacement root status = %v, want %v", got, want)
@@ -1221,6 +1757,12 @@ func TestWorkspacePlaceholderNodeLifecycleAndSnapshots(t *testing.T) {
 	replacement := &workspaceNode{}
 	if err := w.ReplacePlaceholderNode(placeholderID, replacement); err != nil {
 		t.Fatalf("ReplacePlaceholderNode: %v", err)
+	}
+	if got, want := replacement.initFlags, (workspaceNodeInitFlags{
+		isReplacement:            true,
+		isPlaceholderReplacement: true,
+	}); got != want {
+		t.Fatalf("replacement init flags = %#v, want %#v", got, want)
 	}
 	if replacement.initData == nil || !reflect.DeepEqual(replacement.initData.RightPorts, []uint64{placeholderRight}) {
 		t.Fatalf("replacement init data = %#v, want preserved right port %d", replacement.initData, placeholderRight)
@@ -1604,6 +2146,24 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	if got, err := w.NodesByClass("example.com/NodeA"); err != nil || len(got) != 0 {
 		t.Fatalf("NodesByClass after Close = %v, %v; want empty, nil", got, err)
 	}
+	if err := w.AddNodeClass(testNodeClass{name: "example.com/NodeClass"}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddNodeClass after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodeClass("example.com/NodeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodeClass after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if _, err := w.AddNodeByClass("example.com/NodeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("AddNodeByClass after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if _, ok := w.NodeClass("example.com/NodeA"); ok {
+		t.Fatal("NodeClass after Close returned ok")
+	}
+	if _, ok := w.NodeClassLongDescription("example.com/NodeA"); ok {
+		t.Fatal("NodeClassLongDescription after Close returned ok")
+	}
+	if _, ok := w.NodeClassSnapshot("example.com/NodeA"); ok {
+		t.Fatal("NodeClassSnapshot after Close returned ok")
+	}
 
 	w.RemoveLink(link)
 	w.RemovePort(portA)
@@ -1811,8 +2371,13 @@ func assertJSONSerializable(t *testing.T, value any) {
 }
 
 func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
-	if len(a.Nodes) != len(b.Nodes) || len(a.Ports) != len(b.Ports) || len(a.Links) != len(b.Links) {
+	if len(a.Classes) != len(b.Classes) || len(a.Nodes) != len(b.Nodes) || len(a.Ports) != len(b.Ports) || len(a.Links) != len(b.Links) {
 		return false
+	}
+	for name, class := range a.Classes {
+		if !equalNodeClassSnapshot(class, b.Classes[name]) {
+			return false
+		}
 	}
 	for id, node := range a.Nodes {
 		if !equalNodeSnapshot(node, b.Nodes[id]) {
@@ -1830,6 +2395,20 @@ func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
 		}
 	}
 	return true
+}
+
+func equalNodeClassSnapshot(a, b pasta.NodeClassSnapshot) bool {
+	return a.Class == b.Class &&
+		a.ShortDescription == b.ShortDescription &&
+		a.PrimaryType == b.PrimaryType &&
+		reflect.DeepEqual(emptyClassPortsIfNil(a.InitialPorts), emptyClassPortsIfNil(b.InitialPorts))
+}
+
+func emptyClassPortsIfNil(values []pasta.NodeClassPortSnapshot) []pasta.NodeClassPortSnapshot {
+	if values == nil {
+		return []pasta.NodeClassPortSnapshot{}
+	}
+	return values
 }
 
 func equalNodeSnapshot(a, b pasta.NodeSnapshot) bool {

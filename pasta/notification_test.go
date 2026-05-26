@@ -341,3 +341,14 @@ func assertLinkNotification(t *testing.T, notification pasta.WorkspaceNotificati
 		t.Fatalf("link notification = %#v, want %#v", notification.Link, want)
 	}
 }
+
+func assertClassNotification(t *testing.T, notification pasta.WorkspaceNotification, kind pasta.NotificationKind, name string, want pasta.NodeClassSnapshot) {
+	t.Helper()
+
+	if notification.Kind != kind || notification.ClassName != name {
+		t.Fatalf("class notification = {%q, %q}, want {%q, %q}", notification.Kind, notification.ClassName, kind, name)
+	}
+	if notification.NodeClass == nil || !equalNodeClassSnapshot(*notification.NodeClass, want) {
+		t.Fatalf("class notification snapshot = %#v, want %#v", notification.NodeClass, want)
+	}
+}

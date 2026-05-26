@@ -41,9 +41,10 @@ type Workspace struct {
 
 	pending []func()
 
-	nodes *orderedmap.OrderedMap[uint64, *nodeRecord]
-	ports *orderedmap.OrderedMap[uint64, *Port]
-	links *orderedmap.OrderedMap[uint64, *Link]
+	nodes   *orderedmap.OrderedMap[uint64, *nodeRecord]
+	ports   *orderedmap.OrderedMap[uint64, *Port]
+	links   *orderedmap.OrderedMap[uint64, *Link]
+	classes *orderedmap.OrderedMap[string, NodeClass]
 
 	nextSubscriptionID  uint64
 	subscribers         map[uint64]NotificationCallback
@@ -66,6 +67,7 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		nodes:   orderedmap.New[uint64, *nodeRecord](),
 		ports:   orderedmap.New[uint64, *Port](),
 		links:   orderedmap.New[uint64, *Link](),
+		classes: orderedmap.New[string, NodeClass](),
 
 		nextSubscriptionID:  1,
 		subscribers:         make(map[uint64]NotificationCallback),
@@ -413,12 +415,33 @@ func (w *Workspace) AddRootNode(node Node, class string) (uint64, error) {
 func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
+	return w.addNodeLocked(node, class, root, "", nil, nil, false)
+}
+
+func (w *Workspace) addNodeByClassWithParams(node Node, class string, params NodeClassParams) (uint64, error) {
+	w.Lock()
+	defer w.Unlock()
+	if err := validateNodeClassParams(params); err != nil {
+		return 0, err
+	}
+	initData := &NodeInitData{
+		PrimaryType: params.PrimaryType,
+	}
+	return w.addNodeLocked(node, class, params.Root, params.PrimaryType, params.InitialPorts, initData, true)
+}
+
+func (w *Workspace) addNodeLocked(node Node, class string, root bool, primaryType string, initialPorts []Port, initData *NodeInitData, isClassConstructed bool) (uint64, error) {
 	if w.closed {
 		return 0, ErrWorkspaceClosed
 	}
 
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
+	}
+	if primaryType != "" {
+		if err := ValidateTypeName(primaryType); err != nil {
+			return 0, err
+		}
 	}
 	if node == nil {
 		return 0, ErrNoNode
@@ -437,7 +460,7 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 		ID:          id,
 		Node:        node,
 		Class:       class,
-		PrimaryType: "",
+		PrimaryType: primaryType,
 		Label:       "",
 		Popups:      []NodePopup{},
 		Root:        root,
@@ -446,11 +469,26 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 		L:           log,
 		stopped:     false,
 	}
+	addedPorts, err := w.addInitialPorts(&rec, initialPorts)
+	if err != nil {
+		return 0, err
+	}
+	if initData != nil {
+		initData.PrimaryType = rec.PrimaryType
+		initData.Label = rec.Label
+		initData.LeftPorts = slices.Clone(rec.LeftPorts)
+		initData.RightPorts = slices.Clone(rec.RightPorts)
+	}
 	w.nodes.Set(id, &rec)
 
-	if err := rec.OnInit(w, nil); err != nil {
+	if err := rec.OnInit(w, initData, false, false, isClassConstructed); err != nil {
 		w.log.Debugf("node %d faled in OnInit", id)
 		w.failNodeLocked(id, "OnInit", err, false, false)
+		for _, portID := range addedPorts {
+			if port, present := w.ports.Get(portID); present && port != nil {
+				w.enqueuePortNotification(NotificationPortAdded, portID, portSnapshot(port))
+			}
+		}
 		w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
 		return id, err
 	}
@@ -459,6 +497,11 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 		if err := rec.OnReady(); err != nil {
 			w.log.Debugf("node %d faled in OnReady", id)
 			w.failNodeLocked(id, "OnReady", err, false, false)
+			for _, portID := range addedPorts {
+				if port, present := w.ports.Get(portID); present && port != nil {
+					w.enqueuePortNotification(NotificationPortAdded, portID, portSnapshot(port))
+				}
+			}
 			w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
 			return id, err
 		}
@@ -468,12 +511,21 @@ func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool) (uint64,
 				err = ErrNodePanic
 			}
 			w.log.Debugf("node %d faled in OnRootStatus", id)
+			for _, portID := range addedPorts {
+				if port, present := w.ports.Get(portID); present && port != nil {
+					w.enqueuePortNotification(NotificationPortAdded, portID, portSnapshot(port))
+				}
+			}
 			w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
 			return id, err
 		}
 	}
 
 	w.log.Debug("node added", id)
+	for _, portID := range addedPorts {
+		port, _ := w.ports.Get(portID)
+		w.enqueuePortNotification(NotificationPortAdded, portID, portSnapshot(port))
+	}
 	w.enqueueNodeNotification(NotificationNodeAdded, id, nodeSnapshot(&rec))
 
 	return id, nil
@@ -566,7 +618,7 @@ func (w *Workspace) ReplaceNode(id uint64, node Node) error {
 
 	record.Node = node
 	record.stopped = false
-	if err := record.OnInit(w, &restored); err != nil {
+	if err := record.OnInit(w, &restored, true, wasPlaceholder, false); err != nil {
 		w.log.Debugf("node %d faled in OnInit", id)
 		w.failNodeLocked(id, "OnInit", err, true, true)
 		return err
@@ -674,6 +726,87 @@ func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
 // ReplacePlaceholderNode replaces a placeholder node with a normal Node.
 func (w *Workspace) ReplacePlaceholderNode(id uint64, node Node) error {
 	return w.ReplaceNode(id, node)
+}
+
+func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, node Node, state NodeClassPlaceholderState) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+	if id < 1 {
+		return ErrNoNode
+	}
+	record, present := w.nodes.Get(id)
+	if !present || record == nil || record.Node != nil || record.Class != class {
+		return ErrNoNode
+	}
+	if node == nil {
+		return ErrNoNode
+	}
+	for pair := w.nodes.Newest(); pair != nil; pair = pair.Prev() {
+		if pair.Key != id && pair.Value != nil && pair.Value.Node == node {
+			return ErrNodeDup
+		}
+	}
+	if err := w.applyPlaceholderClassState(record, state); err != nil {
+		return err
+	}
+
+	record.Popups = nil
+	record.Menu = nil
+	restored := record.InitData()
+	record.Node = node
+	record.stopped = false
+	if err := record.OnInit(w, &restored, true, true, true); err != nil {
+		w.log.Debugf("node %d faled in OnInit", id)
+		w.failNodeLocked(id, "OnInit", err, true, true)
+		return err
+	}
+	if w.isReady {
+		if err := record.OnReady(); err != nil {
+			w.log.Debugf("node %d faled in OnReady", id)
+			w.failNodeLocked(id, "OnReady", err, true, true)
+			return err
+		}
+		if failed := w.activatePlaceholderLinks(record); len(failed) > 0 {
+			nodeStop(record.Node)
+			record.Node = nil
+			record.stopped = false
+			return firstError(failed)
+		}
+		w.refreshPlaceholderLinks(id, false)
+		if !w.verifyDAG() {
+			w.deactivateNodeLinks(record)
+			nodeStop(record.Node)
+			record.Node = nil
+			record.stopped = false
+			w.refreshPlaceholderLinks(id, true)
+			w.recomputeRootPaths(true)
+			return ErrCycle
+		}
+		if failed := w.notifyActivatedPlaceholderLinks(record); len(failed) > 0 {
+			w.deactivateNodeLinks(record)
+			nodeStop(record.Node)
+			record.Node = nil
+			record.stopped = false
+			w.refreshPlaceholderLinks(id, true)
+			w.recomputeRootPaths(true)
+			return firstError(failed)
+		}
+		record.rootStatusKnown = false
+		if failed := w.recomputeRootPaths(false); len(failed) > 0 {
+			w.deactivateNodeLinks(record)
+			nodeStop(record.Node)
+			record.Node = nil
+			record.stopped = false
+			return firstError(failed)
+		}
+	}
+	w.refreshPlaceholderLinks(id, true)
+	w.recomputeRootPaths(true)
+	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
+	return nil
 }
 
 // AddPort adds a port to its owner node and returns the new port ID.
@@ -1386,8 +1519,195 @@ func (w *Workspace) nodeIDsByClassLocked(class string) []uint64 {
 	return nodes
 }
 
+type nodeClassPlaceholderCandidate struct {
+	id    uint64
+	state NodeClassPlaceholderState
+}
+
+func (w *Workspace) nodeClassPlaceholderCandidatesLocked(class string) []nodeClassPlaceholderCandidate {
+	placeholders := make([]nodeClassPlaceholderCandidate, 0)
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value == nil || pair.Value.Class != class || pair.Value.Node != nil {
+			continue
+		}
+		placeholders = append(placeholders, nodeClassPlaceholderCandidate{
+			id:    pair.Key,
+			state: w.placeholderClassStateLocked(pair.Value),
+		})
+	}
+	return placeholders
+}
+
+func (w *Workspace) placeholderClassStateLocked(record *nodeRecord) NodeClassPlaceholderState {
+	state := NodeClassPlaceholderState{
+		Root:        record.Root,
+		PrimaryType: record.PrimaryType,
+		Label:       record.Label,
+		LeftPorts:   make([]Port, 0, len(record.LeftPorts)),
+		RightPorts:  make([]Port, 0, len(record.RightPorts)),
+	}
+	for _, portID := range record.LeftPorts {
+		if port, present := w.ports.Get(portID); present && port != nil {
+			state.LeftPorts = append(state.LeftPorts, port.Copy())
+		}
+	}
+	for _, portID := range record.RightPorts {
+		if port, present := w.ports.Get(portID); present && port != nil {
+			state.RightPorts = append(state.RightPorts, port.Copy())
+		}
+	}
+	return state
+}
+
+func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeClassPlaceholderState) error {
+	if state.PrimaryType != "" {
+		if err := ValidateTypeName(state.PrimaryType); err != nil {
+			return err
+		}
+	}
+	leftPorts, err := w.preparePlaceholderClassPorts(record, state.LeftPorts, "left")
+	if err != nil {
+		return err
+	}
+	rightPorts, err := w.preparePlaceholderClassPorts(record, state.RightPorts, "right")
+	if err != nil {
+		return err
+	}
+
+	record.Root = state.Root
+	record.PrimaryType = state.PrimaryType
+	record.Label = state.Label
+
+	w.removeOmittedPlaceholderClassPorts(record, leftPorts, record.LeftPorts)
+	w.removeOmittedPlaceholderClassPorts(record, rightPorts, record.RightPorts)
+
+	for i := range leftPorts {
+		if leftPorts[i].ID == 0 {
+			leftPorts[i].ID = w.NextID()
+			leftPorts[i].Node = record.ID
+			leftPorts[i].Links = []uint64{}
+			w.ports.Set(leftPorts[i].ID, &leftPorts[i])
+			w.enqueuePortNotification(NotificationPortAdded, leftPorts[i].ID, portSnapshot(&leftPorts[i]))
+			continue
+		}
+		w.updatePlaceholderClassPort(leftPorts[i])
+	}
+	for i := range rightPorts {
+		if rightPorts[i].ID == 0 {
+			rightPorts[i].ID = w.NextID()
+			rightPorts[i].Node = record.ID
+			rightPorts[i].Links = []uint64{}
+			w.ports.Set(rightPorts[i].ID, &rightPorts[i])
+			w.enqueuePortNotification(NotificationPortAdded, rightPorts[i].ID, portSnapshot(&rightPorts[i]))
+			continue
+		}
+		w.updatePlaceholderClassPort(rightPorts[i])
+	}
+	record.LeftPorts = portIDs(leftPorts)
+	record.RightPorts = portIDs(rightPorts)
+	return nil
+}
+
+func (w *Workspace) preparePlaceholderClassPorts(record *nodeRecord, ports []Port, direction string) ([]Port, error) {
+	want := record.LeftPorts
+	if direction == "right" {
+		want = record.RightPorts
+	}
+	prepared := make([]Port, 0, len(ports))
+	seenExisting := make(map[uint64]struct{}, len(ports))
+	wantSet := make(map[uint64]struct{}, len(want))
+	for _, id := range want {
+		wantSet[id] = struct{}{}
+	}
+	for _, port := range ports {
+		check := port.Copy()
+		check.Node = record.ID
+		check.Links = nil
+		if check.Direction != direction {
+			return nil, ErrPortOrder
+		}
+		if check.ID != 0 {
+			if _, ok := seenExisting[check.ID]; ok {
+				return nil, ErrPortOrder
+			}
+			seenExisting[check.ID] = struct{}{}
+			if _, ok := wantSet[check.ID]; !ok {
+				return nil, ErrPortOrder
+			}
+			existing, present := w.ports.Get(check.ID)
+			if !present || existing == nil || existing.Node != record.ID || existing.Direction != direction {
+				return nil, ErrPortOrder
+			}
+		}
+		if err := check.Validate(); err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, check)
+	}
+	return prepared, nil
+}
+
+func (w *Workspace) removeOmittedPlaceholderClassPorts(record *nodeRecord, desired []Port, existing []uint64) {
+	kept := make(map[uint64]struct{}, len(desired))
+	for _, port := range desired {
+		if port.ID != 0 {
+			kept[port.ID] = struct{}{}
+		}
+	}
+	for _, id := range slices.Clone(existing) {
+		if _, ok := kept[id]; !ok {
+			w.RemovePort(id)
+		}
+	}
+}
+
+func (w *Workspace) updatePlaceholderClassPort(replacement Port) {
+	port, _ := w.ports.Get(replacement.ID)
+	links := port.CopyLinks()
+	port.Direction = replacement.Direction
+	port.Name = replacement.Name
+	port.Types = replacement.CopyTypes()
+	port.Links = links
+	w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
+}
+
+func portIDs(ports []Port) []uint64 {
+	ids := make([]uint64, 0, len(ports))
+	for _, port := range ports {
+		ids = append(ids, port.ID)
+	}
+	return ids
+}
+
 func (w *Workspace) addPlaceholderPorts(record *nodeRecord, ports []Port) ([]uint64, error) {
 	if err := validatePlaceholderPorts(record.ID, ports); err != nil {
+		return nil, err
+	}
+	prepared := make([]Port, 0, len(ports))
+	for _, port := range ports {
+		port = port.Copy()
+		port.ID = 0
+		port.Node = record.ID
+		port.Links = []uint64{}
+		prepared = append(prepared, port)
+	}
+
+	added := make([]uint64, 0, len(prepared))
+	for _, port := range prepared {
+		port.ID = w.NextID()
+		w.ports.Set(port.ID, &port)
+		if port.Direction == "left" {
+			record.LeftPorts = append(record.LeftPorts, port.ID)
+		} else {
+			record.RightPorts = append(record.RightPorts, port.ID)
+		}
+		added = append(added, port.ID)
+	}
+	return added, nil
+}
+
+func (w *Workspace) addInitialPorts(record *nodeRecord, ports []Port) ([]uint64, error) {
+	if err := validateDefaultPorts(ports); err != nil {
 		return nil, err
 	}
 	prepared := make([]Port, 0, len(ports))
@@ -1418,6 +1738,19 @@ func validatePlaceholderPorts(node uint64, ports []Port) error {
 		port = port.Copy()
 		port.ID = 0
 		port.Node = node
+		port.Links = nil
+		if err := port.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDefaultPorts(ports []Port) error {
+	for _, port := range ports {
+		port = port.Copy()
+		port.ID = 0
+		port.Node = 1
 		port.Links = nil
 		if err := port.Validate(); err != nil {
 			return err

@@ -37,7 +37,7 @@ func (n *internalNode) call(name string) {
 	n.calls = append(n.calls, name)
 }
 
-func (n *internalNode) OnInit(w *Workspace, l Logger, id uint64, class string, restored *NodeInitData) error {
+func (n *internalNode) OnInit(w *Workspace, l Logger, id uint64, class string, restored *NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool) error {
 	n.call("init")
 	return nil
 }

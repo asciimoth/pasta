@@ -57,12 +57,20 @@ type Node interface {
 	//
 	// Implementations can use this callback to keep the workspace ID, create
 	// initial ports, or configure node-local state.
+	//
+	// isReplacement is true when OnInit is running for a node implementation
+	// that replaced an existing node record. isPlaceholderReplacement is true
+	// when the replaced record was a placeholder. isClassConstructed is true
+	// when the node was created by a NodeClassFactory.
 	OnInit(
 		w *Workspace,
 		l Logger,
 		id uint64,
 		class string,
 		restored *NodeInitData,
+		isReplacement bool,
+		isPlaceholderReplacement bool,
+		isClassConstructed bool,
 	) error
 
 	// OnReady is called once the workspace is ready to run.
@@ -130,7 +138,8 @@ type Node interface {
 
 // NodeInitData carries existing node-owned workspace state into OnInit.
 //
-// It is nil for ordinary node additions. Workspace operations that preserve an
+// It is nil for ordinary node additions. AddNodeByClass passes class default
+// primary type and initial port IDs. Workspace operations that preserve an
 // existing node record, such as node replacement, pass a snapshot of the state
 // the new Node implementation inherits.
 type NodeInitData struct {
@@ -200,6 +209,9 @@ func (n *nodeRecord) InitData() NodeInitData {
 func (n *nodeRecord) OnInit(
 	w *Workspace,
 	restored *NodeInitData,
+	isReplacement bool,
+	isPlaceholderReplacement bool,
+	isClassConstructed bool,
 ) (err error) {
 	if n.stopped || n.Node == nil {
 		return
@@ -210,7 +222,7 @@ func (n *nodeRecord) OnInit(
 			err = ErrNodePanic
 		}
 	}()
-	err = n.Node.OnInit(w, n.L, n.ID, n.Class, restored)
+	err = n.Node.OnInit(w, n.L, n.ID, n.Class, restored, isReplacement, isPlaceholderReplacement, isClassConstructed)
 	return
 }
 

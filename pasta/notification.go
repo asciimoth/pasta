@@ -13,6 +13,9 @@ const (
 	NotificationNodeRemoved NotificationKind = "node_removed"
 	NotificationNodeUpdated NotificationKind = "node_updated"
 
+	NotificationNodeClassAdded   NotificationKind = "node_class_added"
+	NotificationNodeClassRemoved NotificationKind = "node_class_removed"
+
 	NotificationPortAdded   NotificationKind = "port_added"
 	NotificationPortRemoved NotificationKind = "port_removed"
 	NotificationPortUpdated NotificationKind = "port_updated"
@@ -29,21 +32,24 @@ const (
 
 // WorkspaceNotification describes one observable workspace state change.
 //
-// Snapshot is set for NotificationWorkspaceSnapshot. Node, Port, or Link is set
-// for matching node/port/link notifications. Formular is set for
-// NotificationNodeMenu. Removed notifications carry the last snapshot of the
-// removed entity.
+// Snapshot is set for NotificationWorkspaceSnapshot. NodeClass, Node, Port, or
+// Link is set for matching node-class/node/port/link notifications. Formular is
+// set for NotificationNodeMenu. Removed notifications carry the last snapshot
+// of the removed entity.
 type WorkspaceNotification struct {
 	SubscriptionID uint64 `json:"-"`
 
 	Kind NotificationKind `json:"kind"`
 	ID   uint64           `json:"id,omitempty"`
 
-	Snapshot *WorkspaceSnapshot `json:"snapshot,omitempty"`
-	Node     *NodeSnapshot      `json:"node,omitempty"`
-	Port     *PortSnapshot      `json:"port,omitempty"`
-	Link     *LinkSnapshot      `json:"link,omitempty"`
-	Formular any                `json:"formular,omitempty"`
+	ClassName string `json:"class_name,omitempty"`
+
+	Snapshot  *WorkspaceSnapshot `json:"snapshot,omitempty"`
+	NodeClass *NodeClassSnapshot `json:"node_class,omitempty"`
+	Node      *NodeSnapshot      `json:"node,omitempty"`
+	Port      *PortSnapshot      `json:"port,omitempty"`
+	Link      *LinkSnapshot      `json:"link,omitempty"`
+	Formular  any                `json:"formular,omitempty"`
 
 	snapshotRequest bool
 }
@@ -151,6 +157,14 @@ func (w *Workspace) enqueueNodeNotification(kind NotificationKind, id uint64, no
 		Kind: kind,
 		ID:   id,
 		Node: &node,
+	})
+}
+
+func (w *Workspace) enqueueNodeClassNotification(kind NotificationKind, name string, class NodeClassSnapshot) {
+	w.enqueueNotification(WorkspaceNotification{
+		Kind:      kind,
+		ClassName: name,
+		NodeClass: &class,
 	})
 }
 

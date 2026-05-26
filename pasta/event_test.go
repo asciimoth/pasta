@@ -30,16 +30,52 @@ type calcNode struct {
 	right uint64
 }
 
-func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData) error {
+func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool) error {
 	n.w = w
 	n.l = l
 	n.id = id
+	n.applyInitData(restored)
 	n.log("init")
 	if err := n.updateLabel(); err != nil {
 		return err
 	}
 	n.sendMenuSnapshot()
 	return nil
+}
+
+func (n *calcNode) applyInitData(restored *pasta.NodeInitData) {
+	if restored == nil {
+		return
+	}
+	if len(restored.RightPorts) > 0 {
+		n.right = restored.RightPorts[0]
+	}
+	switch n.kind {
+	case "sum":
+		if len(restored.LeftPorts) > 0 {
+			n.leftA = restored.LeftPorts[0]
+		}
+		if len(restored.LeftPorts) > 1 {
+			n.leftB = restored.LeftPorts[1]
+		}
+		if len(restored.LeftPorts) > 2 {
+			n.leftC = restored.LeftPorts[2]
+		}
+		if len(restored.LeftPorts) > 3 {
+			n.leftD = restored.LeftPorts[3]
+		}
+	case "sub", "div", "mult":
+		if len(restored.LeftPorts) > 0 {
+			n.leftA = restored.LeftPorts[0]
+		}
+		if len(restored.LeftPorts) > 1 {
+			n.leftB = restored.LeftPorts[1]
+		}
+	case "result":
+		if len(restored.LeftPorts) > 0 {
+			n.leftA = restored.LeftPorts[0]
+		}
+	}
 }
 
 func (n *calcNode) OnReady() error {
@@ -494,43 +530,44 @@ func buildCalcGraph(t *testing.T, linkOrder []string) (*calcGraph, string) {
 		{"divResult", "result", 0},
 		{"final", "result", 0},
 	} {
-		node := &calcNode{kind: spec.kind, value: spec.value, inputs: make(map[uint64]float64)}
-		_, err := w.AddNode(node, "example.com/Calculator")
-		if err != nil {
-			t.Fatalf("AddNode %s: %v", spec.name, err)
+		spec := spec
+		className := calcNodeClassName(spec.name)
+		if err := w.AddNodeClass(testFactoryNodeClass{
+			testNodeClass: testNodeClass{
+				name:   className,
+				short:  "Calculator " + spec.name,
+				params: pasta.NodeClassParams{InitialPorts: calcDefaultPorts(spec.kind)},
+			},
+			newNode: func() (pasta.Node, error) {
+				node := &calcNode{kind: spec.kind, value: spec.value, inputs: make(map[uint64]float64)}
+				graph.nodes[spec.name] = node
+				return node, nil
+			},
+		}); err != nil {
+			t.Fatalf("AddNodeClass %s: %v", spec.name, err)
 		}
-		graph.nodes[spec.name] = node
-	}
-
-	addRight := func(name string) {
-		node := graph.nodes[name]
-		port := mustAddPort(t, w, node.id, "right", calcType)
-		node.right = port
-		graph.ports[name+".out"] = port
-	}
-	addLeft := func(name, suffix string) uint64 {
-		node := graph.nodes[name]
-		port := mustAddPort(t, w, node.id, "left", calcType)
-		graph.ports[name+"."+suffix] = port
-		return port
+		_, err := w.AddNodeByClass(className)
+		if err != nil {
+			t.Fatalf("AddNodeByClass %s: %v", spec.name, err)
+		}
 	}
 
 	for _, name := range []string{"c10", "c5", "c2", "c3", "c4", "sum", "sub", "mult", "div"} {
-		addRight(name)
+		graph.ports[name+".out"] = graph.nodes[name].right
 	}
 	for _, name := range []string{"sub", "mult", "div"} {
 		node := graph.nodes[name]
-		node.leftA = addLeft(name, "a")
-		node.leftB = addLeft(name, "b")
+		graph.ports[name+".a"] = node.leftA
+		graph.ports[name+".b"] = node.leftB
 	}
 	sum := graph.nodes["sum"]
-	sum.leftA = addLeft("sum", "a")
-	sum.leftB = addLeft("sum", "b")
-	sum.leftC = addLeft("sum", "c")
-	sum.leftD = addLeft("sum", "d")
+	graph.ports["sum.a"] = sum.leftA
+	graph.ports["sum.b"] = sum.leftB
+	graph.ports["sum.c"] = sum.leftC
+	graph.ports["sum.d"] = sum.leftD
 	for _, name := range []string{"sumResult", "subResult", "divResult", "final"} {
 		node := graph.nodes[name]
-		node.leftA = addLeft(name, "in")
+		graph.ports[name+".in"] = node.leftA
 	}
 
 	for _, spec := range linkOrder {
@@ -543,6 +580,64 @@ func buildCalcGraph(t *testing.T, linkOrder []string) (*calcGraph, string) {
 	}
 
 	return graph, logf.Result()
+}
+
+func calcDefaultPorts(kind string) []pasta.Port {
+	switch kind {
+	case "constant":
+		return []pasta.Port{{Direction: "right", Name: "out", Types: []string{calcType}}}
+	case "sum":
+		return []pasta.Port{
+			{Direction: "right", Name: "out", Types: []string{calcType}},
+			{Direction: "left", Name: "a", Types: []string{calcType}},
+			{Direction: "left", Name: "b", Types: []string{calcType}},
+			{Direction: "left", Name: "c", Types: []string{calcType}},
+			{Direction: "left", Name: "d", Types: []string{calcType}},
+		}
+	case "sub", "div", "mult":
+		return []pasta.Port{
+			{Direction: "right", Name: "out", Types: []string{calcType}},
+			{Direction: "left", Name: "a", Types: []string{calcType}},
+			{Direction: "left", Name: "b", Types: []string{calcType}},
+		}
+	case "result":
+		return []pasta.Port{{Direction: "left", Name: "in", Types: []string{calcType}}}
+	default:
+		return nil
+	}
+}
+
+func calcNodeClassName(name string) string {
+	switch name {
+	case "c10":
+		return "example.com/CalcC10"
+	case "c5":
+		return "example.com/CalcC5"
+	case "c2":
+		return "example.com/CalcC2"
+	case "c3":
+		return "example.com/CalcC3"
+	case "c4":
+		return "example.com/CalcC4"
+	case "sum":
+		return "example.com/CalcSum"
+	case "sub":
+		return "example.com/CalcSub"
+	case "mult":
+		return "example.com/CalcMult"
+	case "div":
+		return "example.com/CalcDiv"
+	case "sumResult":
+		return "example.com/CalcSumResult"
+	case "subResult":
+		return "example.com/CalcSubResult"
+	case "divResult":
+		return "example.com/CalcDivResult"
+	case "final":
+		return "example.com/CalcFinal"
+	default:
+		return "example.com/CalcUnknown"
+	}
 }
 
 func (g *calcGraph) states() map[string]float64 {
