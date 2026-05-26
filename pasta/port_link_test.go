@@ -56,29 +56,53 @@ func TestPortValidate(t *testing.T) {
 	}{
 		{
 			name: "valid left",
-			port: pasta.Port{Direction: "left", Types: []string{"example.com/typeA"}},
+			port: pasta.Port{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
 		},
 		{
 			name: "valid right",
-			port: pasta.Port{Direction: "right", Types: []string{"example.com/typeA"}},
+			port: pasta.Port{Direction: "right", Name: "output", Types: []string{"example.com/typeA"}},
 		},
 		{
 			name: "valid any",
-			port: pasta.Port{Direction: "left", Types: []string{pasta.AnyType}},
+			port: pasta.Port{Direction: "left", Name: "any_port", Types: []string{pasta.AnyType}},
+		},
+		{
+			name: "valid whitespace dash underscore",
+			port: pasta.Port{Direction: "left", Name: "input 1-A_b", Types: []string{"example.com/typeA"}},
+		},
+		{
+			name: "empty name",
+			port: pasta.Port{Direction: "left", Types: []string{"example.com/typeA"}},
+			want: pasta.ErrPortName,
+		},
+		{
+			name: "name starts with punctuation",
+			port: pasta.Port{Direction: "left", Name: "_input", Types: []string{"example.com/typeA"}},
+			want: pasta.ErrPortName,
+		},
+		{
+			name: "name ends with whitespace",
+			port: pasta.Port{Direction: "left", Name: "input ", Types: []string{"example.com/typeA"}},
+			want: pasta.ErrPortName,
+		},
+		{
+			name: "name invalid character",
+			port: pasta.Port{Direction: "left", Name: "input.port", Types: []string{"example.com/typeA"}},
+			want: pasta.ErrPortName,
 		},
 		{
 			name: "bad direction",
-			port: pasta.Port{Direction: "top", Types: []string{"example.com/typeA"}},
+			port: pasta.Port{Direction: "top", Name: "input", Types: []string{"example.com/typeA"}},
 			want: pasta.ErrPortDirection,
 		},
 		{
 			name: "no types",
-			port: pasta.Port{Direction: "left"},
+			port: pasta.Port{Direction: "left", Name: "input"},
 			want: pasta.ErrNoPortTypes,
 		},
 		{
 			name: "invalid type",
-			port: pasta.Port{Direction: "left", Types: []string{"example.com/TypeA"}},
+			port: pasta.Port{Direction: "left", Name: "input", Types: []string{"example.com/TypeA"}},
 			want: pasta.ErrTypeName,
 		},
 	}

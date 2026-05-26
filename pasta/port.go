@@ -71,7 +71,7 @@ func (p *Port) Copy() Port {
 	}
 }
 
-// Validate reports whether the port has a valid direction and type list.
+// Validate reports whether the port has a valid name, direction, and type list.
 func (p *Port) Validate() (err error) {
 	if p.Direction != "left" && p.Direction != "right" {
 		return errors.Join(ErrPortDirection, errors.New(p.Direction))
@@ -83,6 +83,9 @@ func (p *Port) Validate() (err error) {
 		if err := ValidateTypeName(tp); err != nil {
 			return err
 		}
+	}
+	if err := ValidatePortName(p.Name); err != nil {
+		return err
 	}
 	return
 }

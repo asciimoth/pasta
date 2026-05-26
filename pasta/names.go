@@ -12,6 +12,8 @@ var (
 	ErrTypeName = errors.New("invalid type name")
 	// ErrNodeName reports that a node name is malformed.
 	ErrNodeName = errors.New("invalid node name")
+	// ErrPortName reports that a port name is malformed.
+	ErrPortName = errors.New("invalid port name")
 )
 
 const (
@@ -56,6 +58,23 @@ func ValidateNodeName(name string) error {
 	return nil
 }
 
+// ValidatePortName reports whether name is a valid port name.
+//
+// Port names must be non-empty, start and end with an alphanumeric ASCII
+// character, and contain only alphanumeric ASCII characters, whitespace, "-",
+// and "_".
+func ValidatePortName(name string) error {
+	if name == "" || !isAlphaNumeric(name[0]) || !isAlphaNumeric(name[len(name)-1]) {
+		return ErrPortName
+	}
+	for i := 1; i < len(name)-1; i++ {
+		if !isAlphaNumeric(name[i]) && !isWhitespace(name[i]) && name[i] != '-' && name[i] != '_' {
+			return ErrPortName
+		}
+	}
+	return nil
+}
+
 func validateName(name string, firstNameChar func(byte) bool, err error) error {
 	prefix, suffix, ok := strings.Cut(name, "/")
 	if !ok || prefix == "" || suffix == "" || strings.Contains(suffix, "/") {
@@ -82,6 +101,10 @@ func validateName(name string, firstNameChar func(byte) bool, err error) error {
 
 func isAlphaNumeric(c byte) bool {
 	return isUpper(c) || isLower(c) || ('0' <= c && c <= '9')
+}
+
+func isWhitespace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
 }
 
 func isUpper(c byte) bool {

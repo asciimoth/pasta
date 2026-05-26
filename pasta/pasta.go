@@ -922,14 +922,16 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 		return 0, ErrWorkspaceClosed
 	}
 
-	if err := port.Validate(); err != nil {
-		return 0, err
-	}
-
 	// Make sure node exists
 	record, present := w.nodes.Get(port.Node)
 	if !present || record == nil {
 		return 0, ErrNoNode
+	}
+	if err := port.Validate(); err != nil {
+		return 0, err
+	}
+	if err := w.validatePortNameAvailable(record, port.Direction, port.Name, 0); err != nil {
+		return 0, err
 	}
 
 	id := w.NextID()
@@ -1466,6 +1468,16 @@ func (w *Workspace) SetPortName(id uint64, name string) error {
 	if !present || port == nil {
 		return ErrNoPort
 	}
+	record, present := w.nodes.Get(port.Node)
+	if !present || record == nil {
+		return ErrNoNode
+	}
+	if err := ValidatePortName(name); err != nil {
+		return err
+	}
+	if err := w.validatePortNameAvailable(record, port.Direction, name, id); err != nil {
+		return err
+	}
 	port.Name = name
 	w.enqueuePortNotification(NotificationPortUpdated, id, portSnapshot(port))
 	return nil
@@ -1897,6 +1909,9 @@ func (w *Workspace) preparePlaceholderClassPorts(record *nodeRecord, ports []Por
 		}
 		prepared = append(prepared, check)
 	}
+	if err := validatePortNameListUnique(prepared); err != nil {
+		return nil, err
+	}
 	return prepared, nil
 }
 
@@ -1942,7 +1957,13 @@ func (w *Workspace) addPlaceholderPorts(record *nodeRecord, ports []Port) ([]uin
 		port.ID = 0
 		port.Node = record.ID
 		port.Links = []uint64{}
+		if err := w.validatePortNameAvailable(record, port.Direction, port.Name, 0); err != nil {
+			return nil, err
+		}
 		prepared = append(prepared, port)
+	}
+	if err := validatePortNameListUnique(prepared); err != nil {
+		return nil, err
 	}
 
 	added := make([]uint64, 0, len(prepared))
@@ -1987,6 +2008,7 @@ func (w *Workspace) addInitialPorts(record *nodeRecord, ports []Port) ([]uint64,
 }
 
 func validatePlaceholderPorts(node uint64, ports []Port) error {
+	prepared := make([]Port, 0, len(ports))
 	for _, port := range ports {
 		port = port.Copy()
 		port.ID = 0
@@ -1995,11 +2017,13 @@ func validatePlaceholderPorts(node uint64, ports []Port) error {
 		if err := port.Validate(); err != nil {
 			return err
 		}
+		prepared = append(prepared, port)
 	}
-	return nil
+	return validatePortNameListUnique(prepared)
 }
 
 func validateDefaultPorts(ports []Port) error {
+	prepared := make([]Port, 0, len(ports))
 	for _, port := range ports {
 		port = port.Copy()
 		port.ID = 0
@@ -2008,6 +2032,45 @@ func validateDefaultPorts(ports []Port) error {
 		if err := port.Validate(); err != nil {
 			return err
 		}
+		prepared = append(prepared, port)
+	}
+	return validatePortNameListUnique(prepared)
+}
+
+func (w *Workspace) validatePortNameAvailable(record *nodeRecord, direction, name string, exclude uint64) error {
+	var ports []uint64
+	switch direction {
+	case "left":
+		ports = record.LeftPorts
+	case "right":
+		ports = record.RightPorts
+	default:
+		return errors.Join(ErrPortDirection, errors.New(direction))
+	}
+	for _, id := range ports {
+		if id == exclude {
+			continue
+		}
+		port, present := w.ports.Get(id)
+		if present && port != nil && port.Name == name {
+			return ErrPortName
+		}
+	}
+	return nil
+}
+
+func validatePortNameListUnique(ports []Port) error {
+	left := make(map[string]struct{}, len(ports))
+	right := make(map[string]struct{}, len(ports))
+	for _, port := range ports {
+		names := left
+		if port.Direction == "right" {
+			names = right
+		}
+		if _, ok := names[port.Name]; ok {
+			return ErrPortName
+		}
+		names[port.Name] = struct{}{}
 	}
 	return nil
 }

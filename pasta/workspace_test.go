@@ -3,6 +3,7 @@ package pasta_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -156,6 +157,7 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	left, err := w.AddPort(pasta.Port{
 		Node:      nodeAID,
 		Direction: "left",
+		Name:      "left1",
 		Types:     []string{"example.com/typeA"},
 	})
 	if err != nil {
@@ -167,12 +169,13 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 			nodeBID: {Class: "example.com/NodeB"},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
-			left: {Node: nodeAID, Direction: "left", Types: []string{"example.com/typeA"}},
+			left: {Node: nodeAID, Direction: "left", Name: "left1", Types: []string{"example.com/typeA"}},
 		},
 	})
 	right, err := w.AddPort(pasta.Port{
 		Node:      nodeBID,
 		Direction: "right",
+		Name:      "right1",
 		Types:     []string{"example.com/typeA"},
 	})
 	if err != nil {
@@ -184,8 +187,8 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 			nodeBID: {Class: "example.com/NodeB", RightPorts: []uint64{right}},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
-			left:  {Node: nodeAID, Direction: "left", Types: []string{"example.com/typeA"}},
-			right: {Node: nodeBID, Direction: "right", Types: []string{"example.com/typeA"}},
+			left:  {Node: nodeAID, Direction: "left", Name: "left1", Types: []string{"example.com/typeA"}},
+			right: {Node: nodeBID, Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
 		},
 	})
 
@@ -208,8 +211,8 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 			nodeBID: {Class: "example.com/NodeB", RightPorts: []uint64{right}},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
-			left:  {Node: nodeAID, Direction: "left", Types: []string{"example.com/typeA"}, Links: []uint64{link}},
-			right: {Node: nodeBID, Direction: "right", Types: []string{"example.com/typeA"}, Links: []uint64{link}},
+			left:  {Node: nodeAID, Direction: "left", Name: "left1", Types: []string{"example.com/typeA"}, Links: []uint64{link}},
+			right: {Node: nodeBID, Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}, Links: []uint64{link}},
 		},
 		Links: map[uint64]pasta.LinkSnapshot{
 			link: {
@@ -292,7 +295,7 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
 			left:  {Node: nodeAID, Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
-			right: {Node: nodeBID, Direction: "right", Types: []string{"example.com/typeA"}},
+			right: {Node: nodeBID, Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
 		},
 	})
 	if w.NodesConnected(nodeAID, nodeBID) {
@@ -308,7 +311,7 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 			nodeBID: {Class: "example.com/NodeB", RightPorts: []uint64{right}},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
-			right: {Node: nodeBID, Direction: "right", Types: []string{"example.com/typeA"}},
+			right: {Node: nodeBID, Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
 		},
 	})
 	w.RemoveNode(nodeBID)
@@ -396,18 +399,23 @@ func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 		},
 		{
 			name: "bad direction",
-			port: pasta.Port{Node: nodeID, Direction: "up", Types: []string{"example.com/typeA"}},
+			port: pasta.Port{Node: nodeID, Direction: "up", Name: "input", Types: []string{"example.com/typeA"}},
 			want: pasta.ErrPortDirection,
 		},
 		{
 			name: "no types",
-			port: pasta.Port{Node: nodeID, Direction: "left"},
+			port: pasta.Port{Node: nodeID, Direction: "left", Name: "input"},
 			want: pasta.ErrNoPortTypes,
 		},
 		{
 			name: "bad type",
-			port: pasta.Port{Node: nodeID, Direction: "left", Types: []string{"example.com/TypeA"}},
+			port: pasta.Port{Node: nodeID, Direction: "left", Name: "input", Types: []string{"example.com/TypeA"}},
 			want: pasta.ErrTypeName,
+		},
+		{
+			name: "bad name",
+			port: pasta.Port{Node: nodeID, Direction: "left", Name: "input!", Types: []string{"example.com/typeA"}},
+			want: pasta.ErrPortName,
 		},
 	}
 
@@ -419,6 +427,113 @@ func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 			}
 			assertWorkspaceSnapshot(t, w, onlyNode)
 		})
+	}
+}
+
+func TestWorkspacePortNameValidationAndScopedUniqueness(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	left, err := w.AddPort(pasta.Port{
+		Node:      nodeID,
+		Direction: "left",
+		Name:      "input 1-A_b",
+		Types:     []string{"example.com/typeA"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort valid name: %v", err)
+	}
+	if _, err := w.AddPort(pasta.Port{
+		Node:      nodeID,
+		Direction: "left",
+		Name:      "input 1-A_b",
+		Types:     []string{"example.com/typeA"},
+	}); !errors.Is(err, pasta.ErrPortName) {
+		t.Fatalf("AddPort duplicate left name error = %v, want %v", err, pasta.ErrPortName)
+	}
+	right, err := w.AddPort(pasta.Port{
+		Node:      nodeID,
+		Direction: "right",
+		Name:      "input 1-A_b",
+		Types:     []string{"example.com/typeA"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort same name on opposite side: %v", err)
+	}
+	auxLeft, err := w.AddPort(pasta.Port{
+		Node:      nodeID,
+		Direction: "left",
+		Name:      "aux",
+		Types:     []string{"example.com/typeA"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort aux left: %v", err)
+	}
+	if err := w.SetPortName(auxLeft, "input 1-A_b"); !errors.Is(err, pasta.ErrPortName) {
+		t.Fatalf("SetPortName duplicate left name error = %v, want %v", err, pasta.ErrPortName)
+	}
+	if err := w.SetPortName(right, "bad.name"); !errors.Is(err, pasta.ErrPortName) {
+		t.Fatalf("SetPortName invalid name error = %v, want %v", err, pasta.ErrPortName)
+	}
+	if err := w.SetPortName(right, "output"); err != nil {
+		t.Fatalf("SetPortName right: %v", err)
+	}
+	if err := w.SetPortName(left, "output"); err != nil {
+		t.Fatalf("SetPortName same name on opposite side: %v", err)
+	}
+
+	if err := w.AddNodeClass(testNodeClass{
+		name: "example.com/DuplicateDefaultPorts",
+		params: pasta.NodeClassParams{InitialPorts: []pasta.Port{
+			{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
+			{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
+		}},
+	}); !errors.Is(err, pasta.ErrPortName) {
+		t.Fatalf("AddNodeClass duplicate default port error = %v, want %v", err, pasta.ErrPortName)
+	}
+	if _, err := w.AddPlaceholderNode("example.com/DuplicatePlaceholderPorts", []pasta.Port{
+		{Direction: "right", Name: "output", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "output", Types: []string{"example.com/typeA"}},
+	}); !errors.Is(err, pasta.ErrPortName) {
+		t.Fatalf("AddPlaceholderNode duplicate port error = %v, want %v", err, pasta.ErrPortName)
+	}
+
+	placeholderID, err := w.AddPlaceholderNode("example.com/DuplicateReplacementPorts", []pasta.Port{
+		{Direction: "left", Name: "input", Types: []string{"example.com/typeA"}},
+	})
+	if err != nil {
+		t.Fatalf("AddPlaceholderNode replacement target: %v", err)
+	}
+	before := w.Snapshot()
+	if err := w.AddNodeClass(testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/DuplicateReplacementPorts"},
+		newNode: func() (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+		replacePlaceholder: func(state pasta.NodeClassPlaceholderState) (*pasta.NodeClassPlaceholderReplacement, error) {
+			state.LeftPorts = append(state.LeftPorts, pasta.Port{
+				Direction: "left",
+				Name:      "input",
+				Types:     []string{"example.com/typeA"},
+			})
+			return &pasta.NodeClassPlaceholderReplacement{Node: &workspaceNode{}, State: state}, nil
+		},
+	}); !errors.Is(err, pasta.ErrPortName) {
+		t.Fatalf("AddNodeClass duplicate replacement port error = %v, want %v", err, pasta.ErrPortName)
+	}
+	after := w.Snapshot()
+	if !after.Nodes[placeholderID].Placeholder ||
+		!reflect.DeepEqual(after.Nodes[placeholderID].LeftPorts, before.Nodes[placeholderID].LeftPorts) ||
+		len(after.Ports) != len(before.Ports) {
+		t.Fatalf("duplicate replacement mutated workspace: before=%#v after=%#v", before, after)
+	}
+	for id, port := range before.Ports {
+		if !equalPortSnapshot(after.Ports[id], port) {
+			t.Fatalf("duplicate replacement mutated port %d: before=%#v after=%#v", id, port, after.Ports[id])
+		}
 	}
 }
 
@@ -441,7 +556,7 @@ func TestWorkspaceClassWideNodeOperations(t *testing.T) {
 		t.Fatalf("AddNode C: %v", err)
 	}
 	placeholderID, err := w.AddPlaceholderNode("example.com/Target", []pasta.Port{
-		{Direction: "right", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
 	})
 	if err != nil {
 		t.Fatalf("AddPlaceholderNode: %v", err)
@@ -1883,7 +1998,7 @@ func TestWorkspaceNodeCallbackFailuresBecomePlaceholders(t *testing.T) {
 		}
 		addOldPopup(t, w, nodeID)
 
-		if _, err := w.AddPort(pasta.Port{Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}}); !errors.Is(err, failErr) {
+		if _, err := w.AddPort(pasta.Port{Node: nodeID, Direction: "left", Name: "left1", Types: []string{"example.com/typeA"}}); !errors.Is(err, failErr) {
 			t.Fatalf("AddPort error = %v, want %v", err, failErr)
 		}
 		assertFailedPlaceholder(t, w, nodeID, "OnPortAdd", "boom")
@@ -2296,7 +2411,7 @@ func TestWorkspacePlaceholderNodeLifecycleAndSnapshots(t *testing.T) {
 	rootLeft := mustAddPort(t, w, rootID, "left", "example.com/typeA")
 
 	placeholderID, err := w.AddPlaceholderNodeWithRoot("example.com/Missing", true, []pasta.Port{
-		{Direction: "right", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
 	})
 	if err != nil {
 		t.Fatalf("AddPlaceholderNodeWithRoot: %v", err)
@@ -2389,7 +2504,7 @@ func TestWorkspaceReplaceNodeWithPlaceholderPreservesLinksButRemovesCallbacks(t 
 	notifications = nil
 
 	if err := w.ReplaceNodeWithPlaceholder(nodeBID, []pasta.Port{
-		{Direction: "right", Types: []string{pasta.AnyType}},
+		{Direction: "right", Name: "right2", Types: []string{pasta.AnyType}},
 	}); err != nil {
 		t.Fatalf("ReplaceNodeWithPlaceholder: %v", err)
 	}
@@ -2434,8 +2549,8 @@ func TestWorkspacePlaceholderLinksParticipateInDAGChecks(t *testing.T) {
 		t.Fatalf("AddNode A: %v", err)
 	}
 	placeholderID, err := w.AddPlaceholderNode("example.com/Missing", []pasta.Port{
-		{Direction: "left", Types: []string{"example.com/typeA"}},
-		{Direction: "right", Types: []string{"example.com/typeA"}},
+		{Direction: "left", Name: "left1", Types: []string{"example.com/typeA"}},
+		{Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
 	})
 	if err != nil {
 		t.Fatalf("AddPlaceholderNode: %v", err)
@@ -2482,11 +2597,11 @@ func TestWorkspaceSetNodePortOrder(t *testing.T) {
 			},
 		},
 		Ports: map[uint64]pasta.PortSnapshot{
-			leftA:  {Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}},
-			leftB:  {Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}},
-			leftC:  {Node: nodeID, Direction: "left", Types: []string{"example.com/typeA"}},
-			rightA: {Node: nodeID, Direction: "right", Types: []string{"example.com/typeA"}},
-			rightB: {Node: nodeID, Direction: "right", Types: []string{"example.com/typeA"}},
+			leftA:  {Node: nodeID, Direction: "left", Name: "left1", Types: []string{"example.com/typeA"}},
+			leftB:  {Node: nodeID, Direction: "left", Name: "left2", Types: []string{"example.com/typeA"}},
+			leftC:  {Node: nodeID, Direction: "left", Name: "left3", Types: []string{"example.com/typeA"}},
+			rightA: {Node: nodeID, Direction: "right", Name: "right1", Types: []string{"example.com/typeA"}},
+			rightB: {Node: nodeID, Direction: "right", Name: "right2", Types: []string{"example.com/typeA"}},
 		},
 	})
 
@@ -2559,6 +2674,7 @@ func TestWorkspaceAnyPortTypeLinksToAnyOtherType(t *testing.T) {
 	multiRight, err := w.AddPort(pasta.Port{
 		Node:      nodeD,
 		Direction: "right",
+		Name:      "right1",
 		Types:     []string{"example.com/typeB", "example.com/typeC"},
 	})
 	if err != nil {
@@ -2600,6 +2716,7 @@ func TestWorkspaceAnyPortTypeLinksToAnyOtherType(t *testing.T) {
 	multiLeft, err := w.AddPort(pasta.Port{
 		Node:      nodeE,
 		Direction: "left",
+		Name:      "left1",
 		Types:     []string{"example.com/typeD", "example.com/typeE"},
 	})
 	if err != nil {
@@ -2608,6 +2725,7 @@ func TestWorkspaceAnyPortTypeLinksToAnyOtherType(t *testing.T) {
 	singleAnyRight, err := w.AddPort(pasta.Port{
 		Node:      nodeF,
 		Direction: "right",
+		Name:      "right1",
 		Types:     []string{pasta.AnyType, "example.com/typeF"},
 	})
 	if err != nil {
@@ -3037,9 +3155,18 @@ func emptyPopupsIfNil(values []pasta.NodePopup) []pasta.NodePopup {
 func mustAddPort(t *testing.T, w *pasta.Workspace, node uint64, direction, typ string) uint64 {
 	t.Helper()
 
+	snapshot, ok := w.NodeSnapshot(node)
+	if !ok {
+		t.Fatalf("NodeSnapshot(%d) missing", node)
+	}
+	count := len(snapshot.LeftPorts)
+	if direction == "right" {
+		count = len(snapshot.RightPorts)
+	}
 	id, err := w.AddPort(pasta.Port{
 		Node:      node,
 		Direction: direction,
+		Name:      fmt.Sprintf("%s%d", direction, count+1),
 		Types:     []string{typ},
 	})
 	if err != nil {

@@ -47,6 +47,7 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 	left, err := w.AddPort(pasta.Port{
 		Node:      nodeAID,
 		Direction: "left",
+		Name:      "left1",
 		Types:     []string{"example.com/typeA"},
 	})
 	if err != nil {
@@ -55,6 +56,7 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 	right, err := w.AddPort(pasta.Port{
 		Node:      nodeBID,
 		Direction: "right",
+		Name:      "right1",
 		Types:     []string{"example.com/typeA"},
 	})
 	if err != nil {
@@ -104,6 +106,7 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 	assertPortNotification(t, notifications[2], pasta.PortSnapshot{
 		Node:      nodeAID,
 		Direction: "left",
+		Name:      "left1",
 		Types:     []string{"example.com/typeA"},
 	})
 	assertNodeNotification(t, notifications[3], pasta.NodeSnapshot{
@@ -120,6 +123,7 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 	assertPortNotification(t, notifications[7], pasta.PortSnapshot{
 		Node:      nodeAID,
 		Direction: "left",
+		Name:      "left1",
 		Types:     []string{"example.com/typeA"},
 		Links:     []uint64{link},
 	})
@@ -197,6 +201,7 @@ func TestWorkspaceNotificationMultipleSubscriptions(t *testing.T) {
 	portA, err := w.AddPort(pasta.Port{
 		Node:      nodeA,
 		Direction: "left",
+		Name:      "left1",
 		Types:     []string{"example.com/typeA"},
 	})
 	if err != nil {
