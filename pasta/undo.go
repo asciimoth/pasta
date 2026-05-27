@@ -37,6 +37,10 @@ type undoAddedLink struct {
 	ID uint64
 }
 
+type undoGroup struct {
+	Entries []undoEntry
+}
+
 type undoRemovedLink struct {
 	ID         uint64
 	Link       LinkSnapshot
@@ -163,6 +167,19 @@ func (w *Workspace) applyUndoEntry(entry undoEntry) (undoEntry, bool) {
 			return nil, false
 		}
 		return undoAddedLink{ID: e.ID}, true
+	case undoGroup:
+		mirrors := make([]undoEntry, 0, len(e.Entries))
+		for _, child := range e.Entries {
+			mirror, ok := w.applyUndoEntry(child)
+			if !ok || mirror == nil {
+				continue
+			}
+			mirrors = append([]undoEntry{mirror}, mirrors...)
+		}
+		if len(mirrors) == 0 {
+			return nil, false
+		}
+		return undoGroup{Entries: mirrors}, true
 	default:
 		return nil, false
 	}

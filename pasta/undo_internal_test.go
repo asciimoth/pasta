@@ -92,6 +92,60 @@ func TestWorkspaceUndoRedoDropsUniqueClassRestoreWhenDuplicateExists(t *testing.
 	}
 }
 
+func TestWorkspaceUndoRedoGroupBestEffort(t *testing.T) {
+	w := NewWorkspace(&nopLoggerFactory{})
+	leftNode, err := w.AddNode(&internalNode{}, "example.com/GroupUndo", "left")
+	if err != nil {
+		t.Fatalf("AddNode left: %v", err)
+	}
+	rightNode, err := w.AddNode(&internalNode{}, "example.com/GroupUndo", "right")
+	if err != nil {
+		t.Fatalf("AddNode right: %v", err)
+	}
+	leftPort, err := w.AddPort(Port{
+		Node:      leftNode,
+		Direction: "right",
+		Name:      "out",
+		Types:     []string{"example.com/typeA"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort left: %v", err)
+	}
+	rightPort, err := w.AddPort(Port{
+		Node:      rightNode,
+		Direction: "left",
+		Name:      "in",
+		Types:     []string{"example.com/typeA"},
+	})
+	if err != nil {
+		t.Fatalf("AddPort right: %v", err)
+	}
+	link, _, err := w.AddLink(leftPort, rightPort)
+	if err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+
+	w.Lock()
+	w.undoLog = []undoEntry{undoGroup{Entries: []undoEntry{
+		undoAddedLink{ID: 999999},
+		undoAddedLink{ID: link},
+		undoAddedNode{ID: 888888},
+	}}}
+	w.Unlock()
+	w.Undo()
+	if _, ok := w.LinkSnapshot(link); ok {
+		t.Fatalf("link %d survived grouped undo", link)
+	}
+	if _, ok := w.NodeSnapshot(leftNode); !ok {
+		t.Fatalf("node %d was removed by failed grouped child", leftNode)
+	}
+
+	w.Redo()
+	if _, _, ok := w.LinkByPorts(leftPort, rightPort); !ok {
+		t.Fatalf("link %d was not restored by grouped redo", link)
+	}
+}
+
 func assertInternalSnapshot(t *testing.T, w *Workspace, want WorkspaceSnapshot) {
 	t.Helper()
 	got := w.Snapshot()
