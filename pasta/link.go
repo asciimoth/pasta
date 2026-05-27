@@ -7,6 +7,8 @@ var (
 	ErrLinkSameNode = errors.New("same node link")
 	// ErrLinkSamePort reports that a link connects a port to itself.
 	ErrLinkSamePort = errors.New("same port link")
+	// ErrNoLink reports that a link ID does not exist in the workspace.
+	ErrNoLink = errors.New("link not found")
 )
 
 // Link connects one left port to one right port.

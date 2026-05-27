@@ -53,6 +53,10 @@ type Workspace struct {
 	classes  *orderedmap.OrderedMap[string, NodeClass]
 	nameRand *rand.Rand
 
+	resources     map[resourceKey]*resourceState
+	nodeResources map[uint64]map[resourceKey]struct{}
+	linkResources map[uint64]map[resourceKey]struct{}
+
 	nextSubscriptionID  uint64
 	subscribers         map[uint64]NotificationCallback
 	nodeMenuSubscribers map[uint64]map[uint64]struct{}
@@ -80,6 +84,10 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		links:    orderedmap.New[uint64, *Link](),
 		classes:  orderedmap.New[string, NodeClass](),
 		nameRand: rand.New(rand.NewSource(1)),
+
+		resources:     make(map[resourceKey]*resourceState),
+		nodeResources: make(map[uint64]map[resourceKey]struct{}),
+		linkResources: make(map[uint64]map[resourceKey]struct{}),
 
 		nextSubscriptionID:  1,
 		subscribers:         make(map[uint64]NotificationCallback),
@@ -217,6 +225,7 @@ func (w *Workspace) Close() {
 		}
 		pair.Value.OnStop()
 	}
+	w.closeAllResourcesLocked()
 
 	for len(w.pending) > 0 {
 		ops := w.pending
@@ -271,6 +280,7 @@ func (w *Workspace) RemoveNode(id uint64) {
 	w.undoRecordingDisabled -= 1
 	record.LeftPorts = nil
 	record.RightPorts = nil
+	w.closeNodeResourcesLocked(id)
 
 	w.log.Debug("removed node", id)
 	w.enqueueNodeNotification(NotificationNodeRemoved, id, removed)
@@ -284,6 +294,7 @@ func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, noti
 	}
 
 	nodeStop(record.Node)
+	w.closeNodeResourcesLocked(id)
 	record.Node = nil
 	record.stopped = false
 	record.Popups = []NodePopup{{
@@ -449,6 +460,7 @@ func (w *Workspace) RemoveLink(id uint64) {
 
 	w.nodeEvLinkRemoved(link.LeftPortNode, id, link.LeftPort, link.Type, "left")
 	w.nodeEvLinkRemoved(link.RightPortNode, id, link.RightPort, link.Type, "right")
+	w.closeLinkResourcesLocked(id)
 
 	w.log.Debug("removed link", id)
 	w.recomputeRootPaths(true)
@@ -753,6 +765,7 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 	record.Menu = nil
 	restored := record.InitData()
 	nodeStop(old)
+	w.closeNodeResourcesLocked(id)
 
 	record.Node = node
 	if rename {
@@ -774,6 +787,7 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 		if wasPlaceholder {
 			if failed := w.activatePlaceholderLinks(record); len(failed) > 0 {
 				nodeStop(record.Node)
+				w.closeNodeResourcesLocked(id)
 				record.Node = nil
 				record.stopped = false
 				return firstError(failed)
@@ -782,6 +796,7 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 			if !w.verifyDAG() {
 				w.deactivateNodeLinks(record)
 				nodeStop(record.Node)
+				w.closeNodeResourcesLocked(id)
 				record.Node = nil
 				record.stopped = false
 				w.refreshPlaceholderLinks(id, true)
@@ -791,6 +806,7 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 			if failed := w.notifyActivatedPlaceholderLinks(record); len(failed) > 0 {
 				w.deactivateNodeLinks(record)
 				nodeStop(record.Node)
+				w.closeNodeResourcesLocked(id)
 				record.Node = nil
 				record.stopped = false
 				w.refreshPlaceholderLinks(id, true)
@@ -801,6 +817,7 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 			if failed := w.recomputeRootPaths(false); len(failed) > 0 {
 				w.deactivateNodeLinks(record)
 				nodeStop(record.Node)
+				w.closeNodeResourcesLocked(id)
 				record.Node = nil
 				record.stopped = false
 				return firstError(failed)
@@ -867,6 +884,7 @@ func (w *Workspace) replaceNodeWithPlaceholder(id uint64, ports []Port, name str
 	if old != nil {
 		nodeStop(old)
 	}
+	w.closeNodeResourcesLocked(id)
 	record.Popups = nil
 	record.Menu = nil
 	record.Node = nil
@@ -933,6 +951,7 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 	record.Popups = nil
 	record.Menu = nil
 	restored := record.InitData()
+	w.closeNodeResourcesLocked(id)
 	record.Node = node
 	record.stopped = false
 	if err := record.OnInit(w, &restored, true, true, true, false); err != nil {
@@ -948,6 +967,7 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 		}
 		if failed := w.activatePlaceholderLinks(record); len(failed) > 0 {
 			nodeStop(record.Node)
+			w.closeNodeResourcesLocked(id)
 			record.Node = nil
 			record.stopped = false
 			return firstError(failed)
@@ -956,6 +976,7 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 		if !w.verifyDAG() {
 			w.deactivateNodeLinks(record)
 			nodeStop(record.Node)
+			w.closeNodeResourcesLocked(id)
 			record.Node = nil
 			record.stopped = false
 			w.refreshPlaceholderLinks(id, true)
@@ -965,6 +986,7 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 		if failed := w.notifyActivatedPlaceholderLinks(record); len(failed) > 0 {
 			w.deactivateNodeLinks(record)
 			nodeStop(record.Node)
+			w.closeNodeResourcesLocked(id)
 			record.Node = nil
 			record.stopped = false
 			w.refreshPlaceholderLinks(id, true)
@@ -975,6 +997,7 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 		if failed := w.recomputeRootPaths(false); len(failed) > 0 {
 			w.deactivateNodeLinks(record)
 			nodeStop(record.Node)
+			w.closeNodeResourcesLocked(id)
 			record.Node = nil
 			record.stopped = false
 			return firstError(failed)
@@ -1130,6 +1153,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 
 	if !w.verifyDAG() {
 		w.links.Delete(link.ID)
+		w.closeLinkResourcesLocked(link.ID)
 		return 0, "", ErrCycle
 	}
 
@@ -1137,6 +1161,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 		err := leftNode.OnLinkAdd(link.ID, Left.ID, link.Type, Left.Direction)
 		if err != nil {
 			w.links.Delete(link.ID)
+			w.closeLinkResourcesLocked(link.ID)
 			w.log.Debugf("node %d faled in OnLinkAdd", leftNode.ID)
 			w.failNodeLocked(leftNode.ID, "OnLinkAdd", err, true, true)
 			return 0, "", err
@@ -1147,6 +1172,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 			w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
 			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
 			w.nodeEvLinkRemoved(leftNode.ID, link.ID, Left.ID, link.Type, Left.Direction)
+			w.closeLinkResourcesLocked(link.ID)
 			return 0, "", err
 		}
 	}
