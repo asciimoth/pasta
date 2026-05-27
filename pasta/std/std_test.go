@@ -454,6 +454,41 @@ func TestStdBoolNodesPropagateFanoutAndMenus(t *testing.T) {
 	})
 }
 
+func TestStdBoolConstantsSaveAndRestoreValueConfig(t *testing.T) {
+	w := newStdWorkspace(t)
+	addByClass(t, w, NodeTypeTrueConstant, "true")
+	addByClass(t, w, NodeTypeFalseConstant, "false")
+
+	cfg := configer.NewMemory(nil)
+	if err := w.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig bool constants: %v", err)
+	}
+	assertConfigValue(t, cfg, configer.Path{"true", "value"}, true)
+	assertConfigValue(t, cfg, configer.Path{"false", "value"}, false)
+
+	restoredCfg := configer.NewMemory(map[string]any{
+		"true":  map[string]any{"Class": NodeTypeTrueConstant, "value": false},
+		"false": map[string]any{"Class": NodeTypeFalseConstant, "value": true},
+	})
+	restored, err := pasta.WorkspaceFromConfig(allStdClasses(), restoredCfg, testLogFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig bool constants: %v", err)
+	}
+	restoredNodes := map[string]uint64{}
+	for _, name := range []string{"true", "false"} {
+		id, ok := restored.NodeIDByName(name)
+		if !ok {
+			t.Fatalf("restored node %q missing", name)
+		}
+		restoredNodes[name] = id
+	}
+	menus := subscribeStdMenus(t, restored, restoredNodes)
+	expectStdBoolGraph(t, restored, menus, restoredNodes, stdBoolExpect{
+		labels: map[string]string{"true": "false", "false": "true"},
+		menus:  map[string]bool{"true": false, "false": true},
+	})
+}
+
 const customSelectType = "example.com/selectValue"
 
 type customValueClass struct {
@@ -892,6 +927,17 @@ func linkByPortName(t *testing.T, w *pasta.Workspace, rightNode uint64, rightNam
 		t.Fatalf("AddLink %s -> %s: %v", rightName, leftName, err)
 	}
 	return link
+}
+
+func assertConfigValue(t *testing.T, cfg configer.Config, path configer.Path, want any) {
+	t.Helper()
+	got, err := cfg.Get(path)
+	if err != nil {
+		t.Fatalf("Get(%v): %v", path, err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Get(%v) = %#v, want %#v", path, got, want)
+	}
 }
 
 func portByName(t *testing.T, snapshot pasta.WorkspaceSnapshot, node uint64, direction, name string) uint64 {

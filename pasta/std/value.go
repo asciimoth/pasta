@@ -155,6 +155,32 @@ func readFloat(cfg configer.Config, fallback float64) float64 {
 	return fallback
 }
 
+func parseBoolAny(value any) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		b, err := strconv.ParseBool(v)
+		return b, err == nil
+	default:
+		return false, false
+	}
+}
+
+func readBool(cfg configer.Config, fallback bool) bool {
+	if cfg == nil {
+		return fallback
+	}
+	raw, err := cfg.Get(configer.Path{"value"})
+	if err != nil {
+		return fallback
+	}
+	if v, ok := parseBoolAny(raw); ok {
+		return v
+	}
+	return fallback
+}
+
 func parseStringAny(value any) (string, bool) {
 	switch v := value.(type) {
 	case string:

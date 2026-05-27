@@ -1,6 +1,7 @@
 package std
 
 import (
+	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/formular"
 	"github.com/asciimoth/pasta/pasta"
 )
@@ -101,6 +102,16 @@ func (n *boolNode) OnEvent(event pasta.Event, linkType string, _ []string, recei
 	n.inputs[event.ReceiverPort] = value
 	n.recalculate(true)
 	return nil
+}
+
+func (n *boolNode) OnSave(cfg configer.Config) error {
+	if n.op != "const" {
+		return nil
+	}
+	if err := pasta.DeleteNodeOwnedConfigKeys(cfg); err != nil {
+		return err
+	}
+	return cfg.Set(configer.Path{"value"}, n.value)
 }
 
 func (n *boolNode) recalculate(broadcast bool) {

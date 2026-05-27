@@ -20,6 +20,6 @@ func (FalseConstantClass) LongDescription() string {
 func (FalseConstantClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: TypeBool, InitialPorts: []pasta.Port{rightPort(TypeBool)}}
 }
-func (FalseConstantClass) NewNode(configer.Config, ...*pasta.NodeClassState) (pasta.Node, error) {
-	return newBoolConstantNode(false), nil
+func (FalseConstantClass) NewNode(cfg configer.Config, _ ...*pasta.NodeClassState) (pasta.Node, error) {
+	return newBoolConstantNode(readBool(cfg, false)), nil
 }
