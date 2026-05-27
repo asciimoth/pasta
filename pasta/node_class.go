@@ -91,7 +91,9 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 	w.classes.Set(name, class)
 	w.enqueueNodeClassNotification(NotificationNodeClassAdded, name, nodeClassSnapshot(class))
 	if params.Unique {
+		w.undoRecordingDisabled += 1
 		w.removeUniqueNodeClassDuplicatesLocked(name)
+		w.undoRecordingDisabled -= 1
 	}
 	placeholders := []nodeClassPlaceholderCandidate{}
 	if !wasPresent {

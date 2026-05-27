@@ -57,6 +57,7 @@ func WorkspaceFromConfig(classes []NodeClass, cfg configer.Config, logf LogFacto
 	w.Lock()
 	w.nextid = nextID
 	w.isReady = false
+	w.undoRecordingDisabled += 1
 	w.Unlock()
 
 	for _, class := range classes {
@@ -91,6 +92,11 @@ func WorkspaceFromConfig(classes []NodeClass, cfg configer.Config, logf LogFacto
 	}
 
 	w.Ready()
+	w.Lock()
+	w.undoRecordingDisabled -= 1
+	w.undoLog = w.undoLog[:0]
+	w.redoLog = w.redoLog[:0]
+	w.Unlock()
 	return w, nil
 }
 
