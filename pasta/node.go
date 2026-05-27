@@ -62,7 +62,8 @@ type Node interface {
 	// isReplacement is true when OnInit is running for a node implementation
 	// that replaced an existing node record. isPlaceholderReplacement is true
 	// when the replaced record was a placeholder. isClassConstructed is true
-	// when the node was created by a NodeClassFactory.
+	// when the node was created by a NodeClassFactory. isRestored is true when
+	// the node is being constructed by WorkspaceFromConfig.
 	OnInit(
 		w *Workspace,
 		l Logger,
@@ -72,6 +73,7 @@ type Node interface {
 		isReplacement bool,
 		isPlaceholderReplacement bool,
 		isClassConstructed bool,
+		isRestored bool,
 	) error
 
 	// OnReady is called once the workspace is ready to run.
@@ -224,6 +226,7 @@ func (n *nodeRecord) OnInit(
 	isReplacement bool,
 	isPlaceholderReplacement bool,
 	isClassConstructed bool,
+	isRestored bool,
 ) (err error) {
 	if n.stopped || n.Node == nil {
 		return
@@ -234,7 +237,7 @@ func (n *nodeRecord) OnInit(
 			err = ErrNodePanic
 		}
 	}()
-	err = n.Node.OnInit(w, n.L, n.ID, n.Class, restored, isReplacement, isPlaceholderReplacement, isClassConstructed)
+	err = n.Node.OnInit(w, n.L, n.ID, n.Class, restored, isReplacement, isPlaceholderReplacement, isClassConstructed, isRestored)
 	return
 }
 

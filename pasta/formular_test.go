@@ -181,6 +181,20 @@ func TestWorkspaceCalculatorMenusRecalculateGraph(t *testing.T) {
 	}
 	assertCalcMenuValues(t, graph, state, wantInitial)
 
+	restoredGraph, _ := restoreCalcGraph(t, graph)
+	restoredState := formular.NewMenuSnapshotState()
+	restoredSubscriptionID := restoredGraph.w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		if notification.Kind == pasta.NotificationNodeMenu {
+			restoredState.Apply(notification.Formular)
+		}
+	})
+	for _, node := range restoredGraph.nodes {
+		if !restoredGraph.w.SubscribeNodeMenu(node.id, restoredSubscriptionID) {
+			t.Fatalf("restored SubscribeNodeMenu(%d) returned false", node.id)
+		}
+	}
+	assertCalcMenuValues(t, restoredGraph, restoredState, wantInitial)
+
 	graph.w.SendNodeFormularMsg(graph.nodes["c10"].id, formular.FieldUpdateMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageFieldUpdate,

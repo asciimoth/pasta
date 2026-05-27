@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ type calcNode struct {
 	right uint64
 }
 
-func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool) error {
+func (n *calcNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool, isRestored bool) error {
 	n.w = w
 	n.l = l
 	n.id = id
@@ -188,6 +189,9 @@ func (n *calcNode) OnFormularMsg(message any) error {
 func (n *calcNode) OnSave(cfg configer.Config) error {
 	if n.kind != "constant" {
 		return nil
+	}
+	if err := pasta.DeleteNodeOwnedConfigKeys(cfg); err != nil {
+		return err
 	}
 	return cfg.Set(configer.Path{"value"}, fmt.Sprintf("%g", n.value))
 }
@@ -427,6 +431,26 @@ func TestWorkspaceEventsCalculatorTopology(t *testing.T) {
 		t.Fatal("different link histories produced identical logs")
 	}
 
+	restored, _ := restoreCalcGraph(t, first)
+	if got := restored.states(); !reflect.DeepEqual(got, wantStates) {
+		t.Fatalf("restored states = %#v, want %#v", got, wantStates)
+	}
+	if got := restored.labels(); !reflect.DeepEqual(got, wantLabels) {
+		t.Fatalf("restored labels = %#v, want %#v", got, wantLabels)
+	}
+	if got, want := restored.topology(), first.topology(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored topology = %#v, want %#v", got, want)
+	}
+	restored.w.RemoveLink(restored.links["c2.out>div.b"])
+	restoredWant := map[string]float64{
+		"c10": 10, "c5": 5, "c2": 2, "c3": 3, "c4": 4,
+		"sum": 20, "sub": 16, "div": 0, "mult": 0,
+		"sumResult": 20, "subResult": 16, "divResult": 0, "final": 0,
+	}
+	if got := restored.states(); !reflect.DeepEqual(got, restoredWant) {
+		t.Fatalf("restored states after input disconnect = %#v, want %#v", got, restoredWant)
+	}
+
 	first.w.RemoveLink(first.links["c2.out>div.b"])
 	wantStates["div"] = 0
 	wantStates["mult"] = 0
@@ -546,8 +570,18 @@ func buildCalcGraph(t *testing.T, linkOrder []string) (*calcGraph, string) {
 				short:  "Calculator " + spec.name,
 				params: pasta.NodeClassParams{InitialPorts: calcDefaultPorts(spec.kind)},
 			},
-			newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
-				node := &calcNode{kind: spec.kind, value: spec.value, inputs: make(map[uint64]float64)}
+			newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
+				value := spec.value
+				if cfg != nil && spec.kind == "constant" {
+					if raw, err := cfg.Get(configer.Path{"value"}); err == nil {
+						if s, ok := raw.(string); ok {
+							if parsed, err := strconv.ParseFloat(s, 64); err == nil {
+								value = parsed
+							}
+						}
+					}
+				}
+				node := &calcNode{kind: spec.kind, value: value, inputs: make(map[uint64]float64)}
 				graph.nodes[spec.name] = node
 				return node, nil
 			},
@@ -588,6 +622,117 @@ func buildCalcGraph(t *testing.T, linkOrder []string) (*calcGraph, string) {
 	}
 
 	return graph, logf.Result()
+}
+
+func restoreCalcGraph(t *testing.T, original *calcGraph) (*calcGraph, string) {
+	t.Helper()
+
+	cfg := configer.NewMemory(nil)
+	if err := original.w.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	logf := &StringLoggerFactory{}
+	graph := &calcGraph{
+		nodes: make(map[string]*calcNode),
+		ports: make(map[string]uint64),
+		links: make(map[string]uint64),
+	}
+	w, err := pasta.WorkspaceFromConfig(calcNodeClasses(graph), cfg, logf)
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig: %v", err)
+	}
+	graph.w = w
+	indexCalcGraph(t, graph)
+	return graph, logf.Result()
+}
+
+func calcNodeClasses(graph *calcGraph) []pasta.NodeClass {
+	classes := make([]pasta.NodeClass, 0, len(calcNodeSpecs()))
+	for _, spec := range calcNodeSpecs() {
+		spec := spec
+		className := calcNodeClassName(spec.name)
+		classes = append(classes, testFactoryNodeClass{
+			testNodeClass: testNodeClass{
+				name:   className,
+				short:  "Calculator " + spec.name,
+				params: pasta.NodeClassParams{InitialPorts: calcDefaultPorts(spec.kind)},
+			},
+			newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
+				value := spec.value
+				if cfg != nil && spec.kind == "constant" {
+					if raw, err := cfg.Get(configer.Path{"value"}); err == nil {
+						if s, ok := raw.(string); ok {
+							if parsed, err := strconv.ParseFloat(s, 64); err == nil {
+								value = parsed
+							}
+						}
+					}
+				}
+				node := &calcNode{kind: spec.kind, value: value, inputs: make(map[uint64]float64)}
+				graph.nodes[spec.name] = node
+				return node, nil
+			},
+		})
+	}
+	return classes
+}
+
+func calcNodeSpecs() []struct {
+	name  string
+	kind  string
+	value float64
+} {
+	return []struct {
+		name  string
+		kind  string
+		value float64
+	}{
+		{"c10", "constant", 10},
+		{"c5", "constant", 5},
+		{"c2", "constant", 2},
+		{"c3", "constant", 3},
+		{"c4", "constant", 4},
+		{"sum", "sum", 0},
+		{"sub", "sub", 0},
+		{"mult", "mult", 0},
+		{"div", "div", 0},
+		{"sumResult", "result", 0},
+		{"subResult", "result", 0},
+		{"divResult", "result", 0},
+		{"final", "result", 0},
+	}
+}
+
+func indexCalcGraph(t *testing.T, graph *calcGraph) {
+	t.Helper()
+
+	snapshot := graph.w.Snapshot()
+	nodeNames := make(map[uint64]string, len(graph.nodes))
+	for name, node := range graph.nodes {
+		nodeNames[node.id] = name
+	}
+	for name, node := range graph.nodes {
+		nodeSnapshot, ok := snapshot.Nodes[node.id]
+		if !ok {
+			t.Fatalf("missing restored node %s", name)
+		}
+		for _, portID := range nodeSnapshot.RightPorts {
+			port := snapshot.Ports[portID]
+			graph.ports[name+"."+port.Name] = portID
+		}
+		for _, portID := range nodeSnapshot.LeftPorts {
+			port := snapshot.Ports[portID]
+			graph.ports[name+"."+port.Name] = portID
+		}
+	}
+	for linkID, link := range snapshot.Links {
+		sourceName := nodeNames[link.RightPortNode]
+		targetName := nodeNames[link.LeftPortNode]
+		sourcePort := snapshot.Ports[link.RightPort].Name
+		targetPort := snapshot.Ports[link.LeftPort].Name
+		graph.links[fmt.Sprintf("%s.%s>%s.%s", sourceName, sourcePort, targetName, targetPort)] = linkID
+	}
 }
 
 func calcDefaultPorts(kind string) []pasta.Port {

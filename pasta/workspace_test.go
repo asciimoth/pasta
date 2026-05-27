@@ -30,14 +30,16 @@ type workspaceNodeInitFlags struct {
 	isReplacement            bool
 	isPlaceholderReplacement bool
 	isClassConstructed       bool
+	isRestored               bool
 }
 
-func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool) error {
+func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool, isRestored bool) error {
 	n.l = l
 	n.initFlags = workspaceNodeInitFlags{
 		isReplacement:            isReplacement,
 		isPlaceholderReplacement: isPlaceholderReplacement,
 		isClassConstructed:       isClassConstructed,
+		isRestored:               isRestored,
 	}
 	if restored != nil {
 		data := *restored
@@ -531,7 +533,7 @@ func TestWorkspacePortNameValidationAndScopedUniqueness(t *testing.T) {
 	before := w.Snapshot()
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/DuplicateReplacementPorts"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -640,14 +642,14 @@ func (c testNodeClass) DefaultNodeParams() pasta.NodeClassParams {
 
 type testFactoryNodeClass struct {
 	testNodeClass
-	newNode func(previous ...*pasta.NodeClassState) (pasta.Node, error)
+	newNode func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error)
 }
 
-func (c testFactoryNodeClass) NewNode(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+func (c testFactoryNodeClass) NewNode(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 	if c.newNode == nil {
 		return nil, nil
 	}
-	return c.newNode(previous...)
+	return c.newNode(cfg, previous...)
 }
 
 func TestWorkspaceNodeClassesSnapshotsFactoriesAndNotifications(t *testing.T) {
@@ -693,7 +695,7 @@ func TestWorkspaceNodeClassesSnapshotsFactoriesAndNotifications(t *testing.T) {
 				},
 			},
 		},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			factoryNode = &workspaceNode{}
 			return factoryNode, nil
 		},
@@ -853,7 +855,7 @@ func TestWorkspaceAddNodeClassSuggestsPlaceholderReplacement(t *testing.T) {
 			name:  "example.com/RestoredNode",
 			short: "Restored node",
 		},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -1049,7 +1051,7 @@ func TestWorkspaceNodeClassReplacementKeepsCompatibleAnyLinks(t *testing.T) {
 
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/AnyRestored"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) > 0 {
 				switch previous[0].Label {
 				case "keep concrete", "keep any":
@@ -1119,7 +1121,7 @@ func TestWorkspaceUniqueNodeClassRegistrationRemovesDuplicatesBeforePlaceholderR
 				Unique: true,
 			},
 		},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -1182,7 +1184,7 @@ func TestWorkspaceUniqueNodeClassKeepsSmallestIDPlaceholderThenReplacesIt(t *tes
 				Unique: true,
 			},
 		},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -1278,7 +1280,7 @@ func TestWorkspaceUniqueNodeClassRejectsAddingNodes(t *testing.T) {
 				Unique: true,
 			},
 		},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			newNodeCalls += 1
 			return &workspaceNode{}, nil
 		},
@@ -1308,7 +1310,7 @@ func TestWorkspaceAddNodeByClassNameValidationPrecedesFactory(t *testing.T) {
 	newNodeCalls := 0
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/NamedFactory"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			newNodeCalls += 1
 			return &workspaceNode{}, nil
 		},
@@ -1462,7 +1464,7 @@ func TestWorkspaceAddNodeByClassFactoryFailuresDoNotMutate(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/FailFactoryNode"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			return nil, failErr
 		},
 	}); err != nil {
@@ -1476,7 +1478,7 @@ func TestWorkspaceAddNodeByClassFactoryFailuresDoNotMutate(t *testing.T) {
 
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/NilFactoryNode"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			return nil, nil
 		},
 	}); err != nil {
@@ -1515,7 +1517,7 @@ func TestWorkspaceNodeClassReplacementEdgeCases(t *testing.T) {
 	invalidBefore := w.Snapshot()
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/InvalidReplacement"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -1546,7 +1548,7 @@ func TestWorkspaceNodeClassReplacementEdgeCases(t *testing.T) {
 	badPortBefore := w.Snapshot()
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/BadNewPortReplacement"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -1821,7 +1823,7 @@ func TestWorkspacePlaceholderNameStateIsSuggestedAndApplied(t *testing.T) {
 	var suggested pasta.NodeClassState
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/NamedRestore"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}
@@ -1853,7 +1855,7 @@ func TestWorkspacePlaceholderNameReplacementFailuresDoNotMutate(t *testing.T) {
 
 	if err := w.AddNodeClass(testFactoryNodeClass{
 		testNodeClass: testNodeClass{name: "example.com/InvalidNameRestore"},
-		newNode: func(previous ...*pasta.NodeClassState) (pasta.Node, error) {
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
 			if len(previous) == 0 {
 				return &workspaceNode{}, nil
 			}

@@ -1,6 +1,10 @@
 package pasta
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/asciimoth/configer/configer"
+)
 
 var (
 	// ErrNoNodeClass reports that a node class is not registered in the workspace.
@@ -38,12 +42,13 @@ type NodeClassParams struct {
 // NodeClassFactory is the optional node-construction capability for NodeClass.
 //
 // Classes that implement this interface can be used with AddNodeByClass.
-// NewNode is called without previous state for fresh nodes. When restoring an
-// existing record, the workspace passes one NodeClassState pointer; factories
-// may mutate it before returning the replacement node. Returning nil for a
-// restore leaves the existing record unchanged.
+// NewNode receives a node-scoped Config when the node is being restored from
+// configuration; cfg is nil for fresh nodes. When restoring an existing record,
+// the workspace passes one NodeClassState pointer; factories may mutate it
+// before returning the replacement node. Returning nil for a restore leaves the
+// existing record unchanged.
 type NodeClassFactory interface {
-	NewNode(previous ...*NodeClassState) (Node, error)
+	NewNode(cfg configer.Config, previous ...*NodeClassState) (Node, error)
 }
 
 // NodeClassState describes existing workspace state that can be used to
@@ -100,7 +105,7 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 	}
 	for _, placeholder := range placeholders {
 		state := placeholder.state
-		node, err := factory.NewNode(&state)
+		node, err := factory.NewNode(nil, &state)
 		if err != nil {
 			return err
 		}
@@ -214,7 +219,7 @@ func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error)
 	if !ok {
 		return 0, ErrNodeClassFactory
 	}
-	node, err := factory.NewNode()
+	node, err := factory.NewNode(nil)
 	if err != nil {
 		return 0, err
 	}

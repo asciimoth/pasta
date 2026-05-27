@@ -423,7 +423,7 @@ func (w *Workspace) AddRootNode(node Node, class string, name ...string) (uint64
 func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool, name ...string) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
-	return w.addNodeLocked(node, class, root, optionalName(name), "", nil, nil, false)
+	return w.addNodeLocked(node, class, root, optionalName(name), "", nil, nil, false, false)
 }
 
 func (w *Workspace) addNodeByClassWithParams(node Node, class string, params NodeClassParams, name string) (uint64, error) {
@@ -435,10 +435,10 @@ func (w *Workspace) addNodeByClassWithParams(node Node, class string, params Nod
 	initData := &NodeInitData{
 		PrimaryType: params.PrimaryType,
 	}
-	return w.addNodeLocked(node, class, params.Root, name, params.PrimaryType, params.InitialPorts, initData, true)
+	return w.addNodeLocked(node, class, params.Root, name, params.PrimaryType, params.InitialPorts, initData, true, false)
 }
 
-func (w *Workspace) addNodeLocked(node Node, class string, root bool, name string, primaryType string, initialPorts []Port, initData *NodeInitData, isClassConstructed bool) (uint64, error) {
+func (w *Workspace) addNodeLocked(node Node, class string, root bool, name string, primaryType string, initialPorts []Port, initData *NodeInitData, isClassConstructed bool, isRestored bool) (uint64, error) {
 	if w.closed {
 		return 0, ErrWorkspaceClosed
 	}
@@ -505,7 +505,7 @@ func (w *Workspace) addNodeLocked(node Node, class string, root bool, name strin
 	}
 	w.nodes.Set(id, &rec)
 
-	if err := rec.OnInit(w, initData, false, false, isClassConstructed); err != nil {
+	if err := rec.OnInit(w, initData, false, false, isClassConstructed, isRestored); err != nil {
 		w.log.Debugf("node %d faled in OnInit", id)
 		w.failNodeLocked(id, "OnInit", err, false, false)
 		for _, portID := range addedPorts {
@@ -685,7 +685,7 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 		restored.Name = name
 	}
 	record.stopped = false
-	if err := record.OnInit(w, &restored, true, wasPlaceholder, false); err != nil {
+	if err := record.OnInit(w, &restored, true, wasPlaceholder, false, false); err != nil {
 		w.log.Debugf("node %d faled in OnInit", id)
 		w.failNodeLocked(id, "OnInit", err, true, true)
 		return err
@@ -860,7 +860,7 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 	restored := record.InitData()
 	record.Node = node
 	record.stopped = false
-	if err := record.OnInit(w, &restored, true, true, true); err != nil {
+	if err := record.OnInit(w, &restored, true, true, true, false); err != nil {
 		w.log.Debugf("node %d faled in OnInit", id)
 		w.failNodeLocked(id, "OnInit", err, true, true)
 		return err
@@ -1267,6 +1267,25 @@ func (w *Workspace) SetNodeName(id uint64, name string) error {
 	record.Name = name
 	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	return nil
+}
+
+// NodeIDByName returns the workspace ID for a node name.
+func (w *Workspace) NodeIDByName(name string) (uint64, bool) {
+	if err := ValidateNodeName(name); err != nil {
+		return 0, false
+	}
+
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return 0, false
+	}
+	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
+		if pair.Value != nil && pair.Value.Name == name {
+			return pair.Key, true
+		}
+	}
+	return 0, false
 }
 
 // AddNodePopup appends a user-facing popup note to a node and returns its ID.
