@@ -52,7 +52,7 @@
               enable = true;
               description = "go test --race";
               entry = let script = pkgs.writeShellScript "gotesthook" ''
-                just test
+                just test-go
               ''; in builtins.toString script;
               stages = [ "pre-commit" ];
             };
@@ -62,6 +62,8 @@
     in {
       devShells.default = pkgs.mkShell {
         inherit (checks.pre-commit-check) shellHook;
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+        CHROME_BIN = "${pkgs.chromium}/bin/chromium";
         buildInputs = with pkgs; [
           go
           golangci-lint

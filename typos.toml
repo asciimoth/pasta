@@ -1,5 +1,6 @@
 [default.extend-words]
 configer = "configer"
+clonable = "clonable"
 
 [files]
 extend-exclude = ["demo/string_nodes_test.go"]

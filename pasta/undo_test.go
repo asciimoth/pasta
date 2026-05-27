@@ -34,6 +34,14 @@ func TestWorkspaceUndoRedoNodeAndLinkMutationsRestorePublicState(t *testing.T) {
 	if err := w.SetNodePosition(sourceID, "10 20"); err != nil {
 		t.Fatalf("SetNodePosition: %v", err)
 	}
+	w.Undo()
+	if got := w.Snapshot().Nodes[sourceID].Position; got != "" {
+		t.Fatalf("position after undo = %q, want empty", got)
+	}
+	w.Redo()
+	if got := w.Snapshot().Nodes[sourceID].Position; got != "10 20" {
+		t.Fatalf("position after redo = %q, want 10 20", got)
+	}
 	source := w.Snapshot().Nodes[sourceID]
 	target := w.Snapshot().Nodes[targetID]
 	linkID, _, err := w.AddLink(source.RightPorts[0], target.LeftPorts[0])

@@ -1,0 +1,23 @@
+{
+  "name": "pasta-web-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/vendor-deps.mjs",
+    "build": "tsc -p tsconfig.json",
+    "build:wasm": "cd backend && GOWORK=off GOOS=js GOARCH=wasm go build -o ../public/pasta-demo.wasm .",
+    "copy:wasm-exec": "mkdir -p public && install -m 0644 \"$(go env GOROOT)/lib/wasm/wasm_exec.js\" public/wasm_exec.js",
+    "prepare:demo": "npm run copy:wasm-exec && npm run build:wasm && npm run build",
+    "serve": "python3 -m http.server 5173 --bind 127.0.0.1",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:e2e": "npm run prepare:demo && node --test tests/e2e/*.e2e.mjs"
+  },
+  "dependencies": {
+    "@asciimoth/formular-menu": "^0.2.1",
+    "litegraph.js": "^0.7.18"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.57.0",
+    "typescript": "^5.9.3"
+  }
+}

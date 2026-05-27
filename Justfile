@@ -1,40 +1,37 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load := true
 
-test:
-	go -C pasta test ./... --race -count=1
-	# go -C demo test ./... --race -count=1
+test-go:
+	go -C pasta test --race ./...
+	go -C demo/backend test --race ./...
+
+test-js: demo-node-deps
+	npm --prefix demo test
+	npm --prefix demo run test:e2e
+
+test: test-go test-js
 
 coverage:
 	go -C pasta test ./... --race -coverprofile=../coverage.out -coverpkg=./...
 
 vet:
 	go -C pasta vet ./...
-	# go -C demo vet ./...
+	go -C demo/backend vet ./...
 
 tidy:
 	go -C pasta mod tidy
-	# go -C demo mod tidy
+	GOWORK=off go -C demo/backend mod tidy
 	go work sync
 
 lint:
-  golangci-lint run ./pasta/...
-  # golangci-lint run ./pasta/... ./demo/...
+  golangci-lint run ./pasta/... ./demo/backend/...
 
-demo-build:
-	GOOS=js GOARCH=wasm go -C demo build -o app.wasm .
-	if [ -f "$(go env GOROOT)/misc/wasm/wasm_exec.js" ]; then \
-		cp -f "$(go env GOROOT)/misc/wasm/wasm_exec.js" demo/; \
-	elif [ -f "$(go env GOROOT)/lib/wasm/wasm_exec.js" ]; then \
-		cp -f "$(go env GOROOT)/lib/wasm/wasm_exec.js" demo/; \
-	else \
-		echo "wasm_exec.js not found in GOROOT" >&2; \
-		exit 1; \
-	fi
+demo-node-deps:
+	if [ ! -d demo/node_modules/playwright-core ] || [ ! -d demo/node_modules/typescript ]; then npm --prefix demo ci; fi
+
+demo-build: demo-node-deps
+	npm --prefix demo run prepare:demo
 
 demo-serve: demo-build
-	python3 -m http.server 8000 --directory demo
-
-demo-clean:
-	rm -f demo/app.wasm demo/wasm_exec.js
+	npm --prefix demo run serve
 

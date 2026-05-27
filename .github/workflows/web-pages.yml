@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build web
+    name: Build demo
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,17 +29,23 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Build WASM app
-        run: nix develop --command just demo-build
+      - name: Build demo
+        run: |
+          nix develop --command npm --prefix demo ci
+          nix develop --command npm --prefix demo run vendor
+          nix develop --command just demo-build
 
       - name: Prepare Pages artifact
         run: |
-          touch demo/.nojekyll
+          mkdir -p pages
+          cp demo/index.html demo/style.css pages/
+          cp -R demo/public demo/vendor pages/
+          touch pages/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: demo
+          path: pages
 
   deploy:
     name: Deploy web
@@ -56,4 +62,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-

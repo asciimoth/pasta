@@ -16,6 +16,11 @@ profile.cov
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+demo/node_modules/
+demo/vendor/
+demo/public/
+demo/backend/pasta-demo.wasm
+demo/backend/*.test
 
 # Go workspace file
 go.work
@@ -31,4 +36,3 @@ go.work.sum
 /.envrc
 /.pre-commit-config.yaml
 /.direnv
-

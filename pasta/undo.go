@@ -37,6 +37,12 @@ type undoAddedLink struct {
 	ID uint64
 }
 
+type undoNodePosition struct {
+	ID     uint64
+	Before string
+	After  string
+}
+
 type undoGroup struct {
 	Entries []undoEntry
 }
@@ -167,6 +173,11 @@ func (w *Workspace) applyUndoEntry(entry undoEntry) (undoEntry, bool) {
 			return nil, false
 		}
 		return undoAddedLink{ID: e.ID}, true
+	case undoNodePosition:
+		if !w.restoreNodePosition(e.ID, e.Before) {
+			return nil, false
+		}
+		return undoNodePosition{ID: e.ID, Before: e.After, After: e.Before}, true
 	case undoGroup:
 		mirrors := make([]undoEntry, 0, len(e.Entries))
 		for _, child := range e.Entries {
@@ -183,6 +194,10 @@ func (w *Workspace) applyUndoEntry(entry undoEntry) (undoEntry, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func (w *Workspace) restoreNodePosition(id uint64, position string) bool {
+	return w.SetNodePosition(id, position) == nil
 }
 
 func (w *Workspace) captureNodeByID(id uint64) undoEntry {

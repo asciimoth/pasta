@@ -1371,7 +1371,12 @@ func (w *Workspace) SetNodePosition(id uint64, position string) error {
 	if !present || record == nil {
 		return ErrNoNode
 	}
+	if record.Position == position {
+		return nil
+	}
+	before := record.Position
 	record.Position = position
+	w.pushUndoEntry(undoNodePosition{ID: id, Before: before, After: position})
 	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	return nil
 }
