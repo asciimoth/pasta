@@ -74,7 +74,12 @@
 
           just
 
-          python3 # for simple http server
+          nodejs_24
+          pnpm
+          typescript
+
+          # for browser/e2e tests
+          chromium
         ];
       };
     });
