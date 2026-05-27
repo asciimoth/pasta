@@ -29,6 +29,25 @@ func inputPort(index int) pasta.Port {
 	return pasta.Port{Direction: "left", Name: inputName(index), Types: []string{TypeInt, TypeFloat}}
 }
 
+func stringInputPort(index int) pasta.Port {
+	return pasta.Port{Direction: "left", Name: inputName(index), Types: []string{TypeString}}
+}
+
+func variadicStringParams() pasta.NodeClassParams {
+	return pasta.NodeClassParams{PrimaryType: TypeString, InitialPorts: []pasta.Port{
+		rightPort(TypeString),
+		stringInputPort(1),
+	}}
+}
+
+func fixedStringParams(output string, inputs int) pasta.NodeClassParams {
+	ports := []pasta.Port{rightPort(output)}
+	for i := 1; i <= inputs; i++ {
+		ports = append(ports, stringInputPort(i))
+	}
+	return pasta.NodeClassParams{PrimaryType: output, InitialPorts: ports}
+}
+
 func fixedBoolParams(inputs int) pasta.NodeClassParams {
 	ports := []pasta.Port{rightPort(TypeBool)}
 	for i := 1; i <= inputs; i++ {

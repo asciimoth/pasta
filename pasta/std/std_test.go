@@ -649,6 +649,134 @@ func TestStdComparisonNodesUseComparableAnyInputs(t *testing.T) {
 	}
 }
 
+func TestStdStringNodesProcessAndCompare(t *testing.T) {
+	w := newStdWorkspace(t)
+	nodes := map[string]uint64{
+		"hello":    addByClass(t, w, NodeTypeStringConstant, "hello"),
+		"space":    addByClass(t, w, NodeTypeStringConstant, "space"),
+		"world":    addByClass(t, w, NodeTypeStringConstant, "world"),
+		"substr":   addByClass(t, w, NodeTypeStringConstant, "substr"),
+		"concat":   addByClass(t, w, NodeTypeStringConcat, "concat"),
+		"split":    addByClass(t, w, NodeTypeStringSplit, "split"),
+		"before":   addByClass(t, w, NodeTypeStringTrimSpace, "before"),
+		"after":    addByClass(t, w, NodeTypeStringUpper, "after"),
+		"upper":    addByClass(t, w, NodeTypeStringUpper, "upper"),
+		"lower":    addByClass(t, w, NodeTypeStringLower, "lower"),
+		"trim":     addByClass(t, w, NodeTypeStringTrimSpace, "trim"),
+		"length":   addByClass(t, w, NodeTypeStringLength, "length"),
+		"contains": addByClass(t, w, NodeTypeStringContains, "contains"),
+		"less":     addByClass(t, w, NodeTypeLess, "less"),
+	}
+	menus := subscribeStdMenus(t, w, nodes)
+	setConstant(t, w, nodes["hello"], " Hello")
+	setConstant(t, w, nodes["space"], ", ")
+	setConstant(t, w, nodes["world"], "World ")
+	setConstant(t, w, nodes["substr"], "WORLD")
+
+	expectStdStringGraph(t, w, menus, nodes, stdStringExpect{
+		labels: map[string]string{
+			"hello": " Hello", "space": ", ", "world": "World ", "substr": "WORLD",
+			"concat": "", "upper": "", "lower": "", "trim": "",
+		},
+		menus: map[string]string{
+			"hello": " Hello", "space": ", ", "world": "World ", "substr": "WORLD",
+			"concat": "", "upper": "", "lower": "", "trim": "",
+		},
+		primary: map[string]string{
+			"hello": TypeString, "concat": TypeString, "upper": TypeString, "lower": TypeString, "trim": TypeString, "before": TypeString, "after": TypeString,
+			"length": TypeInt, "contains": TypeBool,
+		},
+	})
+	assertStringSplitPorts(t, w, nodes["split"])
+
+	linkByPortName(t, w, nodes["hello"], "output", nodes["concat"], "input 1")
+	linkByPortName(t, w, nodes["space"], "output", nodes["concat"], "input 2")
+	linkByPortName(t, w, nodes["world"], "output", nodes["concat"], "input 3")
+	expectStdStringGraph(t, w, menus, nodes, stdStringExpect{
+		labels:    map[string]string{"concat": " Hello, World "},
+		menus:     map[string]string{"concat": " Hello, World "},
+		leftPorts: map[string][]string{"concat": {"input 1", "input 2", "input 3", "input 4"}},
+	})
+
+	linkByPortName(t, w, nodes["concat"], "output", nodes["split"], "Text")
+	linkByPortName(t, w, nodes["space"], "output", nodes["split"], "Separator")
+	linkByPortName(t, w, nodes["split"], "Before", nodes["before"], "input 1")
+	linkByPortName(t, w, nodes["split"], "After", nodes["after"], "input 1")
+	expectStdStringGraph(t, w, menus, nodes, stdStringExpect{
+		labels: map[string]string{
+			"split": " Hello | World ", "before": "Hello", "after": "WORLD ",
+		},
+		menus: map[string]string{
+			"before": "Hello", "after": "WORLD ",
+		},
+	})
+
+	linkByPortName(t, w, nodes["concat"], "output", nodes["upper"], "input 1")
+	linkByPortName(t, w, nodes["upper"], "output", nodes["trim"], "input 1")
+	linkByPortName(t, w, nodes["trim"], "output", nodes["lower"], "input 1")
+	linkByPortName(t, w, nodes["trim"], "output", nodes["length"], "input 1")
+	linkByPortName(t, w, nodes["trim"], "output", nodes["contains"], "input 1")
+	linkByPortName(t, w, nodes["substr"], "output", nodes["contains"], "input 2")
+	expectStdStringGraph(t, w, menus, nodes, stdStringExpect{
+		labels: map[string]string{
+			"upper": " HELLO, WORLD ", "trim": "HELLO, WORLD", "lower": "hello, world", "length": "12", "contains": "true",
+		},
+		menus: map[string]string{
+			"upper": " HELLO, WORLD ", "trim": "HELLO, WORLD", "lower": "hello, world",
+		},
+	})
+	expectStdGraph(t, w, menus, nodes, stdGraphExpect{menuValues: map[string]float64{"length": 12}})
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{menus: map[string]bool{"contains": true}})
+
+	linkByPortName(t, w, nodes["hello"], "output", nodes["less"], "input 1")
+	linkByPortName(t, w, nodes["world"], "output", nodes["less"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels: map[string]string{"less": "true"},
+		menus:  map[string]bool{"less": true},
+	})
+
+	setConstant(t, w, nodes["world"], "there ")
+	expectStdStringGraph(t, w, menus, nodes, stdStringExpect{
+		labels: map[string]string{
+			"concat": " Hello, there ", "split": " Hello | there ", "before": "Hello", "after": "THERE ", "upper": " HELLO, THERE ", "trim": "HELLO, THERE", "lower": "hello, there", "length": "12", "contains": "false",
+		},
+		menus: map[string]string{
+			"concat": " Hello, there ", "before": "Hello", "after": "THERE ", "upper": " HELLO, THERE ", "trim": "HELLO, THERE", "lower": "hello, there",
+		},
+	})
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels: map[string]string{"contains": "false", "less": "true"},
+		menus:  map[string]bool{"contains": false, "less": true},
+	})
+}
+
+func TestStdStringSaveRestore(t *testing.T) {
+	w := newStdWorkspace(t)
+	a := addByClass(t, w, NodeTypeStringConstant, "a")
+	b := addByClass(t, w, NodeTypeStringConstant, "b")
+	concat := addByClass(t, w, NodeTypeStringConcat, "concat")
+	setConstant(t, w, a, "saved")
+	setConstant(t, w, b, " string")
+	linkByPortName(t, w, a, "output", concat, "input 1")
+	linkByPortName(t, w, b, "output", concat, "input 2")
+
+	cfg := configer.NewMemory(nil)
+	if err := w.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig string graph: %v", err)
+	}
+	restored, err := pasta.WorkspaceFromConfig(allStdClasses(), cfg, testLogFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig string graph: %v", err)
+	}
+	restoredConcat, ok := restored.NodeIDByName("concat")
+	if !ok {
+		t.Fatal("restored concat missing")
+	}
+	if got := restored.Snapshot().Nodes[restoredConcat].Label; got != "saved string" {
+		t.Fatalf("restored concat label = %q, want saved string", got)
+	}
+}
+
 func TestStdSaveRestoreCopyPasteAndPlaceholderReplacement(t *testing.T) {
 	w := newStdWorkspace(t)
 	a := addByClass(t, w, NodeTypeIntConstant, "a")
@@ -728,7 +856,8 @@ func newStdWorkspace(t *testing.T) *pasta.Workspace {
 
 func allStdClasses() []pasta.NodeClass {
 	return []pasta.NodeClass{
-		IntConstantClass{}, FloatConstantClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
+		IntConstantClass{}, FloatConstantClass{}, StringConstantClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
+		StringConcatClass{}, StringLengthClass{}, StringContainsClass{}, StringSplitClass{}, StringUpperClass{}, StringLowerClass{}, StringTrimSpaceClass{},
 		TrueConstantClass{}, FalseConstantClass{}, BoolAndClass{}, BoolNotClass{}, BoolOrClass{},
 		MoreClass{}, LessClass{}, EqualClass{}, NotEqualClass{},
 		SelectClass{},
@@ -876,6 +1005,25 @@ func assertSelectMenu(t *testing.T, state *formular.MenuSnapshotState, node uint
 	t.Fatalf("missing select selector field in %#v", snapshot)
 }
 
+func assertStringSplitPorts(t *testing.T, w *pasta.Workspace, node uint64) {
+	t.Helper()
+	snapshot := w.Snapshot()
+	for _, spec := range []struct {
+		direction string
+		name      string
+	}{
+		{"left", "Text"},
+		{"left", "Separator"},
+		{"right", "Before"},
+		{"right", "After"},
+	} {
+		port := portByName(t, snapshot, node, spec.direction, spec.name)
+		if got := snapshot.Ports[port].Types; !reflect.DeepEqual(got, []string{TypeString}) {
+			t.Fatalf("string split %s types = %#v, want [%s]", spec.name, got, TypeString)
+		}
+	}
+}
+
 type stdGraphExpect struct {
 	labels     map[string]string
 	menuValues map[string]float64
@@ -978,8 +1126,81 @@ func stdMenuValue(t *testing.T, state *formular.MenuSnapshotState, node uint64) 
 	return 0, false
 }
 
+type stdStringExpect struct {
+	labels    map[string]string
+	menus     map[string]string
+	primary   map[string]string
+	leftPorts map[string][]string
+}
+
+func expectStdStringGraph(t *testing.T, w *pasta.Workspace, menus *formular.MenuSnapshotState, nodes map[string]uint64, expect stdStringExpect) {
+	t.Helper()
+	snapshot := w.Snapshot()
+	for name, want := range expect.labels {
+		id := nodes[name]
+		if got := snapshot.Nodes[id].Label; got != want {
+			t.Fatalf("%s label = %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range expect.menus {
+		got, readonly := stdStringMenuValue(t, menus, nodes[name])
+		if got != want {
+			t.Fatalf("%s menu value = %q, want %q", name, got, want)
+		}
+		if wantReadonly := !isConstantClass(snapshot.Nodes[nodes[name]].Class); readonly != wantReadonly {
+			t.Fatalf("%s menu readonly = %v, want %v", name, readonly, wantReadonly)
+		}
+	}
+	for name, want := range expect.primary {
+		id := nodes[name]
+		if got := snapshot.Nodes[id].PrimaryType; got != want {
+			t.Fatalf("%s primary = %q, want %q", name, got, want)
+		}
+		out := onlyRightPort(t, snapshot, id)
+		if got := snapshot.Ports[out].Types; !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("%s output types = %#v, want [%s]", name, got, want)
+		}
+	}
+	for name, want := range expect.leftPorts {
+		id := nodes[name]
+		got := make([]string, 0, len(snapshot.Nodes[id].LeftPorts))
+		for _, port := range snapshot.Nodes[id].LeftPorts {
+			got = append(got, snapshot.Ports[port].Name)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s left ports = %#v, want %#v", name, got, want)
+		}
+	}
+}
+
+func stdStringMenuValue(t *testing.T, state *formular.MenuSnapshotState, node uint64) (string, bool) {
+	t.Helper()
+	snapshot, ok := state.Snapshot(pasta.NodeMenuID(node))
+	if !ok {
+		t.Fatalf("missing menu snapshot for node %d", node)
+	}
+	for _, block := range snapshot.Blocks {
+		if block.ID != "state" {
+			continue
+		}
+		for _, item := range block.Items {
+			if item.ID != "value" || item.Field == nil {
+				continue
+			}
+			value, ok := parseStringAny(item.Field.Value)
+			if !ok {
+				t.Fatalf("string menu value for node %d has type %T", node, item.Field.Value)
+			}
+			return value, item.Field.Readonly
+		}
+	}
+	t.Fatalf("missing state.value field in node %d menu %#v", node, snapshot)
+	return "", false
+}
+
 func isConstantClass(class string) bool {
 	return class == NodeTypeIntConstant || class == NodeTypeFloatConstant ||
+		class == NodeTypeStringConstant ||
 		class == NodeTypeTrueConstant || class == NodeTypeFalseConstant
 }
 

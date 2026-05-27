@@ -155,7 +155,35 @@ func readFloat(cfg configer.Config, fallback float64) float64 {
 	return fallback
 }
 
+func parseStringAny(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case String:
+		return string(v), true
+	default:
+		return "", false
+	}
+}
+
+func readString(cfg configer.Config, fallback string) string {
+	if cfg == nil {
+		return fallback
+	}
+	raw, err := cfg.Get(configer.Path{"value"})
+	if err != nil {
+		return fallback
+	}
+	if v, ok := parseStringAny(raw); ok {
+		return v
+	}
+	return fallback
+}
+
 func menuFieldKind(typ string) string {
+	if typ == TypeString {
+		return formular.FieldText
+	}
 	if typ == TypeFloat {
 		return formular.FieldFloat
 	}
