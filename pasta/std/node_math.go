@@ -392,7 +392,7 @@ func (n *mathNode) sendMenuBlock() {
 func (n *mathNode) menuBlock() formular.Block {
 	return formular.Block{
 		ID: "state", Order: 10, Generation: 1,
-		Items: []formular.Item{{Type: formular.ItemField, ID: "value", Label: "Value", Field: &formular.Field{Kind: menuFieldKind(n.result.typ), Value: n.result.payload(), Readonly: true}}},
+		Items: []formular.Item{{Type: formular.ItemField, ID: "value", Label: "Value", Field: &formular.Field{Kind: menuFieldKind(n.result.typ), Value: n.result.menuValue(), Readonly: true}}},
 	}
 }
 

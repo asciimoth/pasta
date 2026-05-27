@@ -155,6 +155,6 @@ func (n *constantNode) sendMenuBlock() {
 func (n *constantNode) menuBlock() formular.Block {
 	return formular.Block{
 		ID: "state", Order: 10, Generation: 1,
-		Items: []formular.Item{{Type: formular.ItemField, ID: "value", Label: "Value", Field: &formular.Field{Kind: menuFieldKind(n.value.typ), Value: n.value.payload()}}},
+		Items: []formular.Item{{Type: formular.ItemField, ID: "value", Label: "Value", Field: &formular.Field{Kind: menuFieldKind(n.value.typ), Value: n.value.menuValue()}}},
 	}
 }

@@ -11,6 +11,15 @@ func Register(w *pasta.Workspace) error {
 		DivClass{},
 		MulClass{},
 		SumClass{},
+		TrueConstantClass{},
+		FalseConstantClass{},
+		BoolAndClass{},
+		BoolNotClass{},
+		BoolOrClass{},
+		MoreClass{},
+		LessClass{},
+		EqualClass{},
+		NotEqualClass{},
 	} {
 		if err := w.AddNodeClass(class); err != nil {
 			return err

@@ -33,23 +33,36 @@ func zeroValue(typ string) numberValue {
 func valueFromPayload(typ string, payload any) (numberValue, bool) {
 	switch typ {
 	case TypeInt:
-		v, ok := payload.(int)
-		if !ok {
+		switch v := payload.(type) {
+		case Int:
+			return intValue(int(v)), true
+		case int:
+			return intValue(v), true
+		default:
 			return intValue(0), false
 		}
-		return intValue(v), true
 	case TypeFloat:
-		v, ok := payload.(float64)
-		if !ok {
+		switch v := payload.(type) {
+		case Float:
+			return floatValue(float64(v)), true
+		case float64:
+			return floatValue(v), true
+		default:
 			return floatValue(0), false
 		}
-		return floatValue(v), true
 	default:
 		return numberValue{}, false
 	}
 }
 
 func (v numberValue) payload() any {
+	if v.typ == TypeFloat {
+		return Float(v.f)
+	}
+	return Int(v.i)
+}
+
+func (v numberValue) menuValue() any {
 	if v.typ == TypeFloat {
 		return v.f
 	}

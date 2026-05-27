@@ -2,6 +2,7 @@
 package std
 
 import (
+	"errors"
 	"reflect"
 	"strconv"
 	"testing"
@@ -285,6 +286,189 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 	})
 }
 
+func TestStdBoolNodesPropagateFanoutAndMenus(t *testing.T) {
+	w := newStdWorkspace(t)
+	nodes := map[string]uint64{
+		"true":  addByClass(t, w, NodeTypeTrueConstant, "true"),
+		"false": addByClass(t, w, NodeTypeFalseConstant, "false"),
+		"and":   addByClass(t, w, NodeTypeBoolAnd, "and"),
+		"or":    addByClass(t, w, NodeTypeBoolOr, "or"),
+		"not":   addByClass(t, w, NodeTypeBoolNot, "not"),
+	}
+	menus := subscribeStdMenus(t, w, nodes)
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels: map[string]string{"true": "true", "false": "false", "and": "false", "or": "false", "not": "true"},
+		menus:  map[string]bool{"true": true, "false": false, "and": false, "or": false, "not": true},
+		primary: map[string]string{
+			"true": TypeBool, "false": TypeBool, "and": TypeBool, "or": TypeBool, "not": TypeBool,
+		},
+		rightLinks: map[string]int{"true": 0, "false": 0},
+	})
+
+	linkByPortName(t, w, nodes["true"], "output", nodes["and"], "input 1")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"and": "false"},
+		menus:      map[string]bool{"and": false},
+		rightLinks: map[string]int{"true": 1},
+	})
+
+	linkByPortName(t, w, nodes["true"], "output", nodes["or"], "input 1")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"or": "true"},
+		menus:      map[string]bool{"or": true},
+		rightLinks: map[string]int{"true": 2},
+	})
+
+	linkByPortName(t, w, nodes["true"], "output", nodes["not"], "input 1")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"not": "false"},
+		menus:      map[string]bool{"not": false},
+		rightLinks: map[string]int{"true": 3},
+	})
+
+	linkByPortName(t, w, nodes["false"], "output", nodes["and"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"and": "false"},
+		menus:      map[string]bool{"and": false},
+		rightLinks: map[string]int{"false": 1},
+	})
+
+	linkByPortName(t, w, nodes["false"], "output", nodes["or"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"or": "true"},
+		menus:      map[string]bool{"or": true},
+		rightLinks: map[string]int{"false": 2},
+	})
+
+	_, _, err := w.AddLink(
+		portByName(t, w.Snapshot(), nodes["false"], "right", "output"),
+		portByName(t, w.Snapshot(), nodes["not"], "left", "input 1"),
+	)
+	if !errors.Is(err, pasta.ErrLinkDup) {
+		t.Fatalf("second bool input link error = %v, want %v", err, pasta.ErrLinkDup)
+	}
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"not": "false"},
+		menus:      map[string]bool{"not": false},
+		rightLinks: map[string]int{"false": 2, "true": 3},
+	})
+
+	cfg := configer.NewMemory(nil)
+	if err := w.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig bool graph: %v", err)
+	}
+	restored, err := pasta.WorkspaceFromConfig(allStdClasses(), cfg, testLogFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig bool graph: %v", err)
+	}
+	restoredNodes := map[string]uint64{}
+	for name := range nodes {
+		id, ok := restored.NodeIDByName(name)
+		if !ok {
+			t.Fatalf("restored node %q missing", name)
+		}
+		restoredNodes[name] = id
+	}
+	restoredMenus := subscribeStdMenus(t, restored, restoredNodes)
+	expectStdBoolGraph(t, restored, restoredMenus, restoredNodes, stdBoolExpect{
+		labels:     map[string]string{"true": "true", "false": "false", "and": "false", "or": "true", "not": "false"},
+		menus:      map[string]bool{"true": true, "false": false, "and": false, "or": true, "not": false},
+		rightLinks: map[string]int{"true": 3, "false": 2},
+	})
+}
+
+func TestStdComparisonNodesUseComparableAnyInputs(t *testing.T) {
+	w := newStdWorkspace(t)
+	nodes := map[string]uint64{
+		"i3":       addByClass(t, w, NodeTypeIntConstant, "i3"),
+		"i4":       addByClass(t, w, NodeTypeIntConstant, "i4"),
+		"f25":      addByClass(t, w, NodeTypeFloatConstant, "f25"),
+		"f3":       addByClass(t, w, NodeTypeFloatConstant, "f3"),
+		"more":     addByClass(t, w, NodeTypeMore, "more"),
+		"less":     addByClass(t, w, NodeTypeLess, "less"),
+		"equal":    addByClass(t, w, NodeTypeEqual, "equal"),
+		"notEqual": addByClass(t, w, NodeTypeNotEqual, "notEqual"),
+		"and":      addByClass(t, w, NodeTypeBoolAnd, "and"),
+	}
+	menus := subscribeStdMenus(t, w, nodes)
+	setConstant(t, w, nodes["i3"], 3)
+	setConstant(t, w, nodes["i4"], 4)
+	setConstant(t, w, nodes["f25"], 2.5)
+	setConstant(t, w, nodes["f3"], 3.0)
+
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels: map[string]string{
+			"more": "false", "less": "false", "equal": "true", "notEqual": "false", "and": "false",
+		},
+		menus: map[string]bool{
+			"more": false, "less": false, "equal": true, "notEqual": false, "and": false,
+		},
+		primary: map[string]string{
+			"more": TypeBool, "less": TypeBool, "equal": TypeBool, "notEqual": TypeBool,
+		},
+	})
+	expectAnyInputs(t, w, nodes, "more", "less", "equal", "notEqual")
+
+	linkByPortName(t, w, nodes["i3"], "output", nodes["more"], "input 1")
+	linkByPortName(t, w, nodes["f25"], "output", nodes["more"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"more": "true"},
+		menus:      map[string]bool{"more": true},
+		rightLinks: map[string]int{"i3": 1, "f25": 1},
+	})
+
+	linkByPortName(t, w, nodes["f25"], "output", nodes["less"], "input 1")
+	linkByPortName(t, w, nodes["i4"], "output", nodes["less"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"less": "true"},
+		menus:      map[string]bool{"less": true},
+		rightLinks: map[string]int{"f25": 2, "i4": 1},
+	})
+
+	linkByPortName(t, w, nodes["i3"], "output", nodes["equal"], "input 1")
+	linkByPortName(t, w, nodes["f3"], "output", nodes["equal"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"equal": "true"},
+		menus:      map[string]bool{"equal": true},
+		rightLinks: map[string]int{"i3": 2, "f3": 1},
+	})
+
+	linkByPortName(t, w, nodes["i3"], "output", nodes["notEqual"], "input 1")
+	linkByPortName(t, w, nodes["f25"], "output", nodes["notEqual"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"notEqual": "true"},
+		menus:      map[string]bool{"notEqual": true},
+		rightLinks: map[string]int{"i3": 3, "f25": 3},
+	})
+
+	linkByPortName(t, w, nodes["more"], "output", nodes["and"], "input 1")
+	linkByPortName(t, w, nodes["less"], "output", nodes["and"], "input 2")
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels:     map[string]string{"and": "true"},
+		menus:      map[string]bool{"and": true},
+		rightLinks: map[string]int{"more": 1, "less": 1},
+	})
+
+	setConstant(t, w, nodes["i3"], 2)
+	expectStdBoolGraph(t, w, menus, nodes, stdBoolExpect{
+		labels: map[string]string{
+			"i3": "2", "more": "false", "equal": "false", "notEqual": "true", "and": "false",
+		},
+		menus: map[string]bool{
+			"more": false, "equal": false, "notEqual": true, "and": false,
+		},
+		rightLinks: map[string]int{"i3": 3},
+	})
+
+	_, _, err := w.AddLink(
+		portByName(t, w.Snapshot(), nodes["i4"], "right", "output"),
+		portByName(t, w.Snapshot(), nodes["more"], "left", "input 1"),
+	)
+	if !errors.Is(err, pasta.ErrLinkDup) {
+		t.Fatalf("second comparison input link error = %v, want %v", err, pasta.ErrLinkDup)
+	}
+}
+
 func TestStdSaveRestoreCopyPasteAndPlaceholderReplacement(t *testing.T) {
 	w := newStdWorkspace(t)
 	a := addByClass(t, w, NodeTypeIntConstant, "a")
@@ -324,9 +508,7 @@ func TestStdSaveRestoreCopyPasteAndPlaceholderReplacement(t *testing.T) {
 	if err := w.SaveConfig(cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
-	restored, err := pasta.WorkspaceFromConfig([]pasta.NodeClass{
-		IntConstantClass{}, FloatConstantClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
-	}, cfg, testLogFactory{})
+	restored, err := pasta.WorkspaceFromConfig(allStdClasses(), cfg, testLogFactory{})
 	if err != nil {
 		t.Fatalf("WorkspaceFromConfig: %v", err)
 	}
@@ -362,6 +544,14 @@ func newStdWorkspace(t *testing.T) *pasta.Workspace {
 		t.Fatalf("Register: %v", err)
 	}
 	return w
+}
+
+func allStdClasses() []pasta.NodeClass {
+	return []pasta.NodeClass{
+		IntConstantClass{}, FloatConstantClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
+		TrueConstantClass{}, FalseConstantClass{}, BoolAndClass{}, BoolNotClass{}, BoolOrClass{},
+		MoreClass{}, LessClass{}, EqualClass{}, NotEqualClass{},
+	}
 }
 
 func addByClass(t *testing.T, w *pasta.Workspace, class, name string) uint64 {
@@ -554,5 +744,88 @@ func stdMenuValue(t *testing.T, state *formular.MenuSnapshotState, node uint64) 
 }
 
 func isConstantClass(class string) bool {
-	return class == NodeTypeIntConstant || class == NodeTypeFloatConstant
+	return class == NodeTypeIntConstant || class == NodeTypeFloatConstant ||
+		class == NodeTypeTrueConstant || class == NodeTypeFalseConstant
+}
+
+func expectAnyInputs(t *testing.T, w *pasta.Workspace, nodes map[string]uint64, names ...string) {
+	t.Helper()
+	snapshot := w.Snapshot()
+	for _, name := range names {
+		id := nodes[name]
+		for _, port := range snapshot.Nodes[id].LeftPorts {
+			if got := snapshot.Ports[port].Types; !reflect.DeepEqual(got, []string{pasta.AnyType}) {
+				t.Fatalf("%s input %s types = %#v, want [any/any]", name, snapshot.Ports[port].Name, got)
+			}
+		}
+	}
+}
+
+type stdBoolExpect struct {
+	labels     map[string]string
+	menus      map[string]bool
+	primary    map[string]string
+	rightLinks map[string]int
+}
+
+func expectStdBoolGraph(t *testing.T, w *pasta.Workspace, menus *formular.MenuSnapshotState, nodes map[string]uint64, expect stdBoolExpect) {
+	t.Helper()
+	snapshot := w.Snapshot()
+	for name, want := range expect.labels {
+		id := nodes[name]
+		if got := snapshot.Nodes[id].Label; got != want {
+			t.Fatalf("%s label = %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range expect.menus {
+		got, readonly := stdBoolMenuValue(t, menus, nodes[name])
+		if got != want {
+			t.Fatalf("%s menu value = %v, want %v", name, got, want)
+		}
+		if !readonly {
+			t.Fatalf("%s bool menu readonly = false, want true", name)
+		}
+	}
+	for name, want := range expect.primary {
+		id := nodes[name]
+		if got := snapshot.Nodes[id].PrimaryType; got != want {
+			t.Fatalf("%s primary = %q, want %q", name, got, want)
+		}
+		out := portByName(t, snapshot, id, "right", "output")
+		if got := snapshot.Ports[out].Types; !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("%s output types = %#v, want [%s]", name, got, want)
+		}
+	}
+	for name, want := range expect.rightLinks {
+		id := nodes[name]
+		out := portByName(t, snapshot, id, "right", "output")
+		if got := len(snapshot.Ports[out].Links); got != want {
+			t.Fatalf("%s output link count = %d, want %d", name, got, want)
+		}
+	}
+}
+
+func stdBoolMenuValue(t *testing.T, state *formular.MenuSnapshotState, node uint64) (bool, bool) {
+	t.Helper()
+	snapshot, ok := state.Snapshot(pasta.NodeMenuID(node))
+	if !ok {
+		t.Fatalf("missing menu snapshot for node %d", node)
+	}
+	for _, block := range snapshot.Blocks {
+		if block.ID != "state" {
+			continue
+		}
+		for _, item := range block.Items {
+			if item.ID != "value" || item.Field == nil {
+				continue
+			}
+			value, ok := item.Field.Value.(bool)
+			if !ok {
+				t.Fatalf("bool menu value for node %d has type %T", node, item.Field.Value)
+			}
+			return value, item.Field.Readonly
+		}
+	}
+	t.Fatalf("missing state.value field in node %d menu %#v", node, snapshot)
+	return false, false
 }
