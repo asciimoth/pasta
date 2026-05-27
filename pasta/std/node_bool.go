@@ -145,7 +145,7 @@ func (n *boolNode) requestLink(link, port uint64) {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestBoolValue{}})
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *boolNode) sendAll() {
@@ -208,6 +208,6 @@ func boolLabel(value bool) string {
 }
 
 func isBoolRequest(payload any) bool {
-	_, ok := payload.(RequestBoolValue)
+	_, ok := payload.(RequestValue)
 	return ok
 }

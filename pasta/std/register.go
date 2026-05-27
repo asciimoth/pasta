@@ -20,6 +20,7 @@ func Register(w *pasta.Workspace) error {
 		LessClass{},
 		EqualClass{},
 		NotEqualClass{},
+		SelectClass{},
 	} {
 		if err := w.AddNodeClass(class); err != nil {
 			return err

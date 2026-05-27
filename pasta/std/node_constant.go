@@ -67,7 +67,7 @@ func (n *constantNode) OnEvent(event pasta.Event, linkType string, _ []string, r
 	if event.ReceiverPort != n.out || receiverPortDirection != "right" {
 		return nil
 	}
-	if (linkType == TypeInt && isIntRequest(event.Payload)) || (linkType == TypeFloat && isFloatRequest(event.Payload)) {
+	if (linkType == TypeInt || linkType == TypeFloat) && isValueRequest(event.Payload) {
 		n.sendToLinkByEvent(event)
 	}
 	return nil

@@ -149,15 +149,8 @@ func (n *compareNode) requestLink(link, port uint64, linkType string) {
 	if !ok {
 		return
 	}
-	if linkType == "" {
-		linkType = snapshot.Type
-	}
-	var payload any = RequestIntValue{}
-	if linkType == TypeFloat {
-		payload = RequestFloatValue{}
-	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *compareNode) sendAll() {

@@ -139,7 +139,7 @@ func (n *mathNode) OnPortRemoved(port uint64, direction string) error {
 
 func (n *mathNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
 	if receiverPortDirection == "right" {
-		if (linkType == TypeInt && isIntRequest(event.Payload)) || (linkType == TypeFloat && isFloatRequest(event.Payload)) {
+		if (linkType == TypeInt || linkType == TypeFloat) && isValueRequest(event.Payload) {
 			n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.result.as(linkType).payload()})
 		}
 		return nil
@@ -265,15 +265,8 @@ func (n *mathNode) requestLink(link, port uint64, linkType string) {
 	if !ok {
 		return
 	}
-	if linkType == "" {
-		linkType = snapshot.Type
-	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	var payload any = RequestIntValue{}
-	if linkType == TypeFloat {
-		payload = RequestFloatValue{}
-	}
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *mathNode) sendAll() {
@@ -422,12 +415,7 @@ func otherEndpoint(link pasta.LinkSnapshot, port uint64) (uint64, uint64) {
 	return link.LeftPortNode, link.LeftPort
 }
 
-func isIntRequest(payload any) bool {
-	_, ok := payload.(RequestIntValue)
-	return ok
-}
-
-func isFloatRequest(payload any) bool {
-	_, ok := payload.(RequestFloatValue)
+func isValueRequest(payload any) bool {
+	_, ok := payload.(RequestValue)
 	return ok
 }

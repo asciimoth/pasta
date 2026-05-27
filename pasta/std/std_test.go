@@ -153,6 +153,9 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 		"mulInt":   addByClass(t, w, NodeTypeMul, "mulInt"),
 		"subMixed": addByClass(t, w, NodeTypeSub, "subMixed"),
 		"divMixed": addByClass(t, w, NodeTypeDiv, "divMixed"),
+		"select":   addByClass(t, w, NodeTypeSelect, "select"),
+		"true":     addByClass(t, w, NodeTypeTrueConstant, "true"),
+		"false":    addByClass(t, w, NodeTypeFalseConstant, "false"),
 	}
 	menus := subscribeStdMenus(t, w, nodes)
 	setConstant(t, w, nodes["i2"], 2)
@@ -165,6 +168,7 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 		labels: map[string]string{
 			"i2": "2", "i3": "3", "i4": "4", "f15": "1.5", "f25": "2.5",
 			"sumInt": "0", "sumFloat": "0", "mulInt": "0", "subMixed": "0", "divMixed": "0",
+			"select": "0", "true": "true", "false": "false",
 		},
 		menuValues: map[string]float64{
 			"i2": 2, "i3": 3, "i4": 4, "f15": 1.5, "f25": 2.5,
@@ -174,7 +178,7 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 			"sumInt": {"input 1"}, "sumFloat": {"input 1"}, "mulInt": {"input 1"},
 			"subMixed": {"input 1", "input 2"}, "divMixed": {"input 1", "input 2"},
 		},
-		rightLinks: map[string]int{"i2": 0, "i3": 0, "i4": 0, "f15": 0, "f25": 0},
+		rightLinks: map[string]int{"i2": 0, "i3": 0, "i4": 0, "f15": 0, "f25": 0, "true": 0, "false": 0},
 	})
 
 	linkByPortName(t, w, nodes["i2"], "output", nodes["sumInt"], "input 1")
@@ -284,6 +288,79 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 		},
 		rightLinks: map[string]int{"i2": 4},
 	})
+
+	linkByPortName(t, w, nodes["i2"], "output", nodes["select"], "In 0")
+	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
+		labels:     map[string]string{"select": "0"},
+		primary:    map[string]string{"select": TypeInt},
+		rightLinks: map[string]int{"i2": 5},
+	})
+	assertSelectDataPortTypes(t, w, nodes["select"], TypeInt)
+	assertSelectMenu(t, menus, nodes["select"], false)
+
+	linkByPortName(t, w, nodes["i3"], "output", nodes["select"], "In 1")
+	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
+		rightLinks: map[string]int{"i3": 4},
+	})
+
+	linkByPortName(t, w, nodes["select"], "Out", nodes["sumFloat"], "input 4")
+	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
+		labels:     map[string]string{"sumFloat": "12"},
+		menuValues: map[string]float64{"sumFloat": 12},
+		rightLinks: map[string]int{"select": 1},
+		leftPorts:  map[string][]string{"sumFloat": {"input 1", "input 2", "input 3", "input 4", "input 5"}},
+	})
+
+	falseSelectorLink := linkByPortName(t, w, nodes["false"], "output", nodes["select"], "Selector")
+	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
+		labels:     map[string]string{"select": "0", "sumFloat": "12"},
+		menuValues: map[string]float64{"sumFloat": 12},
+		rightLinks: map[string]int{"false": 1},
+	})
+	assertSelectMenu(t, menus, nodes["select"], false)
+
+	w.RemoveLink(falseSelectorLink)
+	linkByPortName(t, w, nodes["true"], "output", nodes["select"], "Selector")
+	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
+		labels:     map[string]string{"select": "1", "sumFloat": "11"},
+		menuValues: map[string]float64{"sumFloat": 11},
+		rightLinks: map[string]int{"true": 1, "false": 0},
+	})
+	assertSelectMenu(t, menus, nodes["select"], true)
+}
+
+func TestSelectUsesSharedRequestValueForCustomLinkTypes(t *testing.T) {
+	w := newStdWorkspace(t)
+	source0Class := &customValueClass{name: "example.com/SelectSource0", value: "zero"}
+	source1Class := &customValueClass{name: "example.com/SelectSource1", value: "one"}
+	sinkClass := &customSinkClass{}
+	for _, class := range []pasta.NodeClass{source0Class, source1Class, sinkClass} {
+		if err := w.AddNodeClass(class); err != nil {
+			t.Fatalf("AddNodeClass %s: %v", class.ClassName(), err)
+		}
+	}
+
+	source0 := addByClass(t, w, source0Class.ClassName(), "source0")
+	source1 := addByClass(t, w, source1Class.ClassName(), "source1")
+	selectNode := addByClass(t, w, NodeTypeSelect, "select")
+	selector := addByClass(t, w, NodeTypeTrueConstant, "selector")
+	sink := addByClass(t, w, sinkClass.ClassName(), "sink")
+
+	linkByPortName(t, w, source0, "output", selectNode, "In 0")
+	linkByPortName(t, w, source1, "output", selectNode, "In 1")
+	linkByPortName(t, w, selectNode, "Out", sink, "input")
+	if got := sinkClass.node.value; got != "zero" {
+		t.Fatalf("sink before selector = %q, want zero", got)
+	}
+
+	requestsBefore := source1Class.node.requests
+	linkByPortName(t, w, selector, "output", selectNode, "Selector")
+	if got := sinkClass.node.value; got != "one" {
+		t.Fatalf("sink after selector = %q, want one", got)
+	}
+	if got := source1Class.node.requests; got <= requestsBefore {
+		t.Fatalf("custom source requests = %d, want > %d", got, requestsBefore)
+	}
 }
 
 func TestStdBoolNodesPropagateFanoutAndMenus(t *testing.T) {
@@ -375,6 +452,109 @@ func TestStdBoolNodesPropagateFanoutAndMenus(t *testing.T) {
 		menus:      map[string]bool{"true": true, "false": false, "and": false, "or": true, "not": false},
 		rightLinks: map[string]int{"true": 3, "false": 2},
 	})
+}
+
+const customSelectType = "example.com/selectValue"
+
+type customValueClass struct {
+	name  string
+	value string
+	node  *customValueNode
+}
+
+func (c *customValueClass) ClassName() string        { return c.name }
+func (c *customValueClass) ShortDescription() string { return "custom value source" }
+func (c *customValueClass) LongDescription() string  { return "custom value source" }
+func (c *customValueClass) DefaultNodeParams() pasta.NodeClassParams {
+	return pasta.NodeClassParams{PrimaryType: customSelectType, InitialPorts: []pasta.Port{rightPort(customSelectType)}}
+}
+func (c *customValueClass) NewNode(configer.Config, ...*pasta.NodeClassState) (pasta.Node, error) {
+	c.node = &customValueNode{value: c.value}
+	return c.node, nil
+}
+
+type customValueNode struct {
+	pasta.BasicNode
+	value    string
+	requests int
+	w        *pasta.Workspace
+	id       uint64
+	out      uint64
+}
+
+func (n *customValueNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ string, restored *pasta.NodeInitData, _, _, _, _ bool) error {
+	n.w = w
+	n.id = id
+	if restored != nil && len(restored.RightPorts) > 0 {
+		n.out = restored.RightPorts[0]
+	}
+	return nil
+}
+
+func (n *customValueNode) PreLinkAdd(port uint64, linkType, _ string) error {
+	if port != n.out || linkType != customSelectType {
+		return errUnsupportedType(linkType)
+	}
+	return nil
+}
+
+func (n *customValueNode) OnLinkAdd(link, port uint64, _ string, _ string) error {
+	if port == n.out {
+		n.sendToLink(link)
+	}
+	return nil
+}
+
+func (n *customValueNode) OnEvent(event pasta.Event, _ string, _ []string, receiverPortDirection string) error {
+	if event.ReceiverPort != n.out || receiverPortDirection != "right" || !isValueRequest(event.Payload) {
+		return nil
+	}
+	n.requests++
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value})
+	return nil
+}
+
+func (n *customValueNode) sendToLink(link uint64) {
+	snapshot, ok := n.w.LinkSnapshot(link)
+	if !ok {
+		return
+	}
+	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value})
+}
+
+type customSinkClass struct {
+	node *customSinkNode
+}
+
+func (c *customSinkClass) ClassName() string        { return "example.com/SelectSink" }
+func (c *customSinkClass) ShortDescription() string { return "custom value sink" }
+func (c *customSinkClass) LongDescription() string  { return "custom value sink" }
+func (c *customSinkClass) DefaultNodeParams() pasta.NodeClassParams {
+	return pasta.NodeClassParams{InitialPorts: []pasta.Port{{Direction: "left", Name: "input", Types: []string{customSelectType}}}}
+}
+func (c *customSinkClass) NewNode(configer.Config, ...*pasta.NodeClassState) (pasta.Node, error) {
+	c.node = &customSinkNode{}
+	return c.node, nil
+}
+
+type customSinkNode struct {
+	pasta.BasicNode
+	value string
+}
+
+func (n *customSinkNode) PreLinkAdd(_ uint64, linkType, portDirection string) error {
+	if portDirection != "left" || linkType != customSelectType {
+		return errUnsupportedType(linkType)
+	}
+	return nil
+}
+
+func (n *customSinkNode) OnEvent(event pasta.Event, _ string, _ []string, receiverPortDirection string) error {
+	if receiverPortDirection == "left" {
+		n.value, _ = event.Payload.(string)
+	}
+	return nil
 }
 
 func TestStdComparisonNodesUseComparableAnyInputs(t *testing.T) {
@@ -551,6 +731,7 @@ func allStdClasses() []pasta.NodeClass {
 		IntConstantClass{}, FloatConstantClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
 		TrueConstantClass{}, FalseConstantClass{}, BoolAndClass{}, BoolNotClass{}, BoolOrClass{},
 		MoreClass{}, LessClass{}, EqualClass{}, NotEqualClass{},
+		SelectClass{},
 	}
 }
 
@@ -601,6 +782,15 @@ func portByName(t *testing.T, snapshot pasta.WorkspaceSnapshot, node uint64, dir
 	return 0
 }
 
+func onlyRightPort(t *testing.T, snapshot pasta.WorkspaceSnapshot, node uint64) uint64 {
+	t.Helper()
+	ports := snapshot.Nodes[node].RightPorts
+	if len(ports) != 1 {
+		t.Fatalf("node %d right ports = %#v, want exactly one", node, ports)
+	}
+	return ports[0]
+}
+
 func assertLeftPortNames(t *testing.T, w *pasta.Workspace, node uint64, want []string) {
 	t.Helper()
 	snapshot := w.Snapshot()
@@ -639,6 +829,51 @@ func assertMenuValue(t *testing.T, w *pasta.Workspace, node uint64, want any, re
 		}
 	}
 	t.Fatalf("missing state.value field in %#v", snapshot)
+}
+
+func assertSelectDataPortTypes(t *testing.T, w *pasta.Workspace, node uint64, want string) {
+	t.Helper()
+	snapshot := w.Snapshot()
+	for _, spec := range []struct {
+		direction string
+		name      string
+	}{
+		{"left", "In 0"},
+		{"left", "In 1"},
+		{"right", "Out"},
+	} {
+		port := portByName(t, snapshot, node, spec.direction, spec.name)
+		if got := snapshot.Ports[port].Types; !reflect.DeepEqual(got, []string{want}) {
+			t.Fatalf("select %s types = %#v, want [%s]", spec.name, got, want)
+		}
+	}
+}
+
+func assertSelectMenu(t *testing.T, state *formular.MenuSnapshotState, node uint64, want bool) {
+	t.Helper()
+	snapshot, ok := state.Snapshot(pasta.NodeMenuID(node))
+	if !ok {
+		t.Fatalf("missing select menu snapshot for node %d", node)
+	}
+	for _, block := range snapshot.Blocks {
+		if block.ID != "state" {
+			continue
+		}
+		for _, item := range block.Items {
+			if item.ID != "selector" || item.Field == nil {
+				continue
+			}
+			got, ok := item.Field.Value.(bool)
+			if !ok {
+				t.Fatalf("select menu value has type %T", item.Field.Value)
+			}
+			if got != want || !item.Field.Readonly {
+				t.Fatalf("select menu = %v readonly %v, want %v true", got, item.Field.Readonly, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing select selector field in %#v", snapshot)
 }
 
 type stdGraphExpect struct {
@@ -688,7 +923,7 @@ func expectStdGraph(t *testing.T, w *pasta.Workspace, menus *formular.MenuSnapsh
 		if got := snapshot.Nodes[id].PrimaryType; got != want {
 			t.Fatalf("%s primary = %q, want %q", name, got, want)
 		}
-		out := portByName(t, snapshot, id, "right", "output")
+		out := onlyRightPort(t, snapshot, id)
 		if got := snapshot.Ports[out].Types; !reflect.DeepEqual(got, []string{want}) {
 			t.Fatalf("%s output types = %#v, want [%s]", name, got, want)
 		}
@@ -705,7 +940,7 @@ func expectStdGraph(t *testing.T, w *pasta.Workspace, menus *formular.MenuSnapsh
 	}
 	for name, want := range expect.rightLinks {
 		id := nodes[name]
-		out := portByName(t, snapshot, id, "right", "output")
+		out := onlyRightPort(t, snapshot, id)
 		if got := len(snapshot.Ports[out].Links); got != want {
 			t.Fatalf("%s output link count = %d, want %d", name, got, want)
 		}
@@ -791,14 +1026,14 @@ func expectStdBoolGraph(t *testing.T, w *pasta.Workspace, menus *formular.MenuSn
 		if got := snapshot.Nodes[id].PrimaryType; got != want {
 			t.Fatalf("%s primary = %q, want %q", name, got, want)
 		}
-		out := portByName(t, snapshot, id, "right", "output")
+		out := onlyRightPort(t, snapshot, id)
 		if got := snapshot.Ports[out].Types; !reflect.DeepEqual(got, []string{want}) {
 			t.Fatalf("%s output types = %#v, want [%s]", name, got, want)
 		}
 	}
 	for name, want := range expect.rightLinks {
 		id := nodes[name]
-		out := portByName(t, snapshot, id, "right", "output")
+		out := onlyRightPort(t, snapshot, id)
 		if got := len(snapshot.Ports[out].Links); got != want {
 			t.Fatalf("%s output link count = %d, want %d", name, got, want)
 		}
