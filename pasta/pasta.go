@@ -1654,6 +1654,32 @@ func (w *Workspace) SetPortName(id uint64, name string) error {
 	return nil
 }
 
+// SetPortTypes sets a port's supported link types.
+//
+// Existing links that are no longer compatible with the updated type list are
+// removed. The type list must be non-empty and every type must be valid.
+func (w *Workspace) SetPortTypes(id uint64, types []string) error {
+	w.Lock()
+	defer w.Unlock()
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+
+	port, present := w.ports.Get(id)
+	if !present || port == nil {
+		return ErrNoPort
+	}
+	replacement := port.Copy()
+	replacement.Types = append([]string{}, types...)
+	if err := replacement.Validate(); err != nil {
+		return err
+	}
+	port.Types = replacement.Types
+	w.removeIncompatiblePlaceholderPortLinks(port)
+	w.enqueuePortNotification(NotificationPortUpdated, id, portSnapshot(port))
+	return nil
+}
+
 // verifyDAG reports whether the current link graph is acyclic.
 func (w *Workspace) verifyDAG() bool {
 	graph := make(map[uint64][]uint64, w.nodes.Len())
