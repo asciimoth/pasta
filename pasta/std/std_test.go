@@ -489,6 +489,124 @@ func TestStdBoolConstantsSaveAndRestoreValueConfig(t *testing.T) {
 	})
 }
 
+func TestStdStringFormatBuildsPortsFromTemplateAndFormatsValues(t *testing.T) {
+	w := newStdWorkspace(t)
+	nodes := map[string]uint64{
+		"name":   addByClass(t, w, NodeTypeStringConstant, "name"),
+		"count":  addByClass(t, w, NodeTypeIntConstant, "count"),
+		"ratio":  addByClass(t, w, NodeTypeFloatConstant, "ratio"),
+		"format": addByClass(t, w, NodeTypeStringFormat, "format"),
+		"true":   addByClass(t, w, NodeTypeTrueConstant, "true"),
+	}
+	menus := subscribeStdMenus(t, w, nodes)
+	setConstant(t, w, nodes["name"], "Ada")
+	setConstant(t, w, nodes["count"], 7)
+	setConstant(t, w, nodes["ratio"], 2.5)
+
+	setStringFormatTemplate(t, w, nodes["format"], []formatPartSpec{
+		{template: "text", text: "Hello "},
+		{template: "value", name: "Name", typ: TypeString},
+		{template: "text", text: ", count="},
+		{template: "value", name: "Count", typ: TypeInt},
+		{template: "text", text: ", ratio="},
+		{template: "value", name: "Ratio", typ: TypeFloat},
+		{template: "text", text: ", ok="},
+		{template: "value", name: "Ok", typ: TypeBool},
+	})
+	assertLeftPortNames(t, w, nodes["format"], []string{"Name", "Count", "Ratio", "Ok"})
+	assertStringFormatMenuTemplate(t, menus, nodes["format"], []string{"text-1", "value-2", "text-3", "value-4", "text-5", "value-6", "text-7", "value-8"})
+
+	linkByPortName(t, w, nodes["name"], "output", nodes["format"], "Name")
+	linkByPortName(t, w, nodes["count"], "output", nodes["format"], "Count")
+	linkByPortName(t, w, nodes["ratio"], "output", nodes["format"], "Ratio")
+	linkByPortName(t, w, nodes["true"], "output", nodes["format"], "Ok")
+
+	snapshot := w.Snapshot()
+	if got := snapshot.Nodes[nodes["format"]].Label; got != "Hello Ada, count=7, ratio=2.5, ok=true" {
+		t.Fatalf("format label = %q", got)
+	}
+	out := portByName(t, snapshot, nodes["format"], "right", "output")
+	if got := snapshot.Ports[out].Types; !reflect.DeepEqual(got, []string{TypeString}) {
+		t.Fatalf("format output types = %#v, want [%s]", got, TypeString)
+	}
+
+	setStringFormatTemplate(t, w, nodes["format"], []formatPartSpec{
+		{template: "text", text: "Hello "},
+		{template: "value", name: "Person", typ: TypeString},
+		{template: "text", text: ", count="},
+		{template: "value", name: "Count", typ: TypeInt},
+		{template: "text", text: ", ratio="},
+		{template: "value", name: "Ratio", typ: TypeFloat},
+		{template: "text", text: ", ok="},
+		{template: "value", name: "Ok", typ: TypeBool},
+	})
+	assertLeftPortNames(t, w, nodes["format"], []string{"Person", "Count", "Ratio", "Ok"})
+	if got := w.Snapshot().Nodes[nodes["format"]].Label; got != "Hello Ada, count=7, ratio=2.5, ok=true" {
+		t.Fatalf("format label after placeholder rename = %q", got)
+	}
+	if _, _, ok := w.LinkByPorts(
+		portByName(t, w.Snapshot(), nodes["name"], "right", "output"),
+		portByName(t, w.Snapshot(), nodes["format"], "left", "Person"),
+	); !ok {
+		t.Fatal("renamed placeholder did not keep existing link")
+	}
+}
+
+func TestStdStringFormatSaveRestoreAndCopyPastePreserveDynamicPortsAndLinks(t *testing.T) {
+	w := newStdWorkspace(t)
+	name := addByClass(t, w, NodeTypeStringConstant, "name")
+	format := addByClass(t, w, NodeTypeStringFormat, "format")
+	setConstant(t, w, name, "Ada")
+	setStringFormatTemplate(t, w, format, []formatPartSpec{
+		{template: "text", text: "Hello "},
+		{template: "value", name: "Name", typ: TypeString},
+	})
+	linkByPortName(t, w, name, "output", format, "Name")
+
+	cfg := configer.NewMemory(nil)
+	if err := w.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig string format: %v", err)
+	}
+	rawTemplate, err := cfg.Get(configer.Path{"format", "template"})
+	if err != nil {
+		t.Fatalf("saved format template missing: %v", err)
+	}
+	if parts, ok := rawTemplate.([]any); !ok || len(parts) != 2 {
+		t.Fatalf("saved template = %#v, want two parts", rawTemplate)
+	}
+
+	restored, err := pasta.WorkspaceFromConfig(allStdClasses(), cfg, testLogFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig string format: %v", err)
+	}
+	restoredFormat, ok := restored.NodeIDByName("format")
+	if !ok {
+		t.Fatal("restored format node missing")
+	}
+	assertLeftPortNames(t, restored, restoredFormat, []string{"Name"})
+	restoredName, _ := restored.NodeIDByName("name")
+	if _, _, ok := restored.LinkByPorts(
+		portByName(t, restored.Snapshot(), restoredName, "right", "output"),
+		portByName(t, restored.Snapshot(), restoredFormat, "left", "Name"),
+	); !ok {
+		t.Fatal("restored dynamic input link missing")
+	}
+	if got := restored.Snapshot().Nodes[restoredFormat].Label; got != "Hello Ada" {
+		t.Fatalf("restored format label = %q, want Hello Ada", got)
+	}
+
+	clip := restored.Copy([]uint64{restoredName, restoredFormat})
+	pasted := restored.Paste(clip)
+	if len(pasted) != 2 {
+		t.Fatalf("Paste returned %v, want two nodes", pasted)
+	}
+	pastedFormat := pasted[1]
+	assertLeftPortNames(t, restored, pastedFormat, []string{"Name"})
+	if got := restored.Snapshot().Nodes[pastedFormat].Label; got != "Hello Ada" {
+		t.Fatalf("pasted format label = %q, want Hello Ada", got)
+	}
+}
+
 const customSelectType = "example.com/selectValue"
 
 type customValueClass struct {
@@ -892,7 +1010,7 @@ func newStdWorkspace(t *testing.T) *pasta.Workspace {
 func allStdClasses() []pasta.NodeClass {
 	return []pasta.NodeClass{
 		IntConstantClass{}, FloatConstantClass{}, StringConstantClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
-		StringConcatClass{}, StringLengthClass{}, StringContainsClass{}, StringSplitClass{}, StringUpperClass{}, StringLowerClass{}, StringTrimSpaceClass{},
+		StringConcatClass{}, StringFormatClass{}, StringLengthClass{}, StringContainsClass{}, StringSplitClass{}, StringUpperClass{}, StringLowerClass{}, StringTrimSpaceClass{},
 		TrueConstantClass{}, FalseConstantClass{}, BoolAndClass{}, BoolNotClass{}, BoolOrClass{},
 		MoreClass{}, LessClass{}, EqualClass{}, NotEqualClass{},
 		SelectClass{},
@@ -917,6 +1035,38 @@ func setConstant(t *testing.T, w *pasta.Workspace, node uint64, value any) {
 	})
 }
 
+type formatPartSpec struct {
+	template string
+	text     string
+	name     string
+	typ      string
+}
+
+func setStringFormatTemplate(t *testing.T, w *pasta.Workspace, node uint64, parts []formatPartSpec) {
+	t.Helper()
+	values := make([]formular.ArrayElementValue, 0, len(parts))
+	for i, part := range parts {
+		id := part.template + "-" + strconv.Itoa(i+1)
+		element := formular.ArrayElementValue{
+			ID:       id,
+			Template: part.template,
+			Values:   map[string]any{},
+		}
+		if part.template == "text" {
+			element.Values["text"] = part.text
+		} else {
+			element.Values["name"] = part.name
+			element.Values["type"] = part.typ
+		}
+		values = append(values, element)
+	}
+	w.SendNodeFormularMsg(node, formular.FieldUpdateMessage{
+		MessageBase: formular.MessageBase{Type: formular.MessageFieldUpdate, MenuID: pasta.NodeMenuID(node), MenuGeneration: 1},
+		Field:       formular.FieldRef{BlockID: "template", FieldID: "parts"},
+		Value:       values,
+	})
+}
+
 func linkByPortName(t *testing.T, w *pasta.Workspace, rightNode uint64, rightName string, leftNode uint64, leftName string) uint64 {
 	t.Helper()
 	snapshot := w.Snapshot()
@@ -927,6 +1077,33 @@ func linkByPortName(t *testing.T, w *pasta.Workspace, rightNode uint64, rightNam
 		t.Fatalf("AddLink %s -> %s: %v", rightName, leftName, err)
 	}
 	return link
+}
+
+func assertStringFormatMenuTemplate(t *testing.T, state *formular.MenuSnapshotState, node uint64, wantIDs []string) {
+	t.Helper()
+	snapshot, ok := state.Snapshot(pasta.NodeMenuID(node))
+	if !ok {
+		t.Fatalf("missing format menu snapshot for node %d", node)
+	}
+	for _, block := range snapshot.Blocks {
+		if block.ID != "template" {
+			continue
+		}
+		for _, item := range block.Items {
+			if item.ID != "parts" || item.Field == nil {
+				continue
+			}
+			got := make([]string, 0, len(item.Field.Elements))
+			for _, element := range item.Field.Elements {
+				got = append(got, element.ID)
+			}
+			if !reflect.DeepEqual(got, wantIDs) {
+				t.Fatalf("format menu element ids = %#v, want %#v", got, wantIDs)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing template.parts array field in %#v", snapshot)
 }
 
 func assertConfigValue(t *testing.T, cfg configer.Config, path configer.Path, want any) {

@@ -13,6 +13,7 @@ func Register(w *pasta.Workspace) error {
 		MulClass{},
 		SumClass{},
 		StringConcatClass{},
+		StringFormatClass{},
 		StringLengthClass{},
 		StringContainsClass{},
 		StringSplitClass{},
