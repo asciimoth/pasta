@@ -36,8 +36,11 @@ const (
 // workspace state, are included in snapshots, and usually duplicate details
 // written to logs for operators or tests.
 type NodePopup struct {
-	ID   uint64 `json:"id"`
+	// ID is workspace-scoped and can be used to remove one popup later.
+	ID uint64 `json:"id"`
+	// Type is one of NodePopupInfo, NodePopupWard, or NodePopupErr.
 	Type string `json:"type"`
+	// Text is user-facing and intentionally not interpreted by the workspace.
 	Text string `json:"text"`
 }
 
@@ -245,11 +248,14 @@ func (BasicNode) OnSave(cfg configer.Config) error {
 // existing node record, such as node replacement, pass a snapshot of the state
 // the new Node implementation inherits.
 type NodeInitData struct {
+	// PrimaryType, Name, and Label are the workspace-owned values inherited by
+	// the node before OnInit runs.
 	PrimaryType string
 	Name        string
 	Label       string
-	LeftPorts   []uint64
-	RightPorts  []uint64
+	// LeftPorts and RightPorts are copies of the current ordered port IDs.
+	LeftPorts  []uint64
+	RightPorts []uint64
 }
 
 type nodeRecord struct {

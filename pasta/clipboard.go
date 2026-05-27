@@ -44,7 +44,11 @@ type clipboardLink struct {
 }
 
 // Copy serializes the selected nodes and links between them into an opaque
-// clipboard string. Missing node IDs are ignored.
+// clipboard string.
+//
+// Missing node IDs and duplicate selections are ignored. Links are included
+// only when both endpoint nodes are selected. If any selected live node fails
+// OnSave, Copy returns an empty string.
 func (w *Workspace) Copy(ids []uint64) string {
 	w.Lock()
 	defer w.Unlock()
@@ -133,7 +137,10 @@ func (w *Workspace) copyClipboardPorts(ids []uint64) []clipboardPort {
 }
 
 // Paste restores a clipboard string as new nodes and returns their new IDs.
+//
 // Invalid clipboard data and individual node/link restore failures are ignored.
+// Available class factories may recreate live nodes; otherwise placeholders are
+// created so copied graph structure can still be restored.
 func (w *Workspace) Paste(data string) []uint64 {
 	var payload clipboardPayload
 	if err := json.Unmarshal([]byte(data), &payload); err != nil || payload.Version != 1 {

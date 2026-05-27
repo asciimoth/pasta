@@ -7,10 +7,12 @@ import "slices"
 // Nodes, ports, and links are keyed by their workspace-scoped IDs. Individual
 // snapshot values do not include their own IDs.
 type WorkspaceSnapshot struct {
+	// Classes is keyed by class name.
 	Classes map[string]NodeClassSnapshot `json:"classes"`
-	Nodes   map[uint64]NodeSnapshot      `json:"nodes"`
-	Ports   map[uint64]PortSnapshot      `json:"ports"`
-	Links   map[uint64]LinkSnapshot      `json:"links"`
+	// Nodes, Ports, and Links are keyed by workspace-scoped IDs.
+	Nodes map[uint64]NodeSnapshot `json:"nodes"`
+	Ports map[uint64]PortSnapshot `json:"ports"`
+	Links map[uint64]LinkSnapshot `json:"links"`
 }
 
 // NodeClassSnapshot is a JSON-serializable class-list entry.
@@ -35,17 +37,22 @@ type NodeClassPortSnapshot struct {
 
 // NodeSnapshot is a JSON-serializable copy of node metadata and port IDs.
 type NodeSnapshot struct {
-	Class       string      `json:"class"`
-	Name        string      `json:"name"`
-	PrimaryType string      `json:"primary_type"`
-	Label       string      `json:"label"`
-	Position    string      `json:"position"`
-	Popups      []NodePopup `json:"popups"`
-	Placeholder bool        `json:"placeholder"`
-	Root        bool        `json:"root"`
-	HasRootPath bool        `json:"has_root_path"`
-	LeftPorts   []uint64    `json:"left_ports"`
-	RightPorts  []uint64    `json:"right_ports"`
+	Class       string `json:"class"`
+	Name        string `json:"name"`
+	PrimaryType string `json:"primary_type"`
+	Label       string `json:"label"`
+	// Position is an opaque frontend-owned value.
+	Position string      `json:"position"`
+	Popups   []NodePopup `json:"popups"`
+	// Placeholder is true when the node record has no active Node implementation.
+	Placeholder bool `json:"placeholder"`
+	// Root is the explicit root flag. HasRootPath is derived from the current
+	// acyclic link graph and root flags.
+	Root        bool `json:"root"`
+	HasRootPath bool `json:"has_root_path"`
+	// LeftPorts and RightPorts preserve the workspace's current display order.
+	LeftPorts  []uint64 `json:"left_ports"`
+	RightPorts []uint64 `json:"right_ports"`
 }
 
 // PortSnapshot is a JSON-serializable copy of a port.

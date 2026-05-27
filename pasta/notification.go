@@ -9,19 +9,30 @@ const (
 	// NotificationWorkspaceStopped reports that the workspace has been closed.
 	NotificationWorkspaceStopped NotificationKind = "workspace_stopped"
 
-	NotificationNodeAdded   NotificationKind = "node_added"
+	// NotificationNodeAdded carries a snapshot of the newly added node.
+	NotificationNodeAdded NotificationKind = "node_added"
+	// NotificationNodeRemoved carries the last snapshot of the removed node.
 	NotificationNodeRemoved NotificationKind = "node_removed"
+	// NotificationNodeUpdated carries the node snapshot after a mutation.
 	NotificationNodeUpdated NotificationKind = "node_updated"
 
-	NotificationNodeClassAdded   NotificationKind = "node_class_added"
+	// NotificationNodeClassAdded carries the registered class snapshot.
+	NotificationNodeClassAdded NotificationKind = "node_class_added"
+	// NotificationNodeClassRemoved carries the last registered class snapshot.
 	NotificationNodeClassRemoved NotificationKind = "node_class_removed"
 
-	NotificationPortAdded   NotificationKind = "port_added"
+	// NotificationPortAdded carries a snapshot of the newly added port.
+	NotificationPortAdded NotificationKind = "port_added"
+	// NotificationPortRemoved carries the last snapshot of the removed port.
 	NotificationPortRemoved NotificationKind = "port_removed"
+	// NotificationPortUpdated carries the port snapshot after a mutation.
 	NotificationPortUpdated NotificationKind = "port_updated"
 
-	NotificationLinkAdded   NotificationKind = "link_added"
+	// NotificationLinkAdded carries a snapshot of the newly added link.
+	NotificationLinkAdded NotificationKind = "link_added"
+	// NotificationLinkRemoved carries the last snapshot of the removed link.
 	NotificationLinkRemoved NotificationKind = "link_removed"
+	// NotificationLinkUpdated carries the link snapshot after a mutation.
 	NotificationLinkUpdated NotificationKind = "link_updated"
 
 	// NotificationNodeMenu carries one Formular backend-to-frontend message for
@@ -54,7 +65,8 @@ type WorkspaceNotification struct {
 	snapshotRequest bool
 }
 
-// NotificationCallback receives workspace notifications synchronously.
+// NotificationCallback receives workspace notifications synchronously during
+// workspace notification delivery.
 type NotificationCallback func(WorkspaceNotification)
 
 type notificationDelivery struct {

@@ -5,11 +5,16 @@ package pasta
 // Payload is intentionally untyped. Node implementations that agree on a link
 // type own the payload contract and should cast it before doing related work.
 type Event struct {
+	// SenderNode and ReceiverNode identify the nodes expected to be connected
+	// when the event is delivered.
 	SenderNode   uint64
 	ReceiverNode uint64
+	// SenderPort and ReceiverPort identify the ports expected to carry the
+	// event. Delivery is dropped if the current link graph no longer matches.
 	SenderPort   uint64
 	ReceiverPort uint64
-	Payload      any
+	// Payload is owned by cooperating node implementations for the link type.
+	Payload any
 }
 
 // SendEvent schedules delivery of event to the receiver node.

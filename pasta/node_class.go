@@ -33,9 +33,13 @@ type NodeClass interface {
 // NodeInitData.LeftPorts and NodeInitData.RightPorts. Unique allows only one
 // node of this class in a workspace.
 type NodeClassParams struct {
-	Root         bool
-	Unique       bool
-	PrimaryType  string
+	// Root makes freshly constructed nodes explicit roots until changed.
+	Root bool
+	// Unique allows at most one node record of the class in a workspace.
+	Unique bool
+	// PrimaryType is the initial node primary type; empty means no primary type.
+	PrimaryType string
+	// InitialPorts are copied and assigned workspace IDs before OnInit runs.
 	InitialPorts []Port
 }
 
@@ -56,12 +60,16 @@ type NodeClassFactory interface {
 // ports omitted from the state are removed with their links, and ports with ID
 // 0 are added as new ports.
 type NodeClassState struct {
+	// Root, PrimaryType, Name, and Label are the workspace-owned values the
+	// constructed node should inherit.
 	Root        bool
 	PrimaryType string
 	Name        string
 	Label       string
-	LeftPorts   []Port
-	RightPorts  []Port
+	// LeftPorts and RightPorts are desired ordered port states. Existing port
+	// IDs are preserved, omitted IDs are removed, and ID 0 creates a new port.
+	LeftPorts  []Port
+	RightPorts []Port
 }
 
 // AddNodeClass adds or replaces a registered node class.
@@ -180,7 +188,9 @@ func (w *Workspace) NodeClassLongDescription(name string) (string, bool) {
 
 // AddNodeByClass constructs and adds a node using a registered class factory.
 //
-// If name is empty or omitted, a generic unique name is generated.
+// The class must implement NodeClassFactory. Default class parameters are
+// applied before OnInit. If name is empty or omitted, a generic unique name is
+// generated.
 func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error) {
 	if err := ValidateClassName(class); err != nil {
 		return 0, err

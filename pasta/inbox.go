@@ -6,8 +6,11 @@ package pasta
 // carry sender information. They are useful for node-owned background workers
 // to report results back to their parent node through the workspace queue.
 type InboxMessage struct {
+	// ReceiverNode is resolved at delivery time; missing receivers drop the
+	// message without an error.
 	ReceiverNode uint64
-	Payload      any
+	// Payload is owned by the sending code and receiving node implementation.
+	Payload any
 }
 
 // SendInbox schedules delivery of message to its receiver node.

@@ -1,3 +1,24 @@
+// Package pasta provides an in-memory directed graph workspace for node-based
+// applications.
+//
+// A workspace owns node records, ports, links, registered node classes, and
+// UI-facing metadata. Node records have workspace-scoped IDs and unique names.
+// Ports belong to exactly one node, are ordered separately by left and right
+// side, and advertise one or more link types. Links connect one left port to
+// one right port on different nodes; the resulting node graph is kept acyclic.
+// The special AnyType can be used as a wildcard link type.
+//
+// Node implementations receive lifecycle callbacks for initialization,
+// readiness, root-path status, port and link changes, link events, direct inbox
+// messages, Formular messages, and saving. Mutation and delivery callback
+// failures are contained by replacing the implementation with a placeholder
+// record that preserves graph structure where possible. Placeholders are also
+// used when restoring or pasting nodes whose class factory is unavailable.
+//
+// The package also includes class factories, snapshots and notifications for
+// frontends, Formular node-menu delivery, copy/paste payloads, Config
+// save/restore support, node/link resource cleanup, and bounded best-effort
+// undo/redo for topology changes.
 package pasta
 
 import (
@@ -320,7 +341,7 @@ func nodeFailureText(callback string, cause error) string {
 	return fmt.Sprintf("%s failed: %v", callback, cause)
 }
 
-// NodesByClass returns IDs of all nodes with class.
+// NodesByClass returns IDs of all nodes with class in workspace insertion order.
 func (w *Workspace) NodesByClass(class string) ([]uint64, error) {
 	if err := ValidateClassName(class); err != nil {
 		return nil, err
@@ -631,6 +652,9 @@ func (w *Workspace) addNodeLockedWithIDs(node Node, class string, root bool, nam
 }
 
 // AddPlaceholderNode adds a placeholder node with predefined ports.
+//
+// Placeholder nodes have no Node implementation, but their ports and links
+// participate in snapshots, copy/paste, save/restore, and DAG checks.
 func (w *Workspace) AddPlaceholderNode(class string, ports []Port, name ...string) (uint64, error) {
 	return w.AddPlaceholderNodeWithRoot(class, false, ports, optionalName(name))
 }
@@ -1010,6 +1034,9 @@ func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, no
 }
 
 // AddPort adds a port to its owner node and returns the new port ID.
+//
+// The input is copied, existing Links are ignored, and the port name must be
+// unique among the owner node's ports on the same side.
 func (w *Workspace) AddPort(port Port) (uint64, error) {
 	port = port.Copy()
 	port.Links = []uint64{}
@@ -1221,7 +1248,8 @@ func (w *Workspace) NodesConnected(na, nb uint64) bool {
 	return len(w.linksBetweenNodes(na, nb)) > 0
 }
 
-// LinkByPorts returns the link connecting two ports.
+// LinkByPorts returns the link connecting two ports, regardless of argument
+// order.
 func (w *Workspace) LinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
@@ -1349,6 +1377,8 @@ func (w *Workspace) SetNodePosition(id uint64, position string) error {
 }
 
 // SetNodeName sets a node's unique name.
+//
+// Node names are the stable keys used by SaveConfig and WorkspaceFromConfig.
 func (w *Workspace) SetNodeName(id uint64, name string) error {
 	w.Lock()
 	defer w.Unlock()

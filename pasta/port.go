@@ -12,7 +12,7 @@ var (
 	ErrPortDirection = errors.New("port direction")
 )
 
-// Port is owned by node and acts as a point for links attaching.
+// Port is owned by one node and acts as an attachment point for links.
 //
 // Each port direction must be "left" or "right". Each link connects one left
 // port to one right port.
@@ -22,6 +22,7 @@ type Port struct {
 	ID        uint64 // workspace-scoped unique ID
 	Node      uint64 // owner node ID
 
+	// Name is unique among the owner node's ports on the same side.
 	Name string
 
 	// List of supported link types.
@@ -32,6 +33,7 @@ type Port struct {
 	// have no specific handling.
 	Types []string
 
+	// Links is maintained by the workspace and stores attached link IDs.
 	Links []uint64
 }
 

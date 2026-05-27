@@ -34,7 +34,9 @@ type restoreLink struct {
 // WorkspaceFromConfig restores a workspace from Config.
 //
 // The constructor accepts a nil Config, in which case it returns an empty
-// not-yet-restored workspace with the supplied classes registered and Ready run.
+// workspace with the supplied classes registered and Ready run.
+// Unknown or unavailable node classes are restored as placeholders so the saved
+// topology can be kept until a matching class factory is registered.
 func WorkspaceFromConfig(classes []NodeClass, cfg configer.Config, logf LogFactory) (*Workspace, error) {
 	var (
 		nodes  map[string]*restoreNode
