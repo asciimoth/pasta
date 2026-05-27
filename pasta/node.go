@@ -16,6 +16,8 @@ var (
 	ErrNoPort = errors.New("port not found")
 	// ErrNodePopupType reports that a node popup type is unsupported.
 	ErrNodePopupType = errors.New("node popup type")
+	// ErrBasicNodeLinkRejected reports that BasicNode rejected a link by default.
+	ErrBasicNodeLinkRejected = errors.New("basic node link rejected")
 )
 
 const (
@@ -144,6 +146,96 @@ type Node interface {
 	// CamelCase names, so node implementations should prefer lower-case keys
 	// for their own state.
 	OnSave(cfg configer.Config) error
+}
+
+// BasicNode is a minimal Node implementation intended for embedding.
+//
+// All callbacks are no-ops except PreLinkAdd, which rejects every link by
+// default. Third-party node implementations can embed BasicNode and override
+// only the callbacks they need.
+type BasicNode struct{}
+
+var _ Node = BasicNode{}
+
+func (BasicNode) OnInit(
+	w *Workspace,
+	l Logger,
+	id uint64,
+	class string,
+	restored *NodeInitData,
+	isReplacement bool,
+	isPlaceholderReplacement bool,
+	isClassConstructed bool,
+	isRestored bool,
+) error {
+	return nil
+}
+
+func (BasicNode) OnReady() error {
+	return nil
+}
+
+func (BasicNode) OnRootStatus(hasRootPath bool) error {
+	return nil
+}
+
+func (BasicNode) OnStop() {}
+
+func (BasicNode) OnPortAdd(
+	port uint64,
+	direction string,
+	types []string,
+) error {
+	return nil
+}
+
+func (BasicNode) OnPortRemoved(
+	port uint64,
+	direction string,
+) error {
+	return nil
+}
+
+func (BasicNode) PreLinkAdd(
+	port uint64,
+	linkType, portDirection string,
+) (rejection error) {
+	return ErrBasicNodeLinkRejected
+}
+
+func (BasicNode) OnLinkAdd(
+	link, port uint64,
+	linkType, portDirection string,
+) error {
+	return nil
+}
+
+func (BasicNode) OnLinkRemoved(
+	link, port uint64,
+	linkType, portDirection string,
+) error {
+	return nil
+}
+
+func (BasicNode) OnEvent(
+	event Event,
+	linkType string,
+	receiverPortTypes []string,
+	receiverPortDirection string,
+) error {
+	return nil
+}
+
+func (BasicNode) OnInbox(message InboxMessage) error {
+	return nil
+}
+
+func (BasicNode) OnFormularMsg(message any) error {
+	return nil
+}
+
+func (BasicNode) OnSave(cfg configer.Config) error {
+	return nil
 }
 
 // NodeInitData carries existing node-owned workspace state into OnInit.

@@ -12,6 +12,14 @@ type internalNode struct {
 	calls   []string
 }
 
+type embeddedBasicNode struct {
+	BasicNode
+}
+
+func (embeddedBasicNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
+	return nil
+}
+
 type nopLoggerFactory struct{}
 
 func (nopLoggerFactory) WorkspaceLogger() Logger { return nopLogger{} }
@@ -101,6 +109,59 @@ func (n *internalNode) OnFormularMsg(message any) error {
 func (n *internalNode) OnSave(cfg configer.Config) error {
 	n.call("save")
 	return nil
+}
+
+func TestBasicNodeDefaults(t *testing.T) {
+	var node BasicNode
+
+	if err := node.OnInit(nil, nil, 0, "", nil, false, false, false, false); err != nil {
+		t.Fatalf("OnInit error = %v, want nil", err)
+	}
+	if err := node.OnReady(); err != nil {
+		t.Fatalf("OnReady error = %v, want nil", err)
+	}
+	if err := node.OnRootStatus(false); err != nil {
+		t.Fatalf("OnRootStatus error = %v, want nil", err)
+	}
+	node.OnStop()
+	if err := node.OnPortAdd(0, "", nil); err != nil {
+		t.Fatalf("OnPortAdd error = %v, want nil", err)
+	}
+	if err := node.OnPortRemoved(0, ""); err != nil {
+		t.Fatalf("OnPortRemoved error = %v, want nil", err)
+	}
+	if err := node.PreLinkAdd(0, "", ""); !errors.Is(err, ErrBasicNodeLinkRejected) {
+		t.Fatalf("PreLinkAdd error = %v, want %v", err, ErrBasicNodeLinkRejected)
+	}
+	if err := node.OnLinkAdd(0, 0, "", ""); err != nil {
+		t.Fatalf("OnLinkAdd error = %v, want nil", err)
+	}
+	if err := node.OnLinkRemoved(0, 0, "", ""); err != nil {
+		t.Fatalf("OnLinkRemoved error = %v, want nil", err)
+	}
+	if err := node.OnEvent(Event{}, "", nil, ""); err != nil {
+		t.Fatalf("OnEvent error = %v, want nil", err)
+	}
+	if err := node.OnInbox(InboxMessage{}); err != nil {
+		t.Fatalf("OnInbox error = %v, want nil", err)
+	}
+	if err := node.OnFormularMsg(nil); err != nil {
+		t.Fatalf("OnFormularMsg error = %v, want nil", err)
+	}
+	if err := node.OnSave(nil); err != nil {
+		t.Fatalf("OnSave error = %v, want nil", err)
+	}
+}
+
+func TestBasicNodeCanBeEmbeddedAndOverridden(t *testing.T) {
+	var node Node = embeddedBasicNode{}
+
+	if err := node.OnReady(); err != nil {
+		t.Fatalf("embedded OnReady error = %v, want nil", err)
+	}
+	if err := node.PreLinkAdd(0, "", ""); err != nil {
+		t.Fatalf("embedded PreLinkAdd error = %v, want nil", err)
+	}
 }
 
 func TestNodeRecordRemovePortAndPorts(t *testing.T) {
