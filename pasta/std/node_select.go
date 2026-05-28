@@ -283,9 +283,9 @@ func (n *selectNode) closePayloads() {
 
 func (n *selectNode) updateLabel() error {
 	if n.selector {
-		return n.w.SetNodeLabel(n.id, "1")
+		return n.w.SetNodeLabel(n.id, "in 1 -> out")
 	}
-	return n.w.SetNodeLabel(n.id, "0")
+	return n.w.SetNodeLabel(n.id, "in 0 -> out")
 }
 
 func (n *selectNode) sendMenuSnapshot() {

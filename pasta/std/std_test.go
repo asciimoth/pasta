@@ -168,7 +168,7 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 		labels: map[string]string{
 			"i2": "2", "i3": "3", "i4": "4", "f15": "1.5", "f25": "2.5",
 			"sumInt": "0", "sumFloat": "0", "mulInt": "0", "subMixed": "0", "divMixed": "0",
-			"select": "0", "true": "true", "false": "false",
+			"select": "in 0 -> out", "true": "true", "false": "false",
 		},
 		menuValues: map[string]float64{
 			"i2": 2, "i3": 3, "i4": 4, "f15": 1.5, "f25": 2.5,
@@ -291,7 +291,7 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 
 	linkByPortName(t, w, nodes["i2"], "output", nodes["select"], "In 0")
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
-		labels:     map[string]string{"select": "0"},
+		labels:     map[string]string{"select": "in 0 -> out"},
 		primary:    map[string]string{"select": TypeInt},
 		rightLinks: map[string]int{"i2": 5},
 	})
@@ -313,7 +313,7 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 
 	falseSelectorLink := linkByPortName(t, w, nodes["false"], "output", nodes["select"], "Selector")
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
-		labels:     map[string]string{"select": "0", "sumFloat": "12"},
+		labels:     map[string]string{"select": "in 0 -> out", "sumFloat": "12"},
 		menuValues: map[string]float64{"sumFloat": 12},
 		rightLinks: map[string]int{"false": 1},
 	})
@@ -322,7 +322,7 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 	w.RemoveLink(falseSelectorLink)
 	linkByPortName(t, w, nodes["true"], "output", nodes["select"], "Selector")
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
-		labels:     map[string]string{"select": "1", "sumFloat": "11"},
+		labels:     map[string]string{"select": "in 1 -> out", "sumFloat": "11"},
 		menuValues: map[string]float64{"sumFloat": 11},
 		rightLinks: map[string]int{"true": 1, "false": 0},
 	})
