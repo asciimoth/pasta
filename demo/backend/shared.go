@@ -238,9 +238,10 @@ const initialConfig = `{
     "Links": ["Network -> [Loopback] Network"],
   },
   "ServerSelector": {
-    "Class": "pasta/TrueConstant",
+    "Class": "pasta/BoolConstant",
     "Pos": "{\"x\":856,\"y\":1627}",
     "Links": ["output -> [NetSelect] Selector"],
+		"value": true,
   },
   "NetSelect": {
     "Class": "pasta/Select",
@@ -275,37 +276,12 @@ const initialConfig = `{
   },
 }`
 
-func stdClasses() []pasta.NodeClass {
-	return []pasta.NodeClass{
-		std.IntConstantClass{},
-		std.FloatConstantClass{},
-		std.StringConstantClass{},
-		std.SubClass{},
-		std.DivClass{},
-		std.MulClass{},
-		std.SumClass{},
-		std.StringConcatClass{},
-		std.StringFormatClass{},
-		std.StringLengthClass{},
-		std.StringContainsClass{},
-		std.StringSplitClass{},
-		std.StringUpperClass{},
-		std.StringLowerClass{},
-		std.StringTrimSpaceClass{},
-		std.TrueConstantClass{},
-		std.FalseConstantClass{},
-		std.BoolAndClass{},
-		std.BoolNotClass{},
-		std.BoolOrClass{},
-		std.MoreClass{},
-		std.LessClass{},
-		std.EqualClass{},
-		std.NotEqualClass{},
-		std.SelectClass{},
+func Classes() []pasta.NodeClass {
+	return append(std.StdClasses(), []pasta.NodeClass{
 		loopbackClass{},
 		httpServerClass{},
 		httpClientClass{},
-	}
+	}...)
 }
 
 func formatHuJSONText(b []byte) (string, error) {

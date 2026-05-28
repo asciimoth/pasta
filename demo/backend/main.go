@@ -57,7 +57,7 @@ func (b *backend) restart(configText string) {
 		b.emitLog("backend", "error", "config parse failed: "+err.Error())
 		return
 	}
-	w, err := pasta.WorkspaceFromConfig(stdClasses(), cfg, demoLogFactory{b: b})
+	w, err := pasta.WorkspaceFromConfig(Classes(), cfg, demoLogFactory{b: b})
 	if err != nil {
 		b.emitLog("backend", "error", "workspace restore failed: "+err.Error())
 		return

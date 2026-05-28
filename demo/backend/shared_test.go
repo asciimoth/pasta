@@ -33,7 +33,7 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := pasta.WorkspaceFromConfig(stdClasses(), cfg, testLogFactory{})
+	w, err := pasta.WorkspaceFromConfig(Classes(), cfg, testLogFactory{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 		nodeLinks[link.LeftPortNode]++
 		nodeLinks[link.RightPortNode]++
 	}
-	for _, class := range stdClasses() {
+	for _, class := range Classes() {
 		if !classesInGraph[class.ClassName()] {
 			t.Fatalf("initial config does not include std class %s", class.ClassName())
 		}
@@ -94,7 +94,7 @@ func TestSaveConfigFormatsHuJSONText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := pasta.WorkspaceFromConfig(stdClasses(), cfg, testLogFactory{})
+	w, err := pasta.WorkspaceFromConfig(Classes(), cfg, testLogFactory{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestInitialConfigNetworkHTTPExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := pasta.WorkspaceFromConfig(stdClasses(), cfg, testLogFactory{})
+	w, err := pasta.WorkspaceFromConfig(Classes(), cfg, testLogFactory{})
 	if err != nil {
 		t.Fatal(err)
 	}

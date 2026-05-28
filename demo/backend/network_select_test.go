@@ -197,7 +197,7 @@ func TestSelectNetworkLifecycleAfterConsumerAndProviderReattach(t *testing.T) {
 func newNetworkSelectWorkspace(t *testing.T) (*pasta.Workspace, *testNetworkConsumerClass) {
 	t.Helper()
 	w := pasta.NewWorkspace(testLogFactory{})
-	for _, class := range stdClasses() {
+	for _, class := range Classes() {
 		if err := w.AddNodeClass(class); err != nil {
 			t.Fatalf("AddNodeClass %s: %v", class.ClassName(), err)
 		}

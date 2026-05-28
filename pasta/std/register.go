@@ -4,7 +4,16 @@ import "github.com/asciimoth/pasta/pasta"
 
 // Register adds all standard Pasta node classes to w.
 func Register(w *pasta.Workspace) error {
-	for _, class := range []pasta.NodeClass{
+	for _, class := range StdClasses() {
+		if err := w.AddNodeClass(class); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func StdClasses() []pasta.NodeClass {
+	return []pasta.NodeClass{
 		IntConstantClass{},
 		FloatConstantClass{},
 		StringConstantClass{},
@@ -30,10 +39,6 @@ func Register(w *pasta.Workspace) error {
 		EqualClass{},
 		NotEqualClass{},
 		SelectClass{},
-	} {
-		if err := w.AddNodeClass(class); err != nil {
-			return err
-		}
+		BoolConstantClass{},
 	}
-	return nil
 }
