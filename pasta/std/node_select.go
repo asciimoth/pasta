@@ -16,7 +16,9 @@ const NodeTypeSelect = "pasta/Select"
 // type for all three data ports and the node primary type. When Selector is
 // false, events are relayed between In 0 and Out; when true, events are relayed
 // between In 1 and Out. When Select needs the active input value again, it sends
-// RequestValue over the active input link.
+// RequestValue over both sides of the active data path. Payloads implementing
+// ClosablePayload are tracked while passing through the active path and closed
+// when Select switches to another path.
 type SelectClass struct{}
 
 func (SelectClass) ClassName() string        { return NodeTypeSelect }
@@ -53,6 +55,8 @@ type selectNode struct {
 	selectorPort uint64
 	in0          uint64
 	in1          uint64
+
+	payloads []ClosablePayload
 }
 
 func newSelectNode() *selectNode {
@@ -97,7 +101,7 @@ func (n *selectNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ str
 }
 
 func (n *selectNode) OnReady() error {
-	n.requestActive()
+	n.requestActivePath()
 	return nil
 }
 
@@ -123,24 +127,24 @@ func (n *selectNode) PreLinkAdd(port uint64, linkType, portDirection string) err
 	return nil
 }
 
-func (n *selectNode) OnLinkAdd(_ uint64, port uint64, linkType, _ string) error {
+func (n *selectNode) OnLinkAdd(link uint64, port uint64, linkType, _ string) error {
 	if n.isDataPort(port) && n.dataType == "" && linkType != pasta.AnyType {
 		if err := n.applyDataType(linkType); err != nil {
 			return err
 		}
 	}
 	if port == n.selectorPort || port == n.activeInput() {
-		n.requestPort(port)
+		n.requestLink(link, port)
 	}
 	if port == n.out {
-		n.requestActive()
+		n.requestActivePath()
 	}
 	return nil
 }
 
 func (n *selectNode) OnLinkRemoved(_ uint64, port uint64, _ string, _ string) error {
 	if port == n.activeInput() {
-		n.requestActive()
+		n.requestActivePath()
 	}
 	return nil
 }
@@ -156,7 +160,8 @@ func (n *selectNode) OnEvent(event pasta.Event, linkType string, _ []string, rec
 		_ = n.updateLabel()
 		n.sendMenuBlock()
 		if changed {
-			n.requestActive()
+			n.closePayloads()
+			n.requestActivePath()
 		}
 		return nil
 	}
@@ -167,11 +172,13 @@ func (n *selectNode) OnEvent(event pasta.Event, linkType string, _ []string, rec
 	}
 	if receiverPortDirection == "left" {
 		if event.ReceiverPort == n.activeInput() {
+			n.trackPayload(event.Payload)
 			n.forwardToOut(event.Payload)
 		}
 		return nil
 	}
 	if event.ReceiverPort == n.out {
+		n.trackPayload(event.Payload)
 		n.forwardToActiveInput(event.Payload)
 	}
 	return nil
@@ -204,8 +211,9 @@ func (n *selectNode) isDataPort(port uint64) bool {
 	return port == n.in0 || port == n.in1 || port == n.out
 }
 
-func (n *selectNode) requestActive() {
+func (n *selectNode) requestActivePath() {
 	n.requestPort(n.activeInput())
+	n.requestPort(n.out)
 }
 
 func (n *selectNode) requestPort(port uint64) {
@@ -214,13 +222,17 @@ func (n *selectNode) requestPort(port uint64) {
 		return
 	}
 	for _, link := range snapshot.Links {
-		linkSnapshot, ok := n.w.LinkSnapshot(link)
-		if !ok {
-			continue
-		}
-		receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
-		n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
+		n.requestLink(link, port)
 	}
+}
+
+func (n *selectNode) requestLink(link, port uint64) {
+	linkSnapshot, ok := n.w.LinkSnapshot(link)
+	if !ok {
+		return
+	}
+	receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *selectNode) forwardToOut(payload any) {
@@ -250,6 +262,23 @@ func (n *selectNode) forwardToActiveInput(payload any) {
 	}
 	receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
 	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+}
+
+func (n *selectNode) trackPayload(payload any) {
+	closable, ok := payload.(ClosablePayload)
+	if !ok || closable == nil {
+		return
+	}
+	n.payloads = append(n.payloads, closable)
+}
+
+func (n *selectNode) closePayloads() {
+	for _, payload := range n.payloads {
+		if payload != nil {
+			_ = payload.Close()
+		}
+	}
+	n.payloads = nil
 }
 
 func (n *selectNode) updateLabel() error {

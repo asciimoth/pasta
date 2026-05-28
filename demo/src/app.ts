@@ -257,8 +257,15 @@ function addPort(node: any, port: PortSnapshot | undefined, portID: number): voi
   if (!port) return;
   const type = liteGraphPortType(port.types);
   const extra = { pastaPortId: portID, label: port.name, pastaTypes: port.types };
-  if (port.direction === "left") node.addInput(port.name, type, extra);
-  else node.addOutput(port.name, type, extra);
+  if (port.direction === "left") {
+    const linkIDs = port.links.length > 1 ? port.links : [undefined];
+    for (let i = 0; i < linkIDs.length; i += 1) {
+      const name = i === 0 ? port.name : `${port.name} ${i + 1}`;
+      node.addInput(name, type, { ...extra, pastaLinkId: linkIDs[i] });
+    }
+  } else {
+    node.addOutput(port.name, type, extra);
+  }
 }
 
 function liteGraphPortType(types: string[]): string {
@@ -271,7 +278,7 @@ function connectLink(id: number, link: LinkSnapshot): void {
   const inNode = graph.getNodeById(link.left_port_node);
   if (!outNode || !inNode) return;
   const outIndex = findPortIndex(snapshot.nodes[String(link.right_port_node)]?.right_ports, link.right_port);
-  const inIndex = findPortIndex(snapshot.nodes[String(link.left_port_node)]?.left_ports, link.left_port);
+  const inIndex = findInputSlotIndex(inNode, link.left_port, id);
   if (outIndex < 0 || inIndex < 0) return;
   const liteLink = outNode.connect(outIndex, inNode, inIndex);
   if (liteLink) {
@@ -283,6 +290,15 @@ function connectLink(id: number, link: LinkSnapshot): void {
 
 function findPortIndex(ports: number[] | undefined, id: number): number {
   return ports ? ports.indexOf(id) : -1;
+}
+
+function findInputSlotIndex(node: any, portID: number, linkID: number): number {
+  if (!node.inputs) return -1;
+  const exact = node.inputs.findIndex((input: { pastaPortId?: number; pastaLinkId?: number }) => (
+    input.pastaPortId === portID && input.pastaLinkId === linkID
+  ));
+  if (exact >= 0) return exact;
+  return node.inputs.findIndex((input: { pastaPortId?: number }) => input.pastaPortId === portID);
 }
 
 function flushNodePositions(): void {

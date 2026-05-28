@@ -186,7 +186,7 @@ func (b *backend) handle(req callRequest) (any, error) {
 		if err := decodeParams(req.Params, &p); err != nil {
 			return nil, err
 		}
-		if port, ok := w.PortSnapshot(p.To); ok {
+		if port, ok := w.PortSnapshot(p.To); ok && !isMultiLinkTarget(port) {
 			for _, link := range port.Links {
 				w.RemoveLink(link)
 			}
@@ -272,6 +272,10 @@ func (b *backend) handle(req callRequest) (any, error) {
 	default:
 		return nil, errors.New("unknown method " + req.Method)
 	}
+}
+
+func isMultiLinkTarget(port pasta.PortSnapshot) bool {
+	return port.Direction == "left" && len(port.Types) == 1 && port.Types[0] == typeNetwork
 }
 
 func (b *backend) workspace() *pasta.Workspace {

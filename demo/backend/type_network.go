@@ -1,0 +1,169 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"strconv"
+	"time"
+
+	"github.com/asciimoth/configer/configer"
+	"github.com/asciimoth/gonnect"
+	"github.com/asciimoth/pasta/pasta"
+	"github.com/asciimoth/pasta/pasta/std"
+)
+
+// typeNetwork is the Pasta link type carrying Network values backed by
+// gonnect.Network+io.Closer.
+//
+// Values flow from left-directed ports to right-directed ports, which
+// corresponds to right-to-left graph data flow (opposite of standard pasta/std
+// types like int/float/bool/string). A node owning a left-directed
+// pasta/network port sends its current Network instance, whose underlying type
+// implements gonnect.Network+io.Closer, on every connected link when a new
+// link connects, when OnReady runs, when the owned Network instance is
+// replaced, and when the peer sends RequestValue from the right-directed side.
+// If a left-directed port does not yet have a ready Network instance, it
+// defers sending until a value becomes available, then broadcasts to all
+// connected peers. A node owning a right-directed pasta/network port may send
+// RequestValue when it needs the current Network object again. Both sides must
+// register any received Network object with the Workspace resource tracking
+// system, bound to the owning node and link. The event payload implements
+// std.ClosablePayload, so middleware nodes such as std.SelectClass can close a
+// previously-routed wrapper when switching paths. Peers that only implement
+// gonnect.Network without io.Closer should wrap their instance via
+// gonnect.DetachNetwork before using it with this link type. Left-directed
+// pasta/network ports allow an arbitrary count of incoming links; right-directed
+// pasta/network ports allow at most one outgoing link.
+const typeNetwork = "demo.pasta/network"
+
+type networkCloser interface {
+	gonnect.Network
+	io.Closer
+}
+
+type networkPayload struct {
+	Network networkCloser
+}
+
+func (p networkPayload) Close() error {
+	if p.Network == nil {
+		return nil
+	}
+	return p.Network.Close()
+}
+
+func networkPort(direction, name string) pasta.Port {
+	return pasta.Port{Direction: direction, Name: name, Types: []string{typeNetwork}}
+}
+
+func rejectUnsupportedDemoType(typ string) error {
+	return errors.New("unsupported demo type " + typ)
+}
+
+func otherEndpoint(snapshot pasta.LinkSnapshot, port uint64) (uint64, uint64) {
+	if snapshot.LeftPort == port {
+		return snapshot.RightPortNode, snapshot.RightPort
+	}
+	return snapshot.LeftPortNode, snapshot.LeftPort
+}
+
+func bindNetworkResource(w *pasta.Workspace, node, link uint64, n networkCloser) {
+	if w == nil || n == nil {
+		return
+	}
+	_ = w.AddNodeResource(node, n)
+	if link != 0 {
+		_ = w.AddLinkResource(link, n)
+	}
+}
+
+func linkIDForEvent(w *pasta.Workspace, event pasta.Event) uint64 {
+	if w == nil {
+		return 0
+	}
+	link, _, ok := w.LinkByPorts(event.SenderPort, event.ReceiverPort)
+	if !ok {
+		return 0
+	}
+	return link
+}
+
+func readConfigString(cfg configer.Config, key, fallback string) string {
+	if cfg == nil {
+		return fallback
+	}
+	raw, err := cfg.Get(configer.Path{key})
+	if err != nil {
+		return fallback
+	}
+	if value, ok := raw.(string); ok {
+		return value
+	}
+	return fallback
+}
+
+func readConfigInt(cfg configer.Config, key string, fallback int) int {
+	if cfg == nil {
+		return fallback
+	}
+	raw, err := cfg.Get(configer.Path{key})
+	if err != nil {
+		return fallback
+	}
+	switch value := raw.(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return fallback
+	}
+}
+
+func stringFromPayload(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case std.String:
+		return string(v), true
+	default:
+		return "", false
+	}
+}
+
+func intFromPayload(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil {
+			return int(i), true
+		}
+		f, err := v.Float64()
+		return int(f), err == nil
+	case string:
+		i, err := strconv.Atoi(v)
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func sleepOrStopped(stop <-chan struct{}, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-stop:
+		return false
+	case <-timer.C:
+		return true
+	}
+}

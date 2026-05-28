@@ -20,7 +20,6 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   await waitForHTTP(`http://127.0.0.1:${port}/index.html`);
 
   const profile = await mkdtemp(join(tmpdir(), "pasta-chromium-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
 
   const context = await chromium.launchPersistentContext(profile, {
     executablePath: chromiumExecutable,
@@ -37,7 +36,15 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
       "--no-default-browser-check",
     ],
   });
-  t.after(() => context.close());
+  t.after(async () => {
+    const browserProcess = context.browser()?.process?.();
+    await Promise.race([
+      context.close(),
+      delay(3000).then(() => browserProcess?.kill("SIGKILL")),
+    ]);
+    await delay(100);
+    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
 
   const page = await context.newPage();
   const browserErrors = [];
@@ -61,8 +68,8 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const bootValue = await boot.jsonValue();
 
   assert.equal(bootValue.status, "Go WASM backend running");
-  assert.equal(bootValue.nodes, 27);
-  assert.equal(bootValue.links, 50);
+  assert.equal(bootValue.nodes, 35);
+  assert.equal(bootValue.links, 57);
   assert.ok(bootValue.classes >= 20);
   assert.match(bootValue.sidekick, /Create node/);
 
@@ -210,7 +217,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   await page.keyboard.press("Escape");
 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Z" : "Control+Z");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 27);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 35);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+Z" : "Control+Shift+Z");
   await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length >= 29);
 
@@ -229,7 +236,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
       aID: nodeByName.A.id,
     };
   });
-  assert.equal(replacedLink.linkCount, 51);
+  assert.equal(replacedLink.linkCount, 58);
   assert.equal(replacedLink.linkedToSumInput2.length, 1);
   assert.equal(replacedLink.linkedToSumInput2[0].right_port_node, replacedLink.aID);
 

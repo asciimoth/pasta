@@ -226,6 +226,53 @@ const initialConfig = `{
       {"id": "inverted", "template": "value", "values": {"name": "Inverted", "type": "pasta/bool"}},
     ],
   },
+  "Loopback": {
+    "Class": "demo.pasta/Loopback",
+    "Pos": "{\"x\":1445,\"y\":1643}",
+  },
+  "Client": {
+    "Class": "demo.pasta/HttpClient",
+    "Pos": "{\"x\":1106,\"y\":1534}",
+    "url": "http://127.0.0.1:8080/",
+    "method": "GET",
+    "Links": ["Network -> [Loopback] Network"],
+  },
+  "ServerSelector": {
+    "Class": "pasta/TrueConstant",
+    "Pos": "{\"x\":856,\"y\":1627}",
+    "Links": ["output -> [NetSelect] Selector"],
+  },
+  "NetSelect": {
+    "Class": "pasta/Select",
+    "Pos": "{\"x\":1112,\"y\":1734}",
+    "Links": ["Out -> [Loopback] Network"],
+  },
+  "AResponse": {
+    "Class": "pasta/StringConstant",
+    "Pos": "{\"x\":620,\"y\":1860}",
+    "value": "Response from demo server A",
+    "Links": ["output -> [ServerA] Response"],
+  },
+  "BResponse": {
+    "Class": "pasta/StringConstant",
+    "Pos": "{\"x\":620,\"y\":2000}",
+    "value": "Response from demo server B",
+    "Links": ["output -> [ServerB] Response"],
+  },
+  "ServerA": {
+    "Class": "demo.pasta/HttpServer",
+    "Pos": "{\"x\":860,\"y\":1800}",
+    "host": "127.0.0.1",
+    "port": 8081,
+    "Links": ["Network -> [NetSelect] In 0"],
+  },
+  "ServerB": {
+    "Class": "demo.pasta/HttpServer",
+    "Pos": "{\"x\":860,\"y\":1980}",
+    "host": "127.0.0.1",
+    "port": 8080,
+    "Links": ["Network -> [NetSelect] In 1"],
+  },
 }`
 
 func stdClasses() []pasta.NodeClass {
@@ -255,6 +302,9 @@ func stdClasses() []pasta.NodeClass {
 		std.EqualClass{},
 		std.NotEqualClass{},
 		std.SelectClass{},
+		loopbackClass{},
+		httpServerClass{},
+		httpClientClass{},
 	}
 }
 
