@@ -262,7 +262,7 @@ h1 {
 
 #logs-list li {
   display: grid;
-  grid-template-columns: 96px 150px minmax(0, 1fr);
+  grid-template-columns: 96px 150px 72px minmax(0, 1fr);
   gap: 10px;
   align-items: baseline;
   padding: 8px 10px;
@@ -281,19 +281,44 @@ h1 {
   font-weight: 600;
 }
 
+#logs-list strong {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 56px;
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  background: var(--surface0);
+  color: var(--blue);
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
 #logs-list span {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--subtext);
 }
 
-#logs-list .log-warn b {
+#logs-list .log-warn strong {
+  border-color: color-mix(in srgb, var(--yellow), transparent 55%);
+  background: color-mix(in srgb, var(--yellow), var(--surface0) 86%);
   color: var(--yellow);
 }
 
-#logs-list .log-error b,
-#logs-list .log-fatal b {
+#logs-list .log-error strong,
+#logs-list .log-fatal strong {
+  border-color: color-mix(in srgb, var(--red), transparent 50%);
+  background: color-mix(in srgb, var(--red), var(--surface0) 84%);
   color: var(--red);
+}
+
+#logs-list .log-info strong {
+  border-color: color-mix(in srgb, var(--green), transparent 58%);
+  background: color-mix(in srgb, var(--green), var(--surface0) 88%);
+  color: var(--green);
 }
 
 .config-panel {

@@ -71,6 +71,7 @@ export const STD_TYPE_COLORS: Record<string, TypeColor> = {
   "pasta/float": { color: "#bd5a20", textColor: "#ffffff" },
   "pasta/string": { color: "#087d73", textColor: "#ffffff" },
   "pasta/bool": { color: "#3b7f3e", textColor: "#ffffff" },
+  "demo.pasta/network": { color: "#8a5cf6", textColor: "#ffffff" },
 };
 
 export function emptySnapshot(): WorkspaceSnapshot {

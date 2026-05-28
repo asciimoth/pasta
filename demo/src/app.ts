@@ -12,6 +12,7 @@ import {
   typeColor,
   type ID,
   type LinkSnapshot,
+  type NodeClassSnapshot,
   type NodeSnapshot,
   type PortSnapshot,
   type WorkspaceNotification,
@@ -167,6 +168,7 @@ function initGraph(): void {
   canvas.node_title_color = DEFAULT_NODE_TEXT_COLOR;
   canvas.onNodeMoved = flushNodePositions;
   canvas.onSelectionChange = scheduleSidekickUpdate;
+  installPastaPalette();
   resizeGraphCanvas();
   graphResizeObserver = new ResizeObserver(resizeGraphCanvas);
   graphResizeObserver.observe(el.graphCanvas);
@@ -177,6 +179,50 @@ function initGraph(): void {
   el.graphCanvas.addEventListener("keydown", graphKeydown, { capture: true });
   el.graphCanvas.tabIndex = 0;
   requestAnimationFrame(resizeGraphCanvas);
+}
+
+function installPastaPalette(): void {
+  if (!canvas) return;
+  canvas.getMenuOptions = () => [
+    {
+      content: "Add Node",
+      has_submenu: true,
+      callback: (_value: unknown, _options: unknown, event: MouseEvent, menu: unknown) => {
+        showPastaAddNodeMenu(event, menu);
+        return false;
+      },
+    },
+  ];
+  canvas.onSearchBox = (_helper: HTMLElement, query: string) => {
+    const normalized = query.trim().toLowerCase();
+    return paletteClasses()
+      .filter((cls) => paletteLabel(cls).toLowerCase().includes(normalized) || cls.class.toLowerCase().includes(normalized))
+      .map(paletteLabel);
+  };
+  canvas.onSearchBoxSelection = (label: string, event: MouseEvent) => {
+    const cls = paletteClasses().find((candidate) => paletteLabel(candidate) === label || candidate.class === label);
+    if (cls) addPastaNodeAt(cls.class, canvasPositionFromEvent(event));
+  };
+}
+
+function showPastaAddNodeMenu(event: MouseEvent, parentMenu: unknown): void {
+  const entries = paletteClasses().map((cls) => ({
+    content: paletteLabel(cls),
+    value: cls.class,
+    callback: (entry: { value: string }) => {
+      addPastaNodeAt(entry.value, canvasPositionFromEvent(event));
+      return false;
+    },
+  }));
+  new LiteGraph.ContextMenu(entries, { event, parentMenu }, canvas.getCanvasWindow());
+}
+
+function paletteClasses(): NodeClassSnapshot[] {
+  return Object.values(snapshot.classes).sort((a, b) => paletteLabel(a).localeCompare(paletteLabel(b)));
+}
+
+function paletteLabel(cls: NodeClassSnapshot): string {
+  return shortClass(cls.class);
 }
 
 function resizeGraphCanvas(): void {
@@ -355,11 +401,34 @@ function renderClassPanel(selectedCount: number): void {
     }
     button.innerHTML = `<strong>${escapeHTML(shortClass(cls.class))}</strong><span>${escapeHTML(cls.short_description)}</span>`;
     button.addEventListener("click", () => {
-      const pos = canvas?.convertOffsetToCanvas ? canvas.convertOffsetToCanvas([240, 180]) : [160, 120];
-      tryBackend("addNode", { class: cls.class, position: formatPosition(pos) });
+      addPastaNodeAt(cls.class, visibleCanvasSpawnPosition());
     });
     list.append(button);
   }
+}
+
+function addPastaNodeAt(className: string, pos: [number, number]): number | null {
+  return tryBackend<number>("addNode", { class: className, position: formatPosition(pos) });
+}
+
+function visibleCanvasSpawnPosition(): [number, number] {
+  if (!canvas?.convertCanvasToOffset) return [160, 120];
+  const rect = el.graphCanvas.getBoundingClientRect();
+  const x = clamp(rect.width * 0.5, 80, Math.max(80, rect.width - 160));
+  const y = clamp(rect.height * 0.35, 80, Math.max(80, rect.height - 120));
+  return canvas.convertCanvasToOffset([x, y]) as [number, number];
+}
+
+function canvasPositionFromEvent(event: MouseEvent): [number, number] {
+  if (!canvas?.convertCanvasToOffset) return visibleCanvasSpawnPosition();
+  const rect = el.graphCanvas.getBoundingClientRect();
+  const x = clamp(event.clientX - rect.left, 0, rect.width);
+  const y = clamp(event.clientY - rect.top, 0, rect.height);
+  return canvas.convertCanvasToOffset([x, y]) as [number, number];
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function renderNodePanel(id: number): void {
@@ -476,7 +545,7 @@ function renderLogs(): void {
   for (const row of rows.reverse()) {
     const item = document.createElement("li");
     item.className = `log-${row.level}`;
-    item.innerHTML = `<time>${escapeHTML(row.at)}</time><b>${escapeHTML(row.source)}</b><span>${escapeHTML(row.text)}</span>`;
+    item.innerHTML = `<time>${escapeHTML(row.at)}</time><b>${escapeHTML(row.source)}</b><strong>${escapeHTML(row.level)}</strong><span>${escapeHTML(row.text)}</span>`;
     el.logs.append(item);
   }
 }

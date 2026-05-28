@@ -132,6 +132,8 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
     const canvas = document.querySelector("#graph-canvas");
     const rect = canvas.getBoundingClientRect();
     return {
+      left: Math.round(rect.left),
+      bottom: Math.round(rect.bottom),
       cssWidth: Math.round(rect.width),
       cssHeight: Math.round(rect.height),
       bitmapWidth: canvas.width,
@@ -140,6 +142,25 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   });
   assert.equal(canvasMetrics.bitmapWidth, canvasMetrics.cssWidth);
   assert.equal(canvasMetrics.bitmapHeight, canvasMetrics.cssHeight);
+
+  const palettePoint = { x: canvasMetrics.left + 36, y: canvasMetrics.bottom - 36 };
+  await page.mouse.click(palettePoint.x, palettePoint.y, { button: "right" });
+  await page.waitForSelector(".litecontextmenu");
+  await page.locator(".litecontextmenu .litemenu-entry", { hasText: "Add Node" }).last().click();
+  await page.waitForFunction(() => (document.querySelector(".litecontextmenu:last-child")?.textContent || "").includes("IntConstant"));
+  const addMenuText = await page.locator(".litecontextmenu").last().textContent();
+  assert.match(addMenuText, /Loopback/);
+  assert.doesNotMatch(addMenuText, /WebSocket|Texture|Audio/);
+  await page.evaluate(() => document.querySelectorAll(".litecontextmenu").forEach((menu) => menu.remove()));
+
+  await page.mouse.dblclick(palettePoint.x + 24, palettePoint.y - 24);
+  await page.waitForSelector(".litesearchbox input");
+  await page.fill(".litesearchbox input", "loop");
+  await page.waitForFunction(() => (document.querySelector(".litesearchbox .helper")?.textContent || "").includes("Loopback"));
+  const searchText = await page.locator(".litesearchbox .helper").textContent();
+  assert.match(searchText, /Loopback/);
+  assert.doesNotMatch(searchText, /websocket|texture|audio/i);
+  await page.keyboard.press("Escape");
 
   await page.evaluate(() => {
     const api = window.__pastaDemo;
