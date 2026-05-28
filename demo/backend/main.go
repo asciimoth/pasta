@@ -178,6 +178,15 @@ func (b *backend) handle(req callRequest) (any, error) {
 			return nil, err
 		}
 		return true, w.SetNodePosition(p.ID, p.Position)
+	case "setNodeName":
+		var p struct {
+			ID   uint64 `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return true, w.SetNodeName(p.ID, p.Name)
 	case "addLink":
 		var p struct {
 			From uint64 `json:"from"`

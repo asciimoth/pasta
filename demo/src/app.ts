@@ -53,6 +53,7 @@ declare global {
       snapshot(): WorkspaceSnapshot;
       selectNode(id: number): void;
       selectNodes(ids: number[]): void;
+      renameNode(id: number, name: string): void;
       moveNode(id: number, x: number, y: number): void;
       canConnect(from: number, to: number): boolean;
       nodeScreenPosition(id: number): { x: number; y: number } | null;
@@ -370,6 +371,7 @@ function renderNodePanel(id: number): void {
     selectedMenu?.node === id &&
     document.getElementById("node-menu")
   ) {
+    syncNodeNameEditor(node);
     return;
   }
   const description = tryBackend<string>("classDescription", { class: node.class }) ?? "";
@@ -377,6 +379,13 @@ function renderNodePanel(id: number): void {
   el.sidekick.dataset.nodeId = String(id);
   el.sidekick.dataset.nodeClass = node.class;
   el.sidekick.innerHTML = `
+    <form class="node-name-form" data-node-name-form>
+      <label for="node-name-input">Name</label>
+      <div class="node-name-row">
+        <input id="node-name-input" name="name" autocomplete="off" spellcheck="false" value="${escapeAttr(node.name)}">
+        <button type="submit">Rename</button>
+      </div>
+    </form>
     <div class="node-panel-tabs">
       <button class="active" data-node-tab="menu" type="button">Node menu</button>
       <button data-node-tab="docs" type="button">Description</button>
@@ -390,7 +399,34 @@ function renderNodePanel(id: number): void {
   for (const tab of el.sidekick.querySelectorAll<HTMLButtonElement>("[data-node-tab]")) {
     tab.addEventListener("click", () => setNodePanelTab(tab.dataset.nodeTab ?? "menu"));
   }
+  const form = el.sidekick.querySelector<HTMLFormElement>("[data-node-name-form]");
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitNodeName(id);
+  });
+  form?.querySelector<HTMLInputElement>("input")?.addEventListener("blur", () => submitNodeName(id));
   mountMenu(id);
+}
+
+function syncNodeNameEditor(node: NodeSnapshot): void {
+  const input = el.sidekick.querySelector<HTMLInputElement>("#node-name-input");
+  if (!input || document.activeElement === input) return;
+  input.value = node.name;
+}
+
+function submitNodeName(id: number): void {
+  const input = el.sidekick.querySelector<HTMLInputElement>("#node-name-input");
+  if (!input) return;
+  const node = snapshot.nodes[String(id)];
+  const name = input.value.trim();
+  if (!node || name === node.name) {
+    if (node) input.value = node.name;
+    return;
+  }
+  const renamed = tryBackend<boolean>("setNodeName", { id, name });
+  if (!renamed) {
+    input.value = node.name;
+  }
 }
 
 function setNodePanelTab(name: string): void {
@@ -602,6 +638,10 @@ function escapeHTML(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
 }
 
+function escapeAttr(value: string): string {
+  return escapeHTML(value).replace(/`/g, "&#96;");
+}
+
 function shortClass(name: string): string {
   return name.split("/").pop() ?? name;
 }
@@ -653,6 +693,9 @@ function installTestHooks(): void {
     selectNodes: (ids: number[]) => {
       selectGraphNodes(ids);
       updateSidekick();
+    },
+    renameNode: (id: number, name: string) => {
+      tryBackend("setNodeName", { id, name });
     },
     moveNode: (id: number, x: number, y: number) => {
       const node = graph?.getNodeById(id);

@@ -147,6 +147,17 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
     api.selectNode(Number(entry[0]));
   });
   await page.waitForFunction(() => /Node menu/.test(document.querySelector("#sidekick")?.textContent || ""));
+  await page.fill("#node-name-input", "Renamed A");
+  await page.press("#node-name-input", "Enter");
+  await page.waitForFunction(() => Object.values(window.__pastaDemo.snapshot().nodes).some((node) => node.name === "Renamed A"));
+  await page.waitForFunction(() => document.querySelector("#node-name-input")?.value === "Renamed A");
+  await page.fill("#node-name-input", "Sum");
+  await page.press("#node-name-input", "Enter");
+  await page.waitForFunction(() => document.querySelector("#node-name-input")?.value === "Renamed A");
+  await page.fill("#node-name-input", "A");
+  await page.press("#node-name-input", "Enter");
+  await page.waitForFunction(() => document.querySelector("#node-name-input")?.value === "A");
+  await page.waitForFunction(() => Object.values(window.__pastaDemo.snapshot().nodes).some((node) => node.name === "A"));
   await page.mouse.click(20, 120);
   await page.waitForFunction(() => /Create node/.test(document.querySelector("#sidekick")?.textContent || ""));
 

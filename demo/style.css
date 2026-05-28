@@ -35,6 +35,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -192,6 +193,43 @@ h1 {
 
 .node-panel-tabs button {
   flex: 1;
+}
+
+.node-name-form {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.node-name-form label {
+  color: var(--subtext);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.node-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.node-name-row input {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--surface1);
+  border-radius: 6px;
+  background: var(--crust);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.node-name-row input:focus {
+  border-color: var(--blue);
+  outline: none;
+}
+
+.node-name-row button {
+  padding: 0 10px;
 }
 
 .node-panel-section h2 {
