@@ -56,13 +56,6 @@ func networkPort(direction, name string) pasta.Port {
 	return pasta.Port{Direction: direction, Name: name, Types: []string{typeNetwork}}
 }
 
-func otherEndpoint(snapshot pasta.LinkSnapshot, port uint64) (uint64, uint64) {
-	if snapshot.LeftPort == port {
-		return snapshot.RightPortNode, snapshot.RightPort
-	}
-	return snapshot.LeftPortNode, snapshot.LeftPort
-}
-
 func bindNetworkResource(w *pasta.Workspace, node, link uint64, n networkCloser) {
 	if w == nil || n == nil {
 		return
@@ -71,17 +64,6 @@ func bindNetworkResource(w *pasta.Workspace, node, link uint64, n networkCloser)
 	if link != 0 {
 		_ = w.AddLinkResource(link, n)
 	}
-}
-
-func linkIDForEvent(w *pasta.Workspace, event pasta.Event) uint64 {
-	if w == nil {
-		return 0
-	}
-	link, _, ok := w.LinkByPorts(event.SenderPort, event.ReceiverPort)
-	if !ok {
-		return 0
-	}
-	return link
 }
 
 func readConfigString(cfg configer.Config, key, fallback string) string {

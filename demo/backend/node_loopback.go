@@ -72,10 +72,10 @@ func (n *loopbackNode) OnLinkAdd(link, port uint64, _, _ string) error {
 }
 
 func (n *loopbackNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
-	if event.ReceiverPort != n.out || receiverPortDirection != "left" || linkType != typeNetwork || !isNetworkRequest(event.Payload) {
+	if event.ReceiverPort != n.out || receiverPortDirection != "left" || linkType != typeNetwork || !std.IsRequest(event.Payload) {
 		return nil
 	}
-	n.sendToPeer(event.SenderNode, event.SenderPort, linkIDForEvent(n.w, event))
+	n.sendToLink(event.Link)
 	return nil
 }
 
@@ -90,30 +90,7 @@ func (n *loopbackNode) sendAll() {
 }
 
 func (n *loopbackNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
-	if !ok {
-		return
-	}
-	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.sendToPeer(receiverNode, receiverPort, link)
-}
-
-func (n *loopbackNode) sendToPeer(receiverNode, receiverPort, link uint64) {
-	if n.base == nil {
-		return
-	}
 	wrapper := gonnect.DetachNetwork(n.base)
 	bindNetworkResource(n.w, n.id, link, wrapper)
-	n.w.SendEvent(pasta.Event{
-		SenderNode:   n.id,
-		SenderPort:   n.out,
-		ReceiverNode: receiverNode,
-		ReceiverPort: receiverPort,
-		Payload:      networkPayload{Network: wrapper},
-	})
-}
-
-func isNetworkRequest(payload any) bool {
-	_, ok := payload.(std.RequestValue)
-	return ok
+	n.w.EmitEvent(n.id, link, networkPayload{Network: wrapper})
 }

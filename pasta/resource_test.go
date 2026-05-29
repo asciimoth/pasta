@@ -2,18 +2,30 @@ package pasta_test
 
 import (
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/asciimoth/pasta/pasta"
 )
 
 type trackedCloser struct {
-	count int
+	mu      sync.Mutex
+	counter int
 }
 
 func (c *trackedCloser) Close() error {
-	c.count += 1
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counter += 1
 	return nil
+}
+
+func (c *trackedCloser) count() int {
+	time.Sleep(time.Millisecond * 10) // TODO: do not use sleep
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.counter
 }
 
 type resourceInitNode struct {
@@ -67,12 +79,13 @@ func TestWorkspaceNodeResourcesCloseOnNodeLifecycleEnd(t *testing.T) {
 		}
 
 		w.RemoveNode(nodeID)
-		if resource.count != 1 {
-			t.Fatalf("resource close count after RemoveNode = %d, want 1", resource.count)
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after RemoveNode = %d, want 1", count)
 		}
 		w.Close()
-		if resource.count != 1 {
-			t.Fatalf("resource close count after workspace Close = %d, want 1", resource.count)
+		if count != 1 {
+			t.Fatalf("resource close count after workspace Close = %d, want 1", count)
 		}
 	})
 
@@ -90,8 +103,9 @@ func TestWorkspaceNodeResourcesCloseOnNodeLifecycleEnd(t *testing.T) {
 		if err := w.ReplaceNode(nodeID, &workspaceNode{}); err != nil {
 			t.Fatalf("ReplaceNode: %v", err)
 		}
-		if resource.count != 1 {
-			t.Fatalf("resource close count after ReplaceNode = %d, want 1", resource.count)
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after ReplaceNode = %d, want 1", count)
 		}
 	})
 
@@ -110,8 +124,10 @@ func TestWorkspaceNodeResourcesCloseOnNodeLifecycleEnd(t *testing.T) {
 		if err := w.ReplaceNode(nodeID, &workspaceNode{failOn: map[string]error{"OnReady": failErr}}); !errors.Is(err, failErr) {
 			t.Fatalf("ReplaceNode error = %v, want %v", err, failErr)
 		}
-		if resource.count != 1 {
-			t.Fatalf("resource close count after failed ReplaceNode = %d, want 1", resource.count)
+
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after failed ReplaceNode = %d, want 1", count)
 		}
 	})
 
@@ -135,8 +151,10 @@ func TestWorkspaceNodeResourcesCloseOnNodeLifecycleEnd(t *testing.T) {
 		}
 
 		w.SendInbox(pasta.InboxMessage{ReceiverNode: nodeID, Payload: "payload"})
-		if replacementResource.count != 1 {
-			t.Fatalf("resource close count after panic placeholder = %d, want 1", replacementResource.count)
+
+		count := replacementResource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after panic placeholder = %d, want 1", count)
 		}
 	})
 
@@ -150,8 +168,10 @@ func TestWorkspaceNodeResourcesCloseOnNodeLifecycleEnd(t *testing.T) {
 			t.Fatalf("AddNode error = %v, want %v", err, failErr)
 		}
 		assertFailedPlaceholder(t, w, nodeID, "OnInit", "init boom")
-		if resource.count != 1 {
-			t.Fatalf("resource close count after failed OnInit = %d, want 1", resource.count)
+
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after failed OnInit = %d, want 1", count)
 		}
 	})
 }
@@ -170,8 +190,10 @@ func TestWorkspaceLinkResourcesCloseOnLinkLifecycleEnd(t *testing.T) {
 		}
 
 		w.RemoveLink(linkID)
-		if resource.count != 1 {
-			t.Fatalf("resource close count after RemoveLink = %d, want 1", resource.count)
+
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after RemoveLink = %d, want 1", count)
 		}
 	})
 
@@ -188,8 +210,10 @@ func TestWorkspaceLinkResourcesCloseOnLinkLifecycleEnd(t *testing.T) {
 		}
 
 		w.RemoveNode(leftID)
-		if resource.count != 1 {
-			t.Fatalf("resource close count after RemoveNode = %d, want 1", resource.count)
+
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after RemoveNode = %d, want 1", count)
 		}
 	})
 
@@ -211,8 +235,10 @@ func TestWorkspaceLinkResourcesCloseOnLinkLifecycleEnd(t *testing.T) {
 		if _, _, err := w.AddLink(leftPort, rightPort); !errors.Is(err, failErr) {
 			t.Fatalf("AddLink error = %v, want %v", err, failErr)
 		}
-		if resource.count != 1 {
-			t.Fatalf("resource close count after failed AddLink = %d, want 1", resource.count)
+
+		count := resource.count()
+		if count != 1 {
+			t.Fatalf("resource close count after failed AddLink = %d, want 1", count)
 		}
 	})
 }
@@ -240,16 +266,22 @@ func TestWorkspaceResourcesCloseOnceWhenAnyOwnerCloses(t *testing.T) {
 	}
 
 	w.RemoveNode(leftID)
-	if resource.count != 1 {
-		t.Fatalf("resource close count after first owner removal = %d, want 1", resource.count)
+
+	count := resource.count()
+	if count != 1 {
+		t.Fatalf("resource close count after first owner removal = %d, want 1", count)
 	}
 	w.RemoveNode(rightID)
-	if resource.count != 1 {
-		t.Fatalf("resource close count after second owner removal = %d, want 1", resource.count)
+
+	count = resource.count()
+	if count != 1 {
+		t.Fatalf("resource close count after second owner removal = %d, want 1", count)
 	}
 	w.Close()
-	if resource.count != 1 {
-		t.Fatalf("resource close count after workspace Close = %d, want 1", resource.count)
+
+	count = resource.count()
+	if count != 1 {
+		t.Fatalf("resource close count after workspace Close = %d, want 1", count)
 	}
 }
 
@@ -278,11 +310,15 @@ func TestWorkspaceCloseClosesTrackedResources(t *testing.T) {
 
 	w.Close()
 	w.Close()
-	if shared.count != 1 {
-		t.Fatalf("shared resource close count after workspace Close = %d, want 1", shared.count)
+
+	count := shared.count()
+	if count != 1 {
+		t.Fatalf("shared resource close count after workspace Close = %d, want 1", count)
 	}
-	if linkOnly.count != 1 {
-		t.Fatalf("link-only resource close count after workspace Close = %d, want 1", linkOnly.count)
+
+	count = linkOnly.count()
+	if count != 1 {
+		t.Fatalf("link-only resource close count after workspace Close = %d, want 1", count)
 	}
 }
 

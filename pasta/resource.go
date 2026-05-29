@@ -104,9 +104,11 @@ func (w *Workspace) closeResourceLocked(key resourceKey) {
 	}
 	delete(w.resources, key)
 	w.detachResourceLocked(key)
-	if err := state.closer.Close(); err != nil {
-		w.log.Debugf("resource close failed: %v", err)
-	}
+	go func() {
+		if err := state.closer.Close(); err != nil {
+			w.log.Debugf("resource close failed: %v", err)
+		}
+	}()
 }
 
 func (w *Workspace) detachResourceLocked(key resourceKey) {

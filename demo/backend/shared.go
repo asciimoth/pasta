@@ -230,6 +230,10 @@ const initialConfig = `{
     "Class": "demo.pasta/Loopback",
     "Pos": "{\"x\":1445,\"y\":1643}",
   },
+  "OutProxy": {
+    "Class": "demo.pasta/OutProxy",
+    "Pos": "{\"x\":1445,\"y\":1491}",
+  },
   "Client": {
     "Class": "demo.pasta/HttpClient",
     "Pos": "{\"x\":1106,\"y\":1534}",
@@ -281,6 +285,7 @@ func Classes() []pasta.NodeClass {
 		loopbackClass{},
 		httpServerClass{},
 		httpClientClass{},
+		outproxyClass{},
 	}...)
 }
 

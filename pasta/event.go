@@ -15,6 +15,9 @@ type Event struct {
 	ReceiverPort uint64
 	// Payload is owned by cooperating node implementations for the link type.
 	Payload any
+
+	// ID of link. Autofilled by Workspace
+	Link uint64
 }
 
 // SendEvent schedules delivery of event to the receiver node.
@@ -26,6 +29,47 @@ func (w *Workspace) SendEvent(event Event) {
 	w.AddPendingOp(func() {
 		w.deliverEvent(event)
 	})
+}
+
+// EmitEvent builds event from sender id, link id and payload and sends it.
+// sender can be ether sender node or sender port
+func (w *Workspace) EmitEvent(sender, link uint64, payload any) {
+	event := Event{
+		SenderNode: sender,
+		Link:       link,
+		Payload:    payload,
+	}
+
+	ls, ok := w.LinkSnapshot(link)
+	if !ok {
+		return
+	}
+
+	if ls.LeftPortNode == sender {
+		event.SenderPort = ls.LeftPort
+
+		event.ReceiverPort = ls.RightPort
+		event.ReceiverNode = ls.RightPortNode
+	} else if ls.RightPortNode == sender {
+		event.SenderPort = ls.RightPort
+
+		event.ReceiverPort = ls.LeftPort
+		event.ReceiverNode = ls.LeftPortNode
+	} else if ls.LeftPort == sender {
+		event.SenderNode = ls.LeftPortNode
+
+		event.ReceiverPort = ls.RightPort
+		event.ReceiverNode = ls.RightPortNode
+	} else if ls.RightPort == sender {
+		event.SenderNode = ls.RightPortNode
+
+		event.ReceiverPort = ls.LeftPort
+		event.ReceiverNode = ls.LeftPortNode
+	} else {
+		return
+	}
+
+	w.SendEvent(event)
 }
 
 func (w *Workspace) deliverEvent(event Event) {
@@ -62,6 +106,8 @@ func (w *Workspace) deliverEvent(event Event) {
 	if link.Placeholder {
 		return
 	}
+
+	event.Link = link.ID
 
 	if err := receiver.OnEvent(
 		event,

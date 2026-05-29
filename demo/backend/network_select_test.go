@@ -3,6 +3,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/pasta/pasta"
@@ -81,20 +82,14 @@ func (n *testNetworkConsumerNode) OnEvent(event pasta.Event, linkType string, _ 
 	if !ok || payload.Network == nil {
 		return nil
 	}
-	link := linkIDForEvent(n.w, event)
-	bindNetworkResource(n.w, n.id, link, payload.Network)
+	bindNetworkResource(n.w, n.id, event.Link, payload.Network)
 	n.network = payload.Network
 	n.events++
 	return nil
 }
 
 func (n *testNetworkConsumerNode) requestLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
-	if !ok {
-		return
-	}
-	receiverNode, receiverPort := otherEndpoint(snapshot, n.netp)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.netp, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: std.RequestValue{}})
+	std.Request(n.w, n.id, link)
 }
 
 func TestSelectSwitchClosesInactiveNetworkAndRefreshesActiveNetwork(t *testing.T) {
@@ -294,6 +289,9 @@ func requireNetworkOpen(t *testing.T, network networkCloser, label string) {
 
 func requireNetworkClosed(t *testing.T, network networkCloser, label string) {
 	t.Helper()
+
+	time.Sleep(time.Millisecond * 10) // TODO: Do not use sleep
+
 	up, ok := network.(interface{ IsUp() (bool, error) })
 	if !ok {
 		t.Fatalf("%s: network does not expose IsUp", label)

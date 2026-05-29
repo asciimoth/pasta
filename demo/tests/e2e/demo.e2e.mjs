@@ -68,7 +68,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const bootValue = await boot.jsonValue();
 
   assert.equal(bootValue.status, "Go WASM backend running");
-  assert.equal(bootValue.nodes, 35);
+  assert.equal(bootValue.nodes, 36);
   assert.equal(bootValue.links, 57);
   assert.ok(bootValue.classes >= 20);
   assert.match(bootValue.sidekick, /Create node/);
@@ -249,7 +249,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   await page.keyboard.press("Escape");
 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Z" : "Control+Z");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 35);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 36);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+Z" : "Control+Shift+Z");
   await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length >= 29);
 

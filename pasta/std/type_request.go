@@ -1,6 +1,10 @@
 package std
 
-import "io"
+import (
+	"io"
+
+	"github.com/asciimoth/pasta/pasta"
+)
 
 // RequestValue asks the right-directed endpoint of a link to send its current
 // value back over the same link.
@@ -21,4 +25,13 @@ type RequestValue struct{}
 // access previously handed through middleware.
 type ClosablePayload interface {
 	io.Closer
+}
+
+func IsRequest(payload any) bool {
+	_, ok := payload.(RequestValue)
+	return ok
+}
+
+func Request(w *pasta.Workspace, sender, link uint64) {
+	w.EmitEvent(sender, link, RequestValue{})
 }

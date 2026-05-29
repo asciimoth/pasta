@@ -134,9 +134,9 @@ func (n *httpServerNode) PreLinkAdd(port uint64, linkType, portDirection string)
 func (n *httpServerNode) OnLinkAdd(link, port uint64, _, _ string) error {
 	switch port {
 	case n.netp:
-		n.requestLink(link, port)
+		std.Request(n.w, n.id, link)
 	case n.in:
-		n.requestLink(link, port)
+		std.Request(n.w, n.id, link)
 	}
 	return nil
 }
@@ -155,8 +155,7 @@ func (n *httpServerNode) OnEvent(event pasta.Event, linkType string, _ []string,
 		if !ok || payload.Network == nil {
 			return nil
 		}
-		link := linkIDForEvent(n.w, event)
-		bindNetworkResource(n.w, n.id, link, payload.Network)
+		bindNetworkResource(n.w, n.id, event.Link, payload.Network)
 		n.network = payload.Network
 		n.restartWorker()
 		return nil
@@ -338,17 +337,8 @@ func (n *httpServerNode) requestPort(port uint64) {
 		return
 	}
 	for _, link := range snapshot.Links {
-		n.requestLink(link, port)
+		std.Request(n.w, n.id, link)
 	}
-}
-
-func (n *httpServerNode) requestLink(link, port uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
-	if !ok {
-		return
-	}
-	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: std.RequestValue{}})
 }
 
 func (n *httpServerNode) updateLabel() error {

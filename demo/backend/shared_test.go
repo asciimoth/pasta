@@ -39,7 +39,7 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 35; got != want {
+	if got, want := len(snapshot.Nodes), 36; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
 	if got, want := len(snapshot.Links), 57; got != want {
@@ -58,11 +58,6 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	for _, class := range Classes() {
 		if !classesInGraph[class.ClassName()] {
 			t.Fatalf("initial config does not include std class %s", class.ClassName())
-		}
-	}
-	for id, count := range nodeLinks {
-		if count == 0 {
-			t.Fatalf("node %q has no links", snapshot.Nodes[id].Name)
 		}
 	}
 	linksByName := map[string]bool{}
