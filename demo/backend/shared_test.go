@@ -39,10 +39,10 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 36; got != want {
+	if got, want := len(snapshot.Nodes), 46; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
-	if got, want := len(snapshot.Links), 57; got != want {
+	if got, want := len(snapshot.Links), 70; got != want {
 		t.Errorf("links = %d, want %d", got, want)
 	}
 	classesInGraph := map[string]bool{}
@@ -74,7 +74,6 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 		"SelectedText:Out -> Summary:Selected",
 		"SplitGreeting:After -> Summary:After",
 		"TextLength:output -> Summary:Length",
-		"Client:Network -> Loopback:Network",
 		"NetSelect:Out -> Loopback:Network",
 		"ServerB:Network -> NetSelect:In 1",
 	} {
@@ -146,14 +145,24 @@ func TestInitialConfigNetworkHTTPExample(t *testing.T) {
 		t.Fatal("SubscribeNodeMenu DemoServerB returned false")
 	}
 	waitForMenuLog(t, &mu, state, pasta.NodeMenuID(server), "listening on 127.0.0.1:8080")
-	request := formular.FormApplyMessage{
-		MessageBase: formular.MessageBase{Type: formular.MessageFormApply, MenuID: pasta.NodeMenuID(client), MenuGeneration: 1, BlockGeneration: 1},
-		BlockID:     "request",
-		Values: map[string]any{
-			"url":    "http://127.0.0.1:8080/",
-			"method": "GET",
-			"body":   "",
+	// request := formular.FormApplyMessage{
+	// 	MessageBase: formular.MessageBase{Type: formular.MessageFormApply, MenuID: pasta.NodeMenuID(client), MenuGeneration: 1, BlockGeneration: 1},
+	// 	BlockID:     "request",
+	// 	Values: map[string]any{
+	// 		"url":    "http://127.0.0.1:8080/",
+	// 		"method": "GET",
+	// 		"body":   "",
+	// 	},
+	// }
+	request := formular.ButtonPressMessage{
+		MessageBase: formular.MessageBase{
+			Type:            formular.MessageButtonPress,
+			MenuID:          pasta.NodeMenuID(client),
+			MenuGeneration:  1,
+			BlockGeneration: 1,
 		},
+		BlockID:  "request",
+		ButtonID: "send",
 	}
 	w.SendNodeFormularMsg(client, request)
 

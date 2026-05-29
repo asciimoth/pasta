@@ -39,6 +39,7 @@ func StdClasses() []pasta.NodeClass {
 		EqualClass{},
 		NotEqualClass{},
 		SelectClass{},
+		SelectOutClass{},
 		BoolConstantClass{},
 	}
 }

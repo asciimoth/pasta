@@ -1,15 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"io"
-	"strconv"
 	"time"
 
 	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/gonnect"
 	"github.com/asciimoth/pasta/pasta"
-	"github.com/asciimoth/pasta/pasta/std"
 )
 
 // typeNetwork is the Pasta link type carrying Network values backed by
@@ -97,40 +94,6 @@ func readConfigInt(cfg configer.Config, key string, fallback int) int {
 		return int(value)
 	default:
 		return fallback
-	}
-}
-
-func stringFromPayload(value any) (string, bool) {
-	switch v := value.(type) {
-	case string:
-		return v, true
-	case std.String:
-		return string(v), true
-	default:
-		return "", false
-	}
-}
-
-func intFromPayload(value any) (int, bool) {
-	switch v := value.(type) {
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case float64:
-		return int(v), true
-	case json.Number:
-		i, err := v.Int64()
-		if err == nil {
-			return int(i), true
-		}
-		f, err := v.Float64()
-		return int(f), err == nil
-	case string:
-		i, err := strconv.Atoi(v)
-		return i, err == nil
-	default:
-		return 0, false
 	}
 }
 

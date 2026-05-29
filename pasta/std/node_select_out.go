@@ -6,43 +6,42 @@ import (
 	"github.com/asciimoth/pasta/pasta"
 )
 
-// NodeTypeSelect is the class name for SelectClass.
-const NodeTypeSelect = "pasta/Select"
+// NodeTypeSelectOut is the class name for SelectOutClass.
+const NodeTypeSelectOut = "pasta/SelectOut"
 
-// SelectClass creates a bidirectional selector node.
+// SelectOutClass creates a bidirectional output selector node.
 //
-// Selector is a pasta/bool input. In 0, In 1, and Out start as any/any data
+// Selector is a pasta/bool input. In, Out 0, and Out 1 start as any/any data
 // ports. The first typed link attached to a data port derives one shared data
 // type for all three data ports and the node primary type. When Selector is
-// false, events are relayed between In 0 and Out; when true, events are relayed
-// between In 1 and Out. When Select needs the active input value again, it sends
-// RequestValue over both sides of the active data path. Payloads implementing
-// ClosablePayload are tracked while passing through the active path and closed
-// when Select switches to another path.
-type SelectClass struct{}
+// false, events are relayed between In and Out 0; when true, events are relayed
+// between In and Out 1. When SelectOut needs the active path value again, it
+// sends RequestValue over both sides of the active data path. Payloads
+// and closed when SelectOut switches to another path.
+type SelectOutClass struct{}
 
-func (SelectClass) ClassName() string        { return NodeTypeSelect }
-func (SelectClass) ShortDescription() string { return "Select one of two inputs" }
-func (SelectClass) LongDescription() string {
-	return "Relays events between Out and In 0 when Selector is false, or between Out and In 1 when Selector is true. The data ports derive a shared type from the first typed data link."
+func (SelectOutClass) ClassName() string        { return NodeTypeSelectOut }
+func (SelectOutClass) ShortDescription() string { return "Select one of two outputs" }
+func (SelectOutClass) LongDescription() string {
+	return "Relays events between In and Out 0 when Selector is false, or between In and Out 1 when Selector is true. The data ports derive a shared type from the first typed data link."
 }
-func (SelectClass) DefaultNodeParams() pasta.NodeClassParams {
+func (SelectOutClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{InitialPorts: []pasta.Port{
-		{Direction: "right", Name: "Out", Types: []string{pasta.AnyType}},
+		{Direction: "left", Name: "In", Types: []string{pasta.AnyType}},
 		{Direction: "left", Name: "Selector", Types: []string{TypeBool}},
-		{Direction: "left", Name: "In 0", Types: []string{pasta.AnyType}},
-		{Direction: "left", Name: "In 1", Types: []string{pasta.AnyType}},
+		{Direction: "right", Name: "Out 0", Types: []string{pasta.AnyType}},
+		{Direction: "right", Name: "Out 1", Types: []string{pasta.AnyType}},
 	}}
 }
-func (SelectClass) NewNode(_ configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
-	n := newSelectNode()
+func (SelectOutClass) NewNode(_ configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
+	n := newSelectOutNode()
 	if state := firstState(previous); state != nil {
 		n.dataType = state.PrimaryType
 	}
 	return n, nil
 }
 
-type selectNode struct {
+type selectOutNode struct {
 	pasta.BasicNode
 
 	selector bool
@@ -51,40 +50,44 @@ type selectNode struct {
 	w  *pasta.Workspace
 	id uint64
 
-	out          uint64
+	in           uint64
 	selectorPort uint64
-	in0          uint64
-	in1          uint64
+	out0         uint64
+	out1         uint64
 
 	payloads []ClosablePayload
 }
 
-func newSelectNode() *selectNode {
-	return &selectNode{}
+func newSelectOutNode() *selectOutNode {
+	return &selectOutNode{}
 }
 
-func (n *selectNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ string, restored *pasta.NodeInitData, _, _, _, _ bool) error {
+func (n *selectOutNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ string, restored *pasta.NodeInitData, _, _, _, _ bool) error {
 	n.w = w
 	n.id = id
 	if restored != nil {
-		for _, port := range restored.RightPorts {
-			snapshot, ok := w.PortSnapshot(port)
-			if ok && snapshot.Name == "Out" {
-				n.out = port
-			}
-		}
 		for _, port := range restored.LeftPorts {
 			snapshot, ok := w.PortSnapshot(port)
 			if !ok {
 				continue
 			}
 			switch snapshot.Name {
+			case "In":
+				n.in = port
 			case "Selector":
 				n.selectorPort = port
-			case "In 0":
-				n.in0 = port
-			case "In 1":
-				n.in1 = port
+			}
+		}
+		for _, port := range restored.RightPorts {
+			snapshot, ok := w.PortSnapshot(port)
+			if !ok {
+				continue
+			}
+			switch snapshot.Name {
+			case "Out 0":
+				n.out0 = port
+			case "Out 1":
+				n.out1 = port
 			}
 		}
 	}
@@ -100,12 +103,12 @@ func (n *selectNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ str
 	return nil
 }
 
-func (n *selectNode) OnReady() error {
+func (n *selectOutNode) OnReady() error {
 	n.requestActivePath()
 	return nil
 }
 
-func (n *selectNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
+func (n *selectOutNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if portDirection == "left" {
 		snapshot, ok := n.w.PortSnapshot(port)
 		if ok && len(snapshot.Links) > 0 {
@@ -127,29 +130,29 @@ func (n *selectNode) PreLinkAdd(port uint64, linkType, portDirection string) err
 	return nil
 }
 
-func (n *selectNode) OnLinkAdd(link uint64, port uint64, linkType, _ string) error {
+func (n *selectOutNode) OnLinkAdd(link uint64, port uint64, linkType, _ string) error {
 	if n.isDataPort(port) && n.dataType == "" && linkType != pasta.AnyType {
 		if err := n.applyDataType(linkType); err != nil {
 			return err
 		}
 	}
-	if port == n.selectorPort || port == n.activeInput() {
+	if port == n.selectorPort || port == n.in {
 		n.requestLink(link, port)
 	}
-	if port == n.out {
+	if port == n.activeOutput() {
 		n.requestActivePath()
 	}
 	return nil
 }
 
-func (n *selectNode) OnLinkRemoved(_ uint64, port uint64, _ string, _ string) error {
-	if port == n.activeInput() {
+func (n *selectOutNode) OnLinkRemoved(_ uint64, port uint64, _ string, _ string) error {
+	if port == n.activeOutput() {
 		n.requestActivePath()
 	}
 	return nil
 }
 
-func (n *selectNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
+func (n *selectOutNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
 	if event.ReceiverPort == n.selectorPort {
 		value, ok := event.Payload.(bool)
 		if !ok {
@@ -171,25 +174,25 @@ func (n *selectNode) OnEvent(event pasta.Event, linkType string, _ []string, rec
 		}
 	}
 	if receiverPortDirection == "left" {
-		if event.ReceiverPort == n.activeInput() {
+		if event.ReceiverPort == n.in {
 			n.trackPayload(event.Payload)
-			n.forwardToOut(event.Payload)
+			n.forwardToActiveOutput(event.Payload)
 		}
 		return nil
 	}
-	if event.ReceiverPort == n.out {
+	if event.ReceiverPort == n.activeOutput() {
 		n.trackPayload(event.Payload)
-		n.forwardToActiveInput(event.Payload)
+		n.forwardToIn(event.Payload)
 	}
 	return nil
 }
 
-func (n *selectNode) applyDataType(typ string) error {
+func (n *selectOutNode) applyDataType(typ string) error {
 	n.dataType = typ
 	if err := n.w.SetNodePrimary(n.id, typ); err != nil {
 		return err
 	}
-	for _, port := range []uint64{n.in0, n.in1, n.out} {
+	for _, port := range []uint64{n.in, n.out0, n.out1} {
 		if port == 0 {
 			continue
 		}
@@ -200,23 +203,23 @@ func (n *selectNode) applyDataType(typ string) error {
 	return nil
 }
 
-func (n *selectNode) activeInput() uint64 {
+func (n *selectOutNode) activeOutput() uint64 {
 	if n.selector {
-		return n.in1
+		return n.out1
 	}
-	return n.in0
+	return n.out0
 }
 
-func (n *selectNode) isDataPort(port uint64) bool {
-	return port == n.in0 || port == n.in1 || port == n.out
+func (n *selectOutNode) isDataPort(port uint64) bool {
+	return port == n.in || port == n.out0 || port == n.out1
 }
 
-func (n *selectNode) requestActivePath() {
-	n.requestPort(n.activeInput())
-	n.requestPort(n.out)
+func (n *selectOutNode) requestActivePath() {
+	n.requestPort(n.in)
+	n.requestPort(n.activeOutput())
 }
 
-func (n *selectNode) requestPort(port uint64) {
+func (n *selectOutNode) requestPort(port uint64) {
 	snapshot, ok := n.w.PortSnapshot(port)
 	if !ok || len(snapshot.Links) == 0 {
 		return
@@ -226,7 +229,7 @@ func (n *selectNode) requestPort(port uint64) {
 	}
 }
 
-func (n *selectNode) requestLink(link, port uint64) {
+func (n *selectOutNode) requestLink(link, port uint64) {
 	linkSnapshot, ok := n.w.LinkSnapshot(link)
 	if !ok {
 		return
@@ -235,8 +238,9 @@ func (n *selectNode) requestLink(link, port uint64) {
 	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
-func (n *selectNode) forwardToOut(payload any) {
-	snapshot, ok := n.w.PortSnapshot(n.out)
+func (n *selectOutNode) forwardToActiveOutput(payload any) {
+	port := n.activeOutput()
+	snapshot, ok := n.w.PortSnapshot(port)
 	if !ok {
 		return
 	}
@@ -245,14 +249,13 @@ func (n *selectNode) forwardToOut(payload any) {
 		if !ok {
 			continue
 		}
-		receiverNode, receiverPort := otherEndpoint(linkSnapshot, n.out)
-		n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+		receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
+		n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
 	}
 }
 
-func (n *selectNode) forwardToActiveInput(payload any) {
-	port := n.activeInput()
-	snapshot, ok := n.w.PortSnapshot(port)
+func (n *selectOutNode) forwardToIn(payload any) {
+	snapshot, ok := n.w.PortSnapshot(n.in)
 	if !ok || len(snapshot.Links) == 0 {
 		return
 	}
@@ -260,11 +263,11 @@ func (n *selectNode) forwardToActiveInput(payload any) {
 	if !ok {
 		return
 	}
-	receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+	receiverNode, receiverPort := otherEndpoint(linkSnapshot, n.in)
+	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.in, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
 }
 
-func (n *selectNode) trackPayload(payload any) {
+func (n *selectOutNode) trackPayload(payload any) {
 	closable, ok := payload.(ClosablePayload)
 	if !ok || closable == nil {
 		return
@@ -272,7 +275,7 @@ func (n *selectNode) trackPayload(payload any) {
 	n.payloads = append(n.payloads, closable)
 }
 
-func (n *selectNode) closePayloads() {
+func (n *selectOutNode) closePayloads() {
 	for _, payload := range n.payloads {
 		if payload != nil {
 			pasta.CloseBackground(payload)
@@ -281,21 +284,21 @@ func (n *selectNode) closePayloads() {
 	n.payloads = nil
 }
 
-func (n *selectNode) updateLabel() error {
+func (n *selectOutNode) updateLabel() error {
 	if n.selector {
-		return n.w.SetNodeLabel(n.id, "in 1 -> out")
+		return n.w.SetNodeLabel(n.id, "in -> out 1")
 	}
-	return n.w.SetNodeLabel(n.id, "in 0 -> out")
+	return n.w.SetNodeLabel(n.id, "in -> out 0")
 }
 
-func (n *selectNode) sendMenuSnapshot() {
+func (n *selectOutNode) sendMenuSnapshot() {
 	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
 }
 
-func (n *selectNode) sendMenuBlock() {
+func (n *selectOutNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
@@ -305,7 +308,7 @@ func (n *selectNode) sendMenuBlock() {
 	})
 }
 
-func (n *selectNode) menuBlock() formular.Block {
+func (n *selectOutNode) menuBlock() formular.Block {
 	return formular.Block{
 		ID: "state", Order: 10, Generation: 1,
 		Items: []formular.Item{{

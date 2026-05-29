@@ -104,11 +104,7 @@ func (w *Workspace) closeResourceLocked(key resourceKey) {
 	}
 	delete(w.resources, key)
 	w.detachResourceLocked(key)
-	go func() {
-		if err := state.closer.Close(); err != nil {
-			w.log.Debugf("resource close failed: %v", err)
-		}
-	}()
+	CloseBackground(state.closer)
 }
 
 func (w *Workspace) detachResourceLocked(key resourceKey) {
@@ -130,9 +126,7 @@ func (w *Workspace) closeAllResourcesLocked() {
 		if state == nil || state.closer == nil {
 			continue
 		}
-		if err := state.closer.Close(); err != nil {
-			w.log.Debugf("resource close failed: %v", err)
-		}
+		CloseBackground(state.closer)
 		delete(w.resources, key)
 	}
 	w.nodeResources = make(map[uint64]map[resourceKey]struct{})

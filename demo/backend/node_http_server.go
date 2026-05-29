@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/asciimoth/configer/configer"
@@ -15,7 +16,12 @@ import (
 	"github.com/asciimoth/pasta/pasta/std"
 )
 
-const nodeTypeHTTPServer = "demo.pasta/HttpServer"
+const (
+	nodeTypeHTTPServer = "demo.pasta/HttpServer"
+
+	defaultHTTPServerHost = "127.0.0.1"
+	defaultHTTPServerPort = 8080
+)
 
 type httpServerClass struct{}
 
@@ -28,12 +34,14 @@ func (httpServerClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: typeNetwork, InitialPorts: []pasta.Port{
 		networkPort("right", "Network"),
 		{Direction: "left", Name: "Response", Types: []string{std.TypeString}},
+		{Direction: "left", Name: "Host", Types: []string{std.TypeString}},
+		{Direction: "left", Name: "Port", Types: []string{std.TypeString}},
 	}}
 }
 func (httpServerClass) NewNode(cfg configer.Config, _ ...*pasta.NodeClassState) (pasta.Node, error) {
 	return &httpServerNode{
-		host:     readConfigString(cfg, "host", "127.0.0.1"),
-		port:     readConfigInt(cfg, "port", 8080),
+		host:     readConfigString(cfg, "host", defaultHTTPServerHost),
+		port:     readConfigInt(cfg, "port", defaultHTTPServerPort),
 		response: readConfigString(cfg, "response", ""),
 	}, nil
 }
@@ -41,10 +49,12 @@ func (httpServerClass) NewNode(cfg configer.Config, _ ...*pasta.NodeClassState) 
 type httpServerNode struct {
 	pasta.BasicNode
 
-	w    *pasta.Workspace
-	id   uint64
-	netp uint64
-	in   uint64
+	w     *pasta.Workspace
+	id    uint64
+	netp  uint64
+	in    uint64
+	hostp uint64
+	portp uint64
 
 	host     string
 	port     int
@@ -74,12 +84,14 @@ type httpServerWorker struct {
 func (n *httpServerNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ string, restored *pasta.NodeInitData, _, _, _, _ bool) error {
 	n.w = w
 	n.id = id
+
 	if n.host == "" {
-		n.host = "127.0.0.1"
+		n.host = defaultHTTPServerHost
 	}
 	if n.port == 0 {
-		n.port = 8080
+		n.port = defaultHTTPServerPort
 	}
+
 	if restored != nil {
 		if len(restored.RightPorts) > 0 {
 			n.netp = restored.RightPorts[0]
@@ -87,10 +99,18 @@ func (n *httpServerNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _
 		if len(restored.LeftPorts) > 0 {
 			n.in = restored.LeftPorts[0]
 		}
+		if len(restored.LeftPorts) > 1 {
+			n.hostp = restored.LeftPorts[1]
+		}
+		if len(restored.LeftPorts) > 2 {
+			n.portp = restored.LeftPorts[2]
+		}
 	}
+
 	if err := n.w.SetNodePrimary(n.id, typeNetwork); err != nil {
 		return err
 	}
+
 	_ = n.updateLabel()
 	n.sendMenuSnapshot()
 	return nil
@@ -99,6 +119,8 @@ func (n *httpServerNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _
 func (n *httpServerNode) OnReady() error {
 	n.requestNetwork()
 	n.requestResponse()
+	n.requestHost()
+	n.requestListenPort()
 	n.restartWorker()
 	return nil
 }
@@ -113,39 +135,56 @@ func (n *httpServerNode) PreLinkAdd(port uint64, linkType, portDirection string)
 		if portDirection != "right" || linkType != typeNetwork {
 			return pasta.LinkTypeErr(linkType)
 		}
-		snapshot, ok := n.w.PortSnapshot(port)
-		if ok && len(snapshot.Links) > 0 {
+		if n.portHasLinks(port) {
 			return pasta.ErrLinkDup
 		}
+
 	case n.in:
 		if portDirection != "left" || linkType != std.TypeString {
 			return pasta.LinkTypeErr(linkType)
 		}
-		snapshot, ok := n.w.PortSnapshot(port)
-		if ok && len(snapshot.Links) > 0 {
+		if n.portHasLinks(port) {
 			return pasta.ErrLinkDup
 		}
+
+	case n.hostp, n.portp:
+		if portDirection != "left" || linkType != std.TypeString {
+			return pasta.LinkTypeErr(linkType)
+		}
+		if n.portHasLinks(port) {
+			return pasta.ErrLinkDup
+		}
+
 	default:
 		return pasta.LinkTypeErr(linkType)
 	}
+
 	return nil
 }
 
 func (n *httpServerNode) OnLinkAdd(link, port uint64, _, _ string) error {
 	switch port {
-	case n.netp:
+	case n.netp, n.in:
 		std.Request(n.w, n.id, link)
-	case n.in:
+
+	case n.hostp, n.portp:
+		n.sendListenBlock()
 		std.Request(n.w, n.id, link)
 	}
+
 	return nil
 }
 
 func (n *httpServerNode) OnLinkRemoved(_ uint64, port uint64, _, _ string) error {
-	if port == n.netp {
+	switch port {
+	case n.netp:
 		n.network = nil
 		n.restartWorker()
+
+	case n.hostp, n.portp:
+		n.sendListenBlock()
 	}
+
 	return nil
 }
 
@@ -160,12 +199,27 @@ func (n *httpServerNode) OnEvent(event pasta.Event, linkType string, _ []string,
 		n.restartWorker()
 		return nil
 	}
-	if event.ReceiverPort == n.in && receiverPortDirection == "left" && linkType == std.TypeString {
-		if value, ok := stringFromPayload(event.Payload); ok {
-			n.response = value
-			n.restartWorker()
+
+	if receiverPortDirection == "left" && linkType == std.TypeString {
+		switch event.ReceiverPort {
+		case n.in:
+			if value, ok := std.StringFromPayload(event.Payload); ok {
+				n.response = value
+				n.restartWorker()
+			}
+
+		case n.hostp:
+			if value, ok := std.StringFromPayload(event.Payload); ok {
+				n.setHost(value)
+			}
+
+		case n.portp:
+			if value, ok := std.StringFromPayload(event.Payload); ok {
+				n.setPortString(value)
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -187,15 +241,30 @@ func (n *httpServerNode) OnFormularMsg(message any) error {
 	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.BlockID != "listen" {
 		return nil
 	}
-	if value, ok := stringFromPayload(msg.Values["host"]); ok && value != "" {
-		n.host = value
+
+	if n.listenReadonly() {
+		n.sendListenBlock()
+		return nil
 	}
-	if value, ok := intFromPayload(msg.Values["port"]); ok && value > 0 {
-		n.port = value
+
+	changed := false
+
+	if value, ok := std.StringFromPayload(msg.Values["host"]); ok {
+		changed = n.setHostNoRefresh(value) || changed
 	}
-	_ = n.updateLabel()
-	n.sendListenBlock()
-	n.restartWorker()
+
+	if value, ok := std.IntFromPayload(msg.Values["port"]); ok {
+		changed = n.setPortNoRefresh(value) || changed
+	}
+
+	if changed {
+		_ = n.updateLabel()
+		n.sendListenBlock()
+		n.restartWorker()
+	} else {
+		n.sendListenBlock()
+	}
+
 	return nil
 }
 
@@ -370,9 +439,29 @@ func (n *httpServerNode) sendLogsBlock() {
 }
 
 func (n *httpServerNode) listenBlock() formular.Block {
+	readonly := n.listenReadonly()
+
 	return formular.Block{ID: "listen", Order: 10, Generation: 1, Form: true, Items: []formular.Item{
-		{Type: formular.ItemField, ID: "host", Label: "Host", Field: &formular.Field{Kind: formular.FieldText, Value: n.host}},
-		{Type: formular.ItemField, ID: "port", Label: "Port", Field: &formular.Field{Kind: formular.FieldInt, Value: n.port}},
+		{
+			Type:  formular.ItemField,
+			ID:    "host",
+			Label: "Host",
+			Field: &formular.Field{
+				Kind:     formular.FieldText,
+				Value:    n.host,
+				Readonly: readonly,
+			},
+		},
+		{
+			Type:  formular.ItemField,
+			ID:    "port",
+			Label: "Port",
+			Field: &formular.Field{
+				Kind:     formular.FieldInt,
+				Value:    n.port,
+				Readonly: readonly,
+			},
+		},
 	}}
 }
 
@@ -387,4 +476,88 @@ func (n *httpServerNode) appendLog(level, text string) {
 	if len(n.logs) > 40 {
 		n.logs = append([]formular.LogLine(nil), n.logs[len(n.logs)-40:]...)
 	}
+}
+
+func (n *httpServerNode) setHost(value string) {
+	if n.setHostNoRefresh(value) {
+		_ = n.updateLabel()
+		n.sendListenBlock()
+		n.restartWorker()
+		return
+	}
+	n.sendListenBlock()
+}
+
+func (n *httpServerNode) setHostNoRefresh(value string) bool {
+	if value == "" {
+		value = defaultHTTPServerHost
+	}
+	if n.host == value {
+		return false
+	}
+	n.host = value
+	return true
+}
+
+func (n *httpServerNode) setPortString(value string) {
+	port, ok := parseHTTPServerPort(value)
+	if !ok {
+		n.sendListenBlock()
+		return
+	}
+
+	if n.setPortNoRefresh(port) {
+		_ = n.updateLabel()
+		n.sendListenBlock()
+		n.restartWorker()
+		return
+	}
+
+	n.sendListenBlock()
+}
+
+func (n *httpServerNode) setPortNoRefresh(port int) bool {
+	if port <= 0 {
+		port = defaultHTTPServerPort
+	}
+	if n.port == port {
+		return false
+	}
+	n.port = port
+	return true
+}
+
+func parseHTTPServerPort(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return defaultHTTPServerPort, true
+	}
+
+	port, err := strconv.Atoi(value)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, false
+	}
+
+	return port, true
+}
+
+func (n *httpServerNode) requestHost() {
+	n.requestPort(n.hostp)
+}
+
+func (n *httpServerNode) requestListenPort() {
+	n.requestPort(n.portp)
+}
+
+func (n *httpServerNode) listenReadonly() bool {
+	return n.portHasLinks(n.hostp) || n.portHasLinks(n.portp)
+}
+
+func (n *httpServerNode) portHasLinks(port uint64) bool {
+	if n.w == nil || port == 0 {
+		return false
+	}
+
+	snapshot, ok := n.w.PortSnapshot(port)
+	return ok && len(snapshot.Links) > 0
 }

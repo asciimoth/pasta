@@ -16,3 +16,14 @@ package std
 // link; right-directed pasta/string ports may have multiple outgoing links and
 // broadcast the same value to each connected peer.
 const TypeString = "pasta/string"
+
+func StringFromPayload(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case String:
+		return string(v), true
+	default:
+		return "", false
+	}
+}

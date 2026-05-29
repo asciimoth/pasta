@@ -1,5 +1,10 @@
 package std
 
+import (
+	"encoding/json"
+	"strconv"
+)
+
 // TypeInt is the Pasta link type carrying Int values backed by Go int.
 //
 // Values flow from right-directed ports to left-directed ports, which
@@ -16,3 +21,26 @@ package std
 // pasta/int ports may have multiple outgoing links and broadcast the same value
 // to each connected peer.
 const TypeInt = "pasta/int"
+
+func IntFromPayload(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil {
+			return int(i), true
+		}
+		f, err := v.Float64()
+		return int(f), err == nil
+	case string:
+		i, err := strconv.Atoi(v)
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
