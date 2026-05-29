@@ -1,6 +1,9 @@
 package pasta
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	// ErrLinkSameNode reports that a link connects ports owned by the same node.
@@ -9,7 +12,13 @@ var (
 	ErrLinkSamePort = errors.New("same port link")
 	// ErrNoLink reports that a link ID does not exist in the workspace.
 	ErrNoLink = errors.New("link not found")
+
+	ErrLinkType = errors.New("unsupported link type")
 )
+
+func LinkTypeErr(typ string) error {
+	return fmt.Errorf("%w %s", ErrLinkType, typ)
+}
 
 // Link connects one left port to one right port.
 //

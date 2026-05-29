@@ -96,10 +96,10 @@ func (n *stringFormatNode) PreLinkAdd(port uint64, linkType, portDirection strin
 		if port == n.out && linkType == TypeString {
 			return nil
 		}
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	if !stringFormatTypeSupported(linkType) {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	snapshot, ok := n.w.PortSnapshot(port)
 	if ok && len(snapshot.Links) > 0 {
@@ -161,23 +161,57 @@ func (n *stringFormatNode) OnEvent(event pasta.Event, linkType string, _ []strin
 
 func (n *stringFormatNode) OnFormularMsg(message any) error {
 	msg, ok := message.(formular.FieldUpdateMessage)
-	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.Field.BlockID != "template" || msg.Field.FieldID != "parts" {
+	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) ||
+		msg.Field.BlockID != "template" ||
+		(msg.Field.FieldID != "parts" && msg.Field.FieldID != "type") {
 		return nil
 	}
-	parts, ok := parseFormatPartValue(msg.Value)
-	if !ok {
+	if msg.Field.FieldID == "parts" {
+		parts, ok := parseFormatPartValue(msg.Value)
+		if !ok {
+			return nil
+		}
+		parts = normalizeFormatParts(parts)
+		if stringFormatPartsEqual(parts, n.parts) {
+			return nil
+		}
+		n.parts = parts
+		if err := n.updatePorts(); err != nil {
+			return err
+		}
+		n.recalculate(true)
+		n.sendMenuBlock()
 		return nil
 	}
-	parts = normalizeFormatParts(parts)
-	if stringFormatPartsEqual(parts, n.parts) {
-		return nil
+	if msg.Field.FieldID == "type" {
+		if len(msg.Field.ElementPath) < 1 {
+			return nil
+		}
+
+		if msg.Field.ElementPath[0].ArrayFieldID != "parts" {
+			return nil
+		}
+
+		elementID := msg.Field.ElementPath[0].ElementID
+
+		newType, ok := msg.Value.(string)
+		if !ok || !stringFormatTypeSupported(newType) {
+			return nil
+		}
+
+		for i := range n.parts {
+			if n.parts[i].ID == elementID && n.parts[i].Kind == "value" {
+				n.parts[i].Type = newType
+				n.parts = normalizeFormatParts(n.parts)
+				if err := n.updatePorts(); err != nil {
+					return err
+				}
+				n.recalculate(true)
+				n.sendMenuBlock()
+				return nil
+			}
+		}
 	}
-	n.parts = parts
-	if err := n.updatePorts(); err != nil {
-		return err
-	}
-	n.recalculate(true)
-	n.sendMenuBlock()
 	return nil
 }
 

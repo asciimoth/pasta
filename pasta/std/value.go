@@ -30,6 +30,13 @@ func zeroValue(typ string) numberValue {
 	return intValue(0)
 }
 
+func oneValue(typ string) numberValue {
+	if typ == TypeFloat {
+		return floatValue(1)
+	}
+	return intValue(1)
+}
+
 func valueFromPayload(typ string, payload any) (numberValue, bool) {
 	switch typ {
 	case TypeInt:

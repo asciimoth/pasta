@@ -61,7 +61,7 @@ func (n *stringConstantNode) OnReady() error {
 
 func (n *stringConstantNode) PreLinkAdd(port uint64, linkType, _ string) error {
 	if port != n.out || linkType != TypeString {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }

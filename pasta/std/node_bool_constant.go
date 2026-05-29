@@ -61,10 +61,10 @@ func (n *mutableBoolConstantNode) OnReady() error {
 
 func (n *mutableBoolConstantNode) PreLinkAdd(port uint64, linkType, _ string) error {
 	if port != n.out {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	if linkType != TypeBool {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }

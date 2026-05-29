@@ -55,7 +55,7 @@ func (n *boolNode) OnReady() error {
 
 func (n *boolNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if linkType != TypeBool {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	if portDirection == "left" {
 		snapshot, ok := n.w.PortSnapshot(port)

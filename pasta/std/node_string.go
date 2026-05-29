@@ -61,7 +61,7 @@ func (n *stringNode) PreLinkAdd(port uint64, linkType, portDirection string) err
 	switch portDirection {
 	case "left":
 		if linkType != TypeString {
-			return errUnsupportedType(linkType)
+			return pasta.LinkTypeErr(linkType)
 		}
 		snapshot, ok := n.w.PortSnapshot(port)
 		if ok && len(snapshot.Links) > 0 {
@@ -70,11 +70,11 @@ func (n *stringNode) PreLinkAdd(port uint64, linkType, portDirection string) err
 		return nil
 	case "right":
 		if linkType != n.outputType() {
-			return errUnsupportedType(linkType)
+			return pasta.LinkTypeErr(linkType)
 		}
 		return nil
 	default:
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 }
 

@@ -58,11 +58,11 @@ func (n *compareNode) PreLinkAdd(port uint64, linkType, portDirection string) er
 		return nil
 	case "right":
 		if linkType != TypeBool {
-			return errUnsupportedType(linkType)
+			return pasta.LinkTypeErr(linkType)
 		}
 		return nil
 	default:
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 }
 

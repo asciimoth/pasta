@@ -59,7 +59,7 @@ func (n *loopbackNode) OnReady() error {
 
 func (n *loopbackNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if port != n.out || portDirection != "left" || linkType != typeNetwork {
-		return rejectUnsupportedDemoType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }

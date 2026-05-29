@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"strconv"
 	"time"
@@ -55,10 +54,6 @@ func (p networkPayload) Close() error {
 
 func networkPort(direction, name string) pasta.Port {
 	return pasta.Port{Direction: direction, Name: name, Types: []string{typeNetwork}}
-}
-
-func rejectUnsupportedDemoType(typ string) error {
-	return errors.New("unsupported demo type " + typ)
 }
 
 func otherEndpoint(snapshot pasta.LinkSnapshot, port uint64) (uint64, uint64) {

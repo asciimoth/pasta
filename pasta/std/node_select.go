@@ -114,15 +114,15 @@ func (n *selectNode) PreLinkAdd(port uint64, linkType, portDirection string) err
 	}
 	if port == n.selectorPort {
 		if linkType != TypeBool {
-			return errUnsupportedType(linkType)
+			return pasta.LinkTypeErr(linkType)
 		}
 		return nil
 	}
 	if !n.isDataPort(port) {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	if n.dataType != "" && linkType != n.dataType && linkType != pasta.AnyType {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }

@@ -111,7 +111,7 @@ func (n *httpServerNode) PreLinkAdd(port uint64, linkType, portDirection string)
 	switch port {
 	case n.netp:
 		if portDirection != "right" || linkType != typeNetwork {
-			return rejectUnsupportedDemoType(linkType)
+			return pasta.LinkTypeErr(linkType)
 		}
 		snapshot, ok := n.w.PortSnapshot(port)
 		if ok && len(snapshot.Links) > 0 {
@@ -119,14 +119,14 @@ func (n *httpServerNode) PreLinkAdd(port uint64, linkType, portDirection string)
 		}
 	case n.in:
 		if portDirection != "left" || linkType != std.TypeString {
-			return rejectUnsupportedDemoType(linkType)
+			return pasta.LinkTypeErr(linkType)
 		}
 		snapshot, ok := n.w.PortSnapshot(port)
 		if ok && len(snapshot.Links) > 0 {
 			return pasta.ErrLinkDup
 		}
 	default:
-		return rejectUnsupportedDemoType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }

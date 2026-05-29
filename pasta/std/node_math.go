@@ -77,7 +77,7 @@ func (n *mathNode) OnReady() error {
 
 func (n *mathNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if linkType != TypeInt && linkType != TypeFloat && linkType != pasta.AnyType {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	if portDirection == "left" {
 		snapshot, ok := n.w.PortSnapshot(port)
@@ -243,7 +243,11 @@ func (n *mathNode) input(index int, typ string) numberValue {
 func (n *mathNode) valueForPort(port uint64, typ string) numberValue {
 	value, ok := n.inputs[port]
 	if !ok {
-		return zeroValue(typ)
+		if n.op == "mul" {
+			return oneValue(typ)
+		} else {
+			return zeroValue(typ)
+		}
 	}
 	return value.as(typ)
 }

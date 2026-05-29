@@ -167,12 +167,12 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
 		labels: map[string]string{
 			"i2": "2", "i3": "3", "i4": "4", "f15": "1.5", "f25": "2.5",
-			"sumInt": "0", "sumFloat": "0", "mulInt": "0", "subMixed": "0", "divMixed": "0",
+			"sumInt": "0", "sumFloat": "0", "mulInt": "1", "subMixed": "0", "divMixed": "0",
 			"select": "in 0 -> out", "true": "true", "false": "false",
 		},
 		menuValues: map[string]float64{
 			"i2": 2, "i3": 3, "i4": 4, "f15": 1.5, "f25": 2.5,
-			"sumInt": 0, "sumFloat": 0, "mulInt": 0, "subMixed": 0, "divMixed": 0,
+			"sumInt": 0, "sumFloat": 0, "mulInt": 1, "subMixed": 0, "divMixed": 0,
 		},
 		leftPorts: map[string][]string{
 			"sumInt": {"input 1"}, "sumFloat": {"input 1"}, "mulInt": {"input 1"},
@@ -208,8 +208,8 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 
 	linkByPortName(t, w, nodes["i2"], "output", nodes["mulInt"], "input 1")
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
-		labels:     map[string]string{"mulInt": "0"},
-		menuValues: map[string]float64{"mulInt": 0},
+		labels:     map[string]string{"mulInt": "2"},
+		menuValues: map[string]float64{"mulInt": 2},
 		primary:    map[string]string{"mulInt": TypeInt},
 		leftPorts:  map[string][]string{"mulInt": {"input 1", "input 2"}},
 		rightLinks: map[string]int{"i2": 2},
@@ -217,8 +217,8 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 
 	linkByPortName(t, w, nodes["i3"], "output", nodes["mulInt"], "input 2")
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
-		labels:     map[string]string{"mulInt": "0"},
-		menuValues: map[string]float64{"mulInt": 0},
+		labels:     map[string]string{"mulInt": "6"},
+		menuValues: map[string]float64{"mulInt": 6},
 		leftPorts:  map[string][]string{"mulInt": {"input 1", "input 2", "input 3"}},
 		rightLinks: map[string]int{"i3": 2},
 	})
@@ -281,10 +281,10 @@ func TestStdComplexFanoutMixedTypeGraphStepByStep(t *testing.T) {
 	setConstant(t, w, nodes["i2"], 4)
 	expectStdGraph(t, w, menus, nodes, stdGraphExpect{
 		labels: map[string]string{
-			"i2": "4", "sumInt": "11", "sumFloat": "8", "mulInt": "0", "divMixed": "0.625",
+			"i2": "4", "sumInt": "11", "sumFloat": "8", "mulInt": "12", "divMixed": "0.625",
 		},
 		menuValues: map[string]float64{
-			"i2": 4, "sumInt": 11, "sumFloat": 8, "mulInt": 0, "divMixed": 0.625,
+			"i2": 4, "sumInt": 11, "sumFloat": 8, "mulInt": 12, "divMixed": 0.625,
 		},
 		rightLinks: map[string]int{"i2": 4},
 	})
@@ -646,7 +646,7 @@ func (n *customValueNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, 
 
 func (n *customValueNode) PreLinkAdd(port uint64, linkType, _ string) error {
 	if port != n.out || linkType != customSelectType {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }
@@ -698,7 +698,7 @@ type customSinkNode struct {
 
 func (n *customSinkNode) PreLinkAdd(_ uint64, linkType, portDirection string) error {
 	if portDirection != "left" || linkType != customSelectType {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }

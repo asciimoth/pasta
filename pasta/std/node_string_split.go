@@ -100,7 +100,7 @@ func (n *stringSplitNode) OnReady() error {
 
 func (n *stringSplitNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if linkType != TypeString {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	if portDirection == "left" {
 		snapshot, ok := n.w.PortSnapshot(port)
@@ -112,7 +112,7 @@ func (n *stringSplitNode) PreLinkAdd(port uint64, linkType, portDirection string
 	if port == n.beforePort || port == n.afterPort {
 		return nil
 	}
-	return errUnsupportedType(linkType)
+	return pasta.LinkTypeErr(linkType)
 }
 
 func (n *stringSplitNode) OnLinkAdd(link, port uint64, _ string, portDirection string) error {

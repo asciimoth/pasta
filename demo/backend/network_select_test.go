@@ -50,7 +50,7 @@ func (n *testNetworkConsumerNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id 
 
 func (n *testNetworkConsumerNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if port != n.netp || portDirection != "right" || linkType != typeNetwork {
-		return rejectUnsupportedDemoType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	snapshot, ok := n.w.PortSnapshot(port)
 	if ok && len(snapshot.Links) > 0 {

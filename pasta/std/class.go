@@ -1,8 +1,6 @@
 package std
 
 import (
-	"errors"
-
 	"github.com/asciimoth/pasta/pasta"
 )
 
@@ -69,8 +67,4 @@ func firstState(previous []*pasta.NodeClassState) *pasta.NodeClassState {
 		return nil
 	}
 	return previous[0]
-}
-
-func errUnsupportedType(typ string) error {
-	return errors.New("unsupported pasta std type " + typ)
 }

@@ -51,7 +51,7 @@ func (n *constantNode) OnReady() error {
 
 func (n *constantNode) PreLinkAdd(port uint64, linkType, _ string) error {
 	if port != n.out {
-		return errUnsupportedType(linkType)
+		return pasta.LinkTypeErr(linkType)
 	}
 	return nil
 }
