@@ -73,6 +73,34 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   assert.ok(bootValue.classes >= 20);
   assert.match(bootValue.sidekick, /Create node/);
 
+  const initialConfig = await page.locator("#config-text").inputValue();
+  await setConfigText(page, "{");
+  await page.click("#reload-config");
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 46);
+  await page.waitForTimeout(100);
+
+  await setConfigText(page, `{
+    "Missing": {
+      "Class": "example.com/Missing",
+      "Pos": "{\\"x\\":180,\\"y\\":120}"
+    }
+  }`);
+  await page.click("#reload-config");
+  const placeholderID = await page.waitForFunction(() => {
+    const entry = Object.entries(window.__pastaDemo.snapshot().nodes).find(([, node]) => node.placeholder);
+    return entry ? Number(entry[0]) : false;
+  });
+  await page.evaluate((id) => window.__pastaDemo.selectNode(id), await placeholderID.jsonValue());
+  await page.waitForFunction(() => /placeholder/i.test(document.querySelector("#sidekick")?.textContent || ""));
+  await page.waitForTimeout(100);
+  assert.deepEqual(browserErrors, []);
+
+  await setConfigText(page, initialConfig);
+  await page.click("#reload-config");
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 46);
+  await page.mouse.click(20, 120);
+  await page.waitForFunction(() => /Create node/.test(document.querySelector("#sidekick")?.textContent || ""));
+
   const compatibility = await page.evaluate(() => {
     const api = window.__pastaDemo;
     const snapshot = api.snapshot();
@@ -309,6 +337,12 @@ async function waitForHTTP(url) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function setConfigText(page, value) {
+  await page.evaluate((text) => {
+    document.querySelector("#config-text").value = text;
+  }, value);
 }
 
 function findExecutable(...names) {

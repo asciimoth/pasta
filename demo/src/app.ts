@@ -116,7 +116,6 @@ function tryBackend<T>(method: string, params: Record<string, unknown> = {}): T 
     return backend<T>(method, params);
   } catch (error) {
     log("api", "warn", `${method}: ${(error as Error).message}`);
-    requestSnapshot();
     return null;
   }
 }
@@ -434,6 +433,10 @@ function clamp(value: number, min: number, max: number): number {
 function renderNodePanel(id: number): void {
   const node = snapshot.nodes[String(id)];
   if (!node) return;
+  if (node.placeholder) {
+    renderPlaceholderNodePanel(id, node);
+    return;
+  }
   if (
     el.sidekick.dataset.nodeId === String(id) &&
     el.sidekick.dataset.nodeClass === node.class &&
@@ -475,6 +478,31 @@ function renderNodePanel(id: number): void {
   });
   form?.querySelector<HTMLInputElement>("input")?.addEventListener("blur", () => submitNodeName(id));
   mountMenu(id);
+}
+
+function renderPlaceholderNodePanel(id: number, node: NodeSnapshot): void {
+  destroyMenu();
+  el.sidekick.dataset.nodeId = String(id);
+  el.sidekick.dataset.nodeClass = node.class;
+  el.sidekick.innerHTML = `
+    <form class="node-name-form" data-node-name-form>
+      <label for="node-name-input">Name</label>
+      <div class="node-name-row">
+        <input id="node-name-input" name="name" autocomplete="off" spellcheck="false" value="${escapeAttr(node.name)}">
+        <button type="submit">Rename</button>
+      </div>
+    </form>
+    <div class="node-panel-section">
+      <h2>${escapeHTML(shortClass(node.class))}</h2>
+      <p>This node is a placeholder. Its implementation is unavailable, so the demo preserves its ports and links without opening a node menu.</p>
+    </div>
+  `;
+  const form = el.sidekick.querySelector<HTMLFormElement>("[data-node-name-form]");
+  form?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitNodeName(id);
+  });
+  form?.querySelector<HTMLInputElement>("input")?.addEventListener("blur", () => submitNodeName(id));
 }
 
 function syncNodeNameEditor(node: NodeSnapshot): void {
