@@ -6,7 +6,7 @@ require (
 	github.com/asciimoth/badlock v0.1.1
 	github.com/asciimoth/configer/configer v0.3.0
 	github.com/asciimoth/configer/hujson v0.3.0
-	github.com/asciimoth/formular v0.2.0
+	github.com/asciimoth/formular v0.2.2
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 )
 

@@ -4,8 +4,8 @@ github.com/asciimoth/configer/configer v0.3.0 h1:utMfXXNWPPz4yiYntBHlycPthfTkHZH
 github.com/asciimoth/configer/configer v0.3.0/go.mod h1:SL8ymjshD5/tNKeLp5UBp+/2dEoB9D1fgjdfSrdQQek=
 github.com/asciimoth/configer/hujson v0.3.0 h1:txKqLo4Mhxb5EukKj4UUoByYYdrrViVRZHdVBzfzKF8=
 github.com/asciimoth/configer/hujson v0.3.0/go.mod h1:tnXfz2bBAlg6WK3ZE+Zh+nxn033tQ2K7hBFkvPKD7Yk=
-github.com/asciimoth/formular v0.2.0 h1:uBABJ9QLbUqG6irdtc/y9tG/xywMwMGt6HZl34N7YPE=
-github.com/asciimoth/formular v0.2.0/go.mod h1:6VBEx4KTWp18mpkQn7d3Buoojzf9II5+ZAVuc4DF8AE=
+github.com/asciimoth/formular v0.2.2 h1:7ShX5M0sjzzPBV6TjVWpLRCH2lQFh4/1NnOl/YCworI=
+github.com/asciimoth/formular v0.2.2/go.mod h1:6VBEx4KTWp18mpkQn7d3Buoojzf9II5+ZAVuc4DF8AE=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=
