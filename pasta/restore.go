@@ -11,6 +11,7 @@ import (
 type restoreNode struct {
 	name       string
 	class      string
+	comment    string
 	primary    string
 	hasPrimary bool
 	position   string
@@ -50,6 +51,7 @@ func WorkspaceFromConfig(classes []NodeClass, cfg configer.Config, logf LogFacto
 
 		snapshot := cfg.Snapshot()
 		nodes, links = parseRestoreConfig(snapshot)
+		restoreConfigComments(cfg, nodes)
 		nextID = restoreNextID(nodes, links)
 	} else {
 		nodes = map[string]*restoreNode{}
@@ -169,6 +171,11 @@ func restoreOneNode(w *Workspace, cfg configer.Config, node *restoreNode) (uint6
 	if node.position != "" {
 		_ = w.SetNodePosition(id, node.position)
 	}
+	if node.comment != "" {
+		if _, err := w.AddNodePopup(id, NodePopupInfo, node.comment, true); err != nil {
+			return 0, err
+		}
+	}
 	return id, nil
 }
 
@@ -220,6 +227,23 @@ func parseRestoreConfig(snapshot any) (map[string]*restoreNode, []restoreLink) {
 		}
 	}
 	return nodes, links
+}
+
+func restoreConfigComments(cfg configer.Config, nodes map[string]*restoreNode) {
+	commenter, ok := cfg.(configer.Commenter)
+	if !ok {
+		return
+	}
+	for name, node := range nodes {
+		if node == nil {
+			continue
+		}
+		comment, err := commenter.GetComment(configer.Path{name})
+		if err != nil || comment == "" {
+			continue
+		}
+		node.comment = comment
+	}
 }
 
 func restoreStringList(value any) []string {

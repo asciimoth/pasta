@@ -214,6 +214,23 @@ func (b *backend) handle(req callRequest) (any, error) {
 		}
 		w.RemoveLink(p.ID)
 		return true, nil
+	case "removeNodePopup":
+		var p struct {
+			ID      uint64 `json:"id"`
+			PopupID uint64 `json:"popupId"`
+		}
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return true, w.RemoveNodePopup(p.ID, p.PopupID)
+	case "removeNodePopups":
+		var p struct {
+			ID uint64 `json:"id"`
+		}
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return true, w.RemoveNodePopups(p.ID)
 	case "copy":
 		var p struct {
 			IDs []uint64 `json:"ids"`

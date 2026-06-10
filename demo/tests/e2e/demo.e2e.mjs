@@ -68,7 +68,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const bootValue = await boot.jsonValue();
 
   assert.equal(bootValue.status, "Go WASM backend running");
-  assert.equal(bootValue.nodes, 46);
+  assert.equal(bootValue.nodes, 47);
   assert.equal(bootValue.links, 70);
   assert.ok(bootValue.classes >= 20);
   assert.match(bootValue.sidekick, /Create node/);
@@ -76,7 +76,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const initialConfig = await page.locator("#config-text").inputValue();
   await setConfigText(page, "{");
   await page.click("#reload-config");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 46);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 47);
   await page.waitForTimeout(100);
 
   await setConfigText(page, `{
@@ -97,9 +97,43 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
 
   await setConfigText(page, initialConfig);
   await page.click("#reload-config");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 46);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 47);
   await page.mouse.click(20, 120);
   await page.waitForFunction(() => /Create node/.test(document.querySelector("#sidekick")?.textContent || ""));
+
+  const popupDemoID = await page.evaluate(() => {
+    const entry = Object.entries(window.__pastaDemo.snapshot().nodes).find(([, node]) => node.class === "demo.pasta/PopupDemo");
+    return Number(entry[0]);
+  });
+  await page.evaluate((id) => window.__pastaDemo.selectNode(id), popupDemoID);
+  await page.waitForFunction(() => /Popup demo node is ready/.test(document.querySelector("#sidekick")?.textContent || ""));
+  await page.evaluate((id) => {
+    window.__pastaDemo.call("formular", {
+      id,
+      message: {
+        type: "button.press",
+        menuId: `NODE${id}MENU`,
+        menuGeneration: 1,
+        blockGeneration: 1,
+        blockId: "popups",
+        buttonId: "add-error",
+      },
+    });
+  }, popupDemoID);
+  await page.waitForFunction(
+    (id) => window.__pastaDemo.snapshot().nodes[String(id)]?.popups?.length === 2,
+    popupDemoID,
+  );
+  await page.locator(".popup-item", { hasText: "err popup" }).locator("button", { hasText: "Delete" }).click();
+  await page.waitForFunction(
+    (id) => window.__pastaDemo.snapshot().nodes[String(id)]?.popups?.length === 1,
+    popupDemoID,
+  );
+  await page.locator(".popup-panel-header button", { hasText: "Clear all" }).click();
+  await page.waitForFunction(
+    (id) => !window.__pastaDemo.snapshot().nodes[String(id)]?.popups?.length,
+    popupDemoID,
+  );
 
   const compatibility = await page.evaluate(() => {
     const api = window.__pastaDemo;
@@ -277,7 +311,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   await page.keyboard.press("Escape");
 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Z" : "Control+Z");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 46);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 47);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+Z" : "Control+Shift+Z");
   await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length >= 29);
 

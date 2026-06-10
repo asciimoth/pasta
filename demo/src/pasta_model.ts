@@ -8,12 +8,19 @@ export type NodeClassSnapshot = {
   initial_ports: Array<{ direction: string; name: string; types: string[] }>;
 };
 
+export type NodePopup = {
+  id: ID;
+  type: "info" | "ward" | "err" | string;
+  text: string;
+};
+
 export type NodeSnapshot = {
   class: string;
   name: string;
   primary_type: string;
   label: string;
   position: string;
+  popups?: NodePopup[] | null;
   placeholder: boolean;
   root: boolean;
   has_root_path: boolean;
@@ -165,4 +172,35 @@ export function typeColor(type: string): TypeColor | null {
 
 export function linkColor(type: string): string {
   return typeColor(type)?.color ?? DEFAULT_LINK_COLOR;
+}
+
+export function latestPriorityPopup(popups: NodePopup[] | null | undefined): NodePopup | null {
+  if (!popups?.length) return null;
+  let selected = popups[0];
+  for (const popup of popups.slice(1)) {
+    if (popupPriority(popup.type) >= popupPriority(selected.type)) {
+      selected = popup;
+    }
+  }
+  return selected;
+}
+
+export function trimPopupText(text: string, maxLength = 50): string {
+  const chars = Array.from(text);
+  if (chars.length <= maxLength) return text;
+  if (maxLength <= 3) return chars.slice(0, maxLength).join("");
+  return `${chars.slice(0, maxLength - 3).join("")}...`;
+}
+
+export function popupPriority(type: string): number {
+  switch (type) {
+    case "err":
+      return 3;
+    case "ward":
+      return 2;
+    case "info":
+      return 1;
+    default:
+      return 0;
+  }
 }

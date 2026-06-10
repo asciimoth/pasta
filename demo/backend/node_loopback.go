@@ -90,7 +90,7 @@ func (n *loopbackNode) sendAll() {
 }
 
 func (n *loopbackNode) sendToLink(link uint64) {
-	wrapper := gonnect.DetachNetwork(n.base)
+	wrapper := gonnect.DetachNetwork(n.base, nil)
 	bindNetworkResource(n.w, n.id, link, wrapper)
 	n.w.EmitEvent(n.id, link, networkPayload{Network: wrapper})
 }

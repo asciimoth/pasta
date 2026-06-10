@@ -246,6 +246,93 @@ h1 {
   --formular-accent: var(--blue);
 }
 
+#node-popups {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface0);
+}
+
+.popup-panel-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.popup-panel-header h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.popup-panel-header button,
+.popup-item button {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.popup-empty {
+  margin: 0;
+}
+
+.popup-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.popup-item {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--surface1);
+  border-radius: 6px;
+  background: var(--surface0);
+}
+
+.popup-item strong {
+  display: inline-flex;
+  justify-content: center;
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.popup-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.popup-info strong {
+  border-color: color-mix(in srgb, var(--blue), transparent 45%);
+  background: color-mix(in srgb, var(--blue), var(--surface0) 84%);
+  color: var(--blue);
+}
+
+.popup-ward strong {
+  border-color: color-mix(in srgb, var(--yellow), transparent 42%);
+  background: color-mix(in srgb, var(--yellow), var(--surface0) 84%);
+  color: var(--yellow);
+}
+
+.popup-err strong {
+  border-color: color-mix(in srgb, var(--red), transparent 42%);
+  background: color-mix(in srgb, var(--red), var(--surface0) 84%);
+  color: var(--red);
+}
+
 .logs-panel {
   overflow: auto;
   background: var(--crust);

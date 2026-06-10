@@ -5,14 +5,17 @@ import {
   emptySnapshot,
   formatPosition,
   linkColor,
+  latestPriorityPopup,
   nodeMenuID,
   parsePosition,
   selectedNodeIDs,
   isKeyboardShortcut,
+  trimPopupText,
   typeColor,
   type ID,
   type LinkSnapshot,
   type NodeClassSnapshot,
+  type NodePopup,
   type NodeSnapshot,
   type PortSnapshot,
   type WorkspaceNotification,
@@ -153,6 +156,7 @@ function registerLiteGraphNode(): void {
     if (id) tryBackend("removeLink", { id });
   };
   PastaViewNode.prototype.onDrawForeground = function (ctx: CanvasRenderingContext2D): void {
+    drawNodePopup(ctx, this);
     drawNodeLabel(ctx, this);
   };
   PastaViewNode.prototype.onSelected = scheduleSidekickUpdate;
@@ -245,6 +249,7 @@ function renderGraph(): void {
     node.id = id;
     node.properties.pastaId = id;
     node.properties.pastaLabel = nodeSnapshot.label;
+    node.properties.pastaPopups = nodeSnapshot.popups ?? [];
     node.title = nodeTitle(nodeSnapshot);
     const primaryColor = typeColor(nodeSnapshot.primary_type);
     node.color = nodeSnapshot.placeholder ? "#f38ba8" : primaryColor?.color ?? DEFAULT_NODE_TITLE_COLOR;
@@ -297,6 +302,55 @@ function drawNodeLabel(ctx: CanvasRenderingContext2D, node: any): void {
   ctx.textBaseline = "bottom";
   ctx.fillText(String(label), node.size[0] * 0.5, node.size[1] - 7, node.size[0] - 18);
   ctx.restore();
+}
+
+function drawNodePopup(ctx: CanvasRenderingContext2D, node: any): void {
+  const popup = latestPriorityPopup(node.properties?.pastaPopups);
+  if (!popup) return;
+  const text = trimPopupText(popup.text, 50);
+  const palette = popupPalette(popup.type);
+  ctx.save();
+  ctx.font = "12px Arial";
+  const paddingX = 8;
+  const width = Math.max(54, ctx.measureText(text).width + paddingX * 2);
+  const height = 22;
+  const x = (node.size[0] - width) * 0.5;
+  const y = -54;
+  ctx.fillStyle = palette.bg;
+  ctx.strokeStyle = palette.border;
+  ctx.lineWidth = 1;
+  roundRect(ctx, x, y, width, height, 5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = palette.text;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + width * 0.5, y + height * 0.5, width - paddingX * 2);
+  ctx.restore();
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
+  const r = Math.min(radius, width * 0.5, height * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function popupPalette(type: string): { bg: string; border: string; text: string } {
+  switch (type) {
+    case "err":
+      return { bg: "#4a1f2a", border: "#f38ba8", text: "#f8d4de" };
+    case "ward":
+      return { bg: "#473817", border: "#f9e2af", text: "#fff1c7" };
+    case "info":
+      return { bg: "#18304b", border: "#89b4fa", text: "#d7e5ff" };
+    default:
+      return { bg: "#313244", border: "#a6adc8", text: "#f8f9ff" };
+  }
 }
 
 function addPort(node: any, port: PortSnapshot | undefined, portID: number): void {
@@ -444,6 +498,7 @@ function renderNodePanel(id: number): void {
     document.getElementById("node-menu")
   ) {
     syncNodeNameEditor(node);
+    renderNodePopups(id, node);
     return;
   }
   const description = tryBackend<string>("classDescription", { class: node.class }) ?? "";
@@ -462,7 +517,10 @@ function renderNodePanel(id: number): void {
       <button class="active" data-node-tab="menu" type="button">Node menu</button>
       <button data-node-tab="docs" type="button">Description</button>
     </div>
-    <div class="node-panel-section" data-node-panel="menu"><div id="node-menu"></div></div>
+    <div class="node-panel-section" data-node-panel="menu">
+      <div id="node-menu"></div>
+      <div id="node-popups"></div>
+    </div>
     <div class="node-panel-section hidden" data-node-panel="docs">
       <h2>${escapeHTML(shortClass(node.class))}</h2>
       <p>${escapeHTML(description || "No long description is registered for this node class.")}</p>
@@ -478,6 +536,7 @@ function renderNodePanel(id: number): void {
   });
   form?.querySelector<HTMLInputElement>("input")?.addEventListener("blur", () => submitNodeName(id));
   mountMenu(id);
+  renderNodePopups(id, node);
 }
 
 function renderPlaceholderNodePanel(id: number, node: NodeSnapshot): void {
@@ -524,6 +583,52 @@ function submitNodeName(id: number): void {
   if (!renamed) {
     input.value = node.name;
   }
+}
+
+function renderNodePopups(nodeID: number, node: NodeSnapshot): void {
+  const root = el.sidekick.querySelector<HTMLElement>("#node-popups");
+  if (!root) return;
+  const popups = [...(node.popups ?? [])].reverse();
+  root.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "popup-panel-header";
+  header.innerHTML = `<h2>Popups</h2>`;
+  if (popups.length) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.textContent = "Clear all";
+    clear.addEventListener("click", () => tryBackend("removeNodePopups", { id: nodeID }));
+    header.append(clear);
+  }
+  root.append(header);
+  if (!popups.length) {
+    const empty = document.createElement("p");
+    empty.className = "popup-empty";
+    empty.textContent = "No popups";
+    root.append(empty);
+    return;
+  }
+  const list = document.createElement("ol");
+  list.className = "popup-list";
+  for (const popup of popups) {
+    list.append(renderPopupItem(nodeID, popup));
+  }
+  root.append(list);
+}
+
+function renderPopupItem(nodeID: number, popup: NodePopup): HTMLElement {
+  const item = document.createElement("li");
+  item.className = `popup-item popup-${popup.type}`;
+  const type = document.createElement("strong");
+  type.textContent = popup.type;
+  const text = document.createElement("span");
+  text.textContent = popup.text;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "Delete";
+  remove.addEventListener("click", () => tryBackend("removeNodePopup", { id: nodeID, popupId: popup.id }));
+  item.append(type, text, remove);
+  return item;
 }
 
 function setNodePanelTab(name: string): void {

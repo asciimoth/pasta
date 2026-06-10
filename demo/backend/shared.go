@@ -9,9 +9,9 @@ import (
 )
 
 const initialConfig = `{
-	// Positions are frontend-owned JSON strings. Pasta preserves them.
 	"A": {
 		"Class": "pasta/IntConstant",
+		// Positions are frontend-owned JSON strings. Pasta preserves them.
 		"Pos":   "{\"x\":60,\"y\":80}",
 		"Links": [
 			"output -> [IsAEqualB] input 1",
@@ -228,6 +228,7 @@ const initialConfig = `{
 			"output -> [Summary] Text",
 		],
 	},
+	// Config on top of node blocks become popups
 	"Summary": {
 		"Class": "pasta/StringFormat",
 		"Pos":   "{\"x\":1400,\"y\":560}",
@@ -594,6 +595,10 @@ const initialConfig = `{
 			"Out -> [Client] URL",
 		],
 	},
+	"Popup Demo": {
+		"Class": "demo.pasta/PopupDemo",
+		"Pos":   "{\"x\":1650,\"y\":1320}",
+	},
 }`
 
 func Classes() []pasta.NodeClass {
@@ -602,6 +607,7 @@ func Classes() []pasta.NodeClass {
 		httpServerClass{},
 		httpClientClass{},
 		outproxyClass{},
+		popupDemoClass{},
 	}...)
 }
 

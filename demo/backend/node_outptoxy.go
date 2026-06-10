@@ -190,14 +190,14 @@ func (o *outproxyNode) rebuildClient() {
 
 	client, err := socksgo.ClientFromURL(o.url)
 	if err != nil || client == nil || client.WebSocketURL == "" {
-		o.base = gonnect.DetachNetwork(&gonnect.RejectNetwork{})
+		o.base = gonnect.DetachNetwork(&gonnect.RejectNetwork{}, nil)
 		_ = o.updateLabel()
 		o.sendAll()
 		return
 	}
 
 	client.Filter = gonnect.FalseFilter
-	o.base = gonnect.DetachNetwork(client)
+	o.base = gonnect.DetachNetwork(client, nil)
 
 	_ = o.updateLabel()
 	o.sendAll()
@@ -249,7 +249,7 @@ func (o *outproxyNode) sendToLink(link uint64) {
 		return
 	}
 
-	wrapper := gonnect.DetachNetwork(o.base)
+	wrapper := gonnect.DetachNetwork(o.base, nil)
 	bindNetworkResource(o.w, o.id, link, wrapper)
 	o.w.EmitEvent(o.id, link, networkPayload{Network: wrapper})
 }

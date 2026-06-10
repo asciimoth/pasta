@@ -39,7 +39,7 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 46; got != want {
+	if got, want := len(snapshot.Nodes), 47; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
 	if got, want := len(snapshot.Links), 70; got != want {
@@ -59,6 +59,18 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 		if !classesInGraph[class.ClassName()] {
 			t.Fatalf("initial config does not include std class %s", class.ClassName())
 		}
+	}
+	var popupDemoFound bool
+	for _, node := range snapshot.Nodes {
+		if node.Class == nodeTypePopupDemo {
+			popupDemoFound = true
+			if len(node.Popups) != 1 || node.Popups[0].Type != pasta.NodePopupInfo {
+				t.Fatalf("popup demo popups = %#v, want one info popup", node.Popups)
+			}
+		}
+	}
+	if !popupDemoFound {
+		t.Fatal("initial config missing popup demo node")
 	}
 	linksByName := map[string]bool{}
 	for _, link := range snapshot.Links {

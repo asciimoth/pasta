@@ -6,9 +6,11 @@ import {
   emptySnapshot,
   formatPosition,
   isKeyboardShortcut,
+  latestPriorityPopup,
   linkColor,
   nodeMenuID,
   parsePosition,
+  trimPopupText,
   selectedNodeIDs,
   typeColor,
 } from "../public/build/pasta_model.js";
@@ -122,6 +124,18 @@ test("formats opaque Pasta node positions consistently", () => {
 
 test("routes Formular menus by Pasta node id", () => {
   assert.equal(nodeMenuID(12), "NODE12MENU");
+});
+
+test("selects highest priority latest popup and trims graph text", () => {
+  const popups = [
+    { id: 1, type: "info", text: "first" },
+    { id: 2, type: "err", text: "error one" },
+    { id: 3, type: "ward", text: "later warning" },
+    { id: 4, type: "err", text: "error two" },
+  ];
+  assert.equal(latestPriorityPopup(popups)?.id, 4);
+  assert.equal(trimPopupText("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU...");
+  assert.equal(trimPopupText("short"), "short");
 });
 
 test("extracts selected LiteGraph node ids for copy, paste, and delete commands", () => {

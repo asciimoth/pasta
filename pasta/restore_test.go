@@ -146,6 +146,87 @@ func TestWorkspaceFromConfigRestoresExplicitEmptyPrimary(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFromConfigRestoresNodeCommentsAsInfoPopups(t *testing.T) {
+	class := testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/Commented"},
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+	}
+	cfg, err := hujson.Parse([]byte(`{
+		// This will become popup
+		"commented": {
+			// This should stay node config only
+			"Class": "example.com/Commented"
+		},
+		// Missing classes get the same config comment popup
+		"placeholder": {
+			"Class": "example.com/Missing"
+		},
+		"plain": {
+			"Class": "example.com/Commented"
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	w, err := pasta.WorkspaceFromConfig([]pasta.NodeClass{class}, cfg, &StringLoggerFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig: %v", err)
+	}
+
+	commentedID, ok := w.NodeIDByName("commented")
+	if !ok {
+		t.Fatal("commented node missing")
+	}
+	placeholderID, ok := w.NodeIDByName("placeholder")
+	if !ok {
+		t.Fatal("placeholder node missing")
+	}
+	plainID, ok := w.NodeIDByName("plain")
+	if !ok {
+		t.Fatal("plain node missing")
+	}
+
+	snapshot := w.Snapshot()
+	assertNodePopups(t, snapshot.Nodes[commentedID].Popups, []pasta.NodePopup{{
+		Type: pasta.NodePopupInfo,
+		Text: "This will become popup",
+	}})
+	assertNodePopups(t, snapshot.Nodes[placeholderID].Popups, []pasta.NodePopup{{
+		Type: pasta.NodePopupInfo,
+		Text: "Missing classes get the same config comment popup",
+	}})
+	assertNodePopups(t, snapshot.Nodes[plainID].Popups, nil)
+}
+
+func TestWorkspaceFromConfigIgnoresCommentsWhenConfigDoesNotSupportThem(t *testing.T) {
+	class := testFactoryNodeClass{
+		testNodeClass: testNodeClass{name: "example.com/NoComments"},
+		newNode: func(cfg configer.Config, previous ...*pasta.NodeClassState) (pasta.Node, error) {
+			return &workspaceNode{}, nil
+		},
+	}
+	cfg := configer.NewMemory(map[string]any{
+		"node": map[string]any{
+			"Class": "example.com/NoComments",
+		},
+	})
+
+	w, err := pasta.WorkspaceFromConfig([]pasta.NodeClass{class}, cfg, &StringLoggerFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig: %v", err)
+	}
+	nodeID, ok := w.NodeIDByName("node")
+	if !ok {
+		t.Fatal("node missing")
+	}
+	if got := w.Snapshot().Nodes[nodeID].Popups; len(got) != 0 {
+		t.Fatalf("popups = %#v, want none", got)
+	}
+}
+
 func TestWorkspaceSaveRestoreOrderStableAcrossMultiplePasses(t *testing.T) {
 	original, _ := buildCalcGraph(t, []string{
 		"c10:sum.a", "c5:sum.b", "c2:sum.c", "c3:sum.d",
@@ -237,4 +318,24 @@ func mustSaveHuJSON(t *testing.T, w *pasta.Workspace) string {
 		t.Fatalf("SaveConfig: %v", err)
 	}
 	return string(cfg.Pack())
+}
+
+func assertNodePopups(t *testing.T, got, want []pasta.NodePopup) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("popups = %#v, want %#v", got, want)
+	}
+	if len(want) == 0 {
+		return
+	}
+	for i := range got {
+		if got[i].ID == 0 {
+			t.Fatalf("popup %d ID = 0, want workspace ID", i)
+		}
+		got[i].ID = 0
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("popups = %#v, want %#v", got, want)
+	}
 }
