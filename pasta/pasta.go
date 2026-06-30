@@ -87,6 +87,8 @@ type Workspace struct {
 	redoLog               []undoEntry
 	undoRecordingDisabled int
 
+	workers *workspaceWorkers
+
 	log  Logger
 	logf LogFactory
 }
@@ -116,6 +118,7 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		notifications:       make([]WorkspaceNotification, 0),
 		undoLog:             make([]undoEntry, 0, undoLogLimit),
 		redoLog:             make([]undoEntry, 0, undoLogLimit),
+		workers:             newWorkspaceWorkers(),
 
 		log:  logf.WorkspaceLogger(),
 		logf: logf,
@@ -230,12 +233,17 @@ func (w *Workspace) AddPendingOp(op func()) {
 	w.pending = append(w.pending, op)
 }
 
-// Close stops all nodes, notifies subscribers, drains pending operations, and
-// prevents future workspace operations from mutating state.
+// Close stops all nodes, waits for node workers to return, notifies
+// subscribers, drains pending operations, and prevents future workspace
+// operations from mutating state.
 func (w *Workspace) Close() {
 	w.Lock()
 	if w.closed {
+		workers := w.workers
 		w.Unlock()
+		if workers != nil {
+			workers.wait()
+		}
 		return
 	}
 	w.closed = true
@@ -259,6 +267,23 @@ func (w *Workspace) Close() {
 		}
 		w.Lock()
 	}
+
+	aliveWorkers := w.workerSnapshotsLocked(false)
+	for _, worker := range aliveWorkers {
+		w.log.Debugf(
+			"waiting for node worker worker=%d node=%d class=%s name=%q worker_name=%q orphan=%t",
+			worker.ID,
+			worker.Node,
+			worker.Class,
+			worker.Name,
+			worker.WorkerName,
+			worker.Orphan,
+		)
+	}
+	workers := w.workers
+	w.Unlock()
+	workers.wait()
+	w.Lock()
 
 	w.enqueueNotification(WorkspaceNotification{Kind: NotificationWorkspaceStopped})
 	deliveries := w.drainNotificationDeliveries()
@@ -321,6 +346,11 @@ func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, noti
 		callback,
 		cause,
 	)
+	w.replaceFailedNodeWithPlaceholderLocked(id, record, nodeFailureText(callback, cause), notify, recompute)
+	return true
+}
+
+func (w *Workspace) replaceFailedNodeWithPlaceholderLocked(id uint64, record *nodeRecord, popupText string, notify bool, recompute bool) {
 	nodeStop(record.Node)
 	w.closeNodeResourcesLocked(id)
 	record.Node = nil
@@ -328,7 +358,7 @@ func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, noti
 	record.Popups = []NodePopup{{
 		ID:   w.NextID(),
 		Type: NodePopupErr,
-		Text: nodeFailureText(callback, cause),
+		Text: popupText,
 	}}
 	w.deactivateNodeLinks(record)
 	w.refreshPlaceholderLinks(id, notify)
@@ -338,7 +368,6 @@ func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, noti
 	if notify {
 		w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	}
-	return true
 }
 
 func nodeFailureText(callback string, cause error) string {

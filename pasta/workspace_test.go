@@ -7,7 +7,9 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/pasta/pasta"
@@ -2294,6 +2296,343 @@ func TestWorkspaceLogsNodeFailurePlaceholderReplacement(t *testing.T) {
 	})
 }
 
+func TestWorkspaceNodeWorkerPanicBecomesPlaceholder(t *testing.T) {
+	logf := &StringLoggerFactory{}
+	w := pasta.NewWorkspace(logf)
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	updates := make(chan struct{}, 1)
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+		if notification.Kind == pasta.NotificationNodeUpdated && notification.ID == nodeID {
+			select {
+			case updates <- struct{}{}:
+			default:
+			}
+		}
+	})
+
+	workerID, err := w.SpawnNodeWorker(nodeID, func() {
+		panic("worker boom")
+	}, "panic worker")
+	if err != nil {
+		t.Fatalf("SpawnNodeWorker: %v", err)
+	}
+
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker panic placeholder update")
+	}
+
+	assertFailedPlaceholder(t, w, nodeID, fmt.Sprintf("worker %d", workerID), "node panic")
+	assertHasNotification(t, notifications, pasta.NotificationWorkerSpawned, workerID)
+	assertHasNotification(t, notifications, pasta.NotificationWorkerFailed, workerID)
+	if failed := notifications[len(notifications)-2]; failed.Kind != pasta.NotificationWorkerFailed || failed.Worker == nil || failed.Worker.Error != pasta.ErrNodePanic.Error() {
+		t.Fatalf("worker failure notification = %#v, want failure with node panic", failed)
+	}
+	logs := logf.Result()
+	for _, part := range []string{
+		"workspace[debug]node worker spawned",
+		"workspace[err]node worker failed; replacing node with placeholder",
+		fmt.Sprintf("worker=%d", workerID),
+		fmt.Sprintf("node=%d", nodeID),
+		"class=example.com/WorkerNode",
+		"cause=node panic",
+	} {
+		if !strings.Contains(logs, part) {
+			t.Fatalf("worker log missing %q in:\n%s", part, logs)
+		}
+	}
+	if strings.Contains(logs, "node callback failed; replacing node with placeholder") {
+		t.Fatalf("worker failure used callback failure log:\n%s", logs)
+	}
+
+	w.Close()
+}
+
+func TestWorkspaceNodeWorkerSnapshotsAndStopNotifications(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	stopped := make(chan struct{}, 1)
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+		if notification.Kind == pasta.NotificationWorkerStopped {
+			select {
+			case stopped <- struct{}{}:
+			default:
+			}
+		}
+	})
+	notifications = nil
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	beforeSpawn := time.Now().UTC()
+	workerID, err := w.SpawnNodeWorker(nodeID, func() {
+		close(started)
+		<-release
+	}, "snapshot worker")
+	if err != nil {
+		t.Fatalf("SpawnNodeWorker: %v", err)
+	}
+	<-started
+
+	snapshot := w.Snapshot()
+	worker, ok := snapshot.Workers[workerID]
+	if !ok {
+		t.Fatalf("snapshot workers = %#v, missing worker %d", snapshot.Workers, workerID)
+	}
+	if worker.ID != workerID || worker.Node != nodeID || worker.Class != "example.com/WorkerNode" || worker.WorkerName != "snapshot worker" || worker.Orphan || worker.Error != "" {
+		t.Fatalf("snapshot worker = %#v, want live worker %d on node %d", worker, workerID, nodeID)
+	}
+	if worker.StartedAt.IsZero() || worker.StartedAt.Before(beforeSpawn) || worker.StartedAt.After(time.Now().UTC()) {
+		t.Fatalf("snapshot worker started_at = %v, want current non-zero timestamp after %v", worker.StartedAt, beforeSpawn)
+	}
+	assertHasNotification(t, notifications, pasta.NotificationWorkerSpawned, workerID)
+	spawned := notifications[len(notifications)-1]
+	if spawned.Kind != pasta.NotificationWorkerSpawned || spawned.Worker == nil || spawned.Worker.ID != workerID {
+		t.Fatalf("spawn notification = %#v, want worker %d", spawned, workerID)
+	}
+	if !spawned.Worker.StartedAt.Equal(worker.StartedAt) {
+		t.Fatalf("spawn notification started_at = %v, want snapshot timestamp %v", spawned.Worker.StartedAt, worker.StartedAt)
+	}
+	if spawned.Worker.WorkerName != "snapshot worker" {
+		t.Fatalf("spawn notification worker_name = %q, want snapshot worker", spawned.Worker.WorkerName)
+	}
+
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker stop notification")
+	}
+	if got := w.Snapshot().Workers; len(got) != 0 {
+		t.Fatalf("snapshot workers after stop = %#v, want empty", got)
+	}
+	assertHasNotification(t, notifications, pasta.NotificationWorkerStopped, workerID)
+	if stoppedNotification := notifications[len(notifications)-1]; stoppedNotification.Kind != pasta.NotificationWorkerStopped || stoppedNotification.Worker == nil || stoppedNotification.Worker.ID != workerID {
+		t.Fatalf("stop notification = %#v, want worker %d", stoppedNotification, workerID)
+	}
+
+	w.Close()
+}
+
+func TestWorkspaceSpawnNodeWorkerWgTracksExternalWaitGroup(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	release := make(chan struct{})
+	waited := make(chan struct{})
+	workerID, err := w.SpawnNodeWorkerWg(nodeID, func() {
+		close(started)
+		<-release
+	}, &wg, "wait group worker")
+	if err != nil {
+		t.Fatalf("SpawnNodeWorkerWg: %v", err)
+	}
+	if workerID == 0 {
+		t.Fatal("SpawnNodeWorkerWg returned worker ID 0")
+	}
+	<-started
+
+	go func() {
+		wg.Wait()
+		close(waited)
+	}()
+
+	select {
+	case <-waited:
+		t.Fatal("external wait group returned before worker stopped")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for external wait group")
+	}
+	if got := w.Snapshot().Workers; len(got) != 0 {
+		t.Fatalf("snapshot workers after wait group returned = %#v, want empty", got)
+	}
+
+	w.Close()
+}
+
+func TestWorkspaceNodeWorkerSpawner(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	spawner := w.Spawner(nodeID)
+	plainStopped := make(chan struct{}, 1)
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+		if notification.Kind == pasta.NotificationWorkerStopped {
+			select {
+			case plainStopped <- struct{}{}:
+			default:
+			}
+		}
+	})
+	notifications = nil
+
+	plainID, err := spawner.Spawn(func() {}, "plain spawner worker")
+	if err != nil {
+		t.Fatalf("Spawner.Spawn: %v", err)
+	}
+	select {
+	case <-plainStopped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Spawner.Spawn worker stop")
+	}
+	assertHasNotification(t, notifications, pasta.NotificationWorkerSpawned, plainID)
+	assertHasNotification(t, notifications, pasta.NotificationWorkerStopped, plainID)
+
+	var wg sync.WaitGroup
+	wgDone := make(chan struct{})
+	wgID, err := spawner.SpawnWg(func() {}, &wg, "wait group spawner worker")
+	if err != nil {
+		t.Fatalf("Spawner.SpawnWg: %v", err)
+	}
+	go func() {
+		wg.Wait()
+		close(wgDone)
+	}()
+	select {
+	case <-wgDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Spawner.SpawnWg wait group")
+	}
+	assertHasNotification(t, notifications, pasta.NotificationWorkerSpawned, wgID)
+	assertHasNotification(t, notifications, pasta.NotificationWorkerStopped, wgID)
+
+	if _, err := (pasta.NodeWorkerSpawner{}).Spawn(func() {}, ""); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("zero-value Spawner.Spawn error = %v, want %v", err, pasta.ErrNoNode)
+	}
+	if _, err := (pasta.NodeWorkerSpawner{}).SpawnWg(func() {}, &wg, ""); !errors.Is(err, pasta.ErrNoNode) {
+		t.Fatalf("zero-value Spawner.SpawnWg error = %v, want %v", err, pasta.ErrNoNode)
+	}
+
+	w.Close()
+}
+
+func TestWorkspaceSpawnNodeWorkerRejectsNilWaitGroup(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	if _, err := w.SpawnNodeWorkerWg(nodeID, func() {}, nil, ""); !errors.Is(err, pasta.ErrWaitGroupNil) {
+		t.Fatalf("SpawnNodeWorkerWg nil wait group error = %v, want %v", err, pasta.ErrWaitGroupNil)
+	}
+
+	w.Close()
+}
+
+func TestWorkspaceNodeWorkerCloseWaitsForWorkers(t *testing.T) {
+	logf := &StringLoggerFactory{}
+	w := pasta.NewWorkspace(logf)
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	workerID, err := w.SpawnNodeWorker(nodeID, func() {
+		close(started)
+		<-release
+	}, "")
+	if err != nil {
+		t.Fatalf("SpawnNodeWorker: %v", err)
+	}
+	<-started
+
+	closed := make(chan struct{})
+	go func() {
+		w.Close()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+		t.Fatal("Close returned before worker stopped")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Close after worker stop")
+	}
+
+	logs := logf.Result()
+	for _, part := range []string{
+		fmt.Sprintf("workspace[debug]waiting for node worker worker=%d", workerID),
+		fmt.Sprintf("workspace[debug]node worker stopped worker=%d", workerID),
+	} {
+		if !strings.Contains(logs, part) {
+			t.Fatalf("worker close log missing %q in:\n%s", part, logs)
+		}
+	}
+}
+
+func TestWorkspaceDebugOrphanWorkers(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/WorkerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	workerID, err := w.SpawnNodeWorker(nodeID, func() {
+		close(started)
+		<-release
+	}, "orphan worker")
+	if err != nil {
+		t.Fatalf("SpawnNodeWorker: %v", err)
+	}
+	<-started
+
+	if got := w.DebugOrphanWorkers(); len(got) != 0 {
+		t.Fatalf("DebugOrphanWorkers before removal = %#v, want none", got)
+	}
+	w.RemoveNode(nodeID)
+
+	orphans := w.DebugOrphanWorkers()
+	if len(orphans) != 1 {
+		t.Fatalf("DebugOrphanWorkers after removal = %#v, want one", orphans)
+	}
+	if orphan := orphans[0]; orphan.ID != workerID || orphan.Node != nodeID || orphan.Class != "example.com/WorkerNode" || orphan.WorkerName != "orphan worker" || !orphan.Orphan {
+		t.Fatalf("orphan worker = %#v, want worker %d attached to removed node %d", orphan, workerID, nodeID)
+	}
+
+	close(release)
+	w.Close()
+}
+
 func TestWorkspaceReplaceNodeFailuresBecomePlaceholders(t *testing.T) {
 	failErr := errors.New("replace boom")
 
@@ -3015,6 +3354,13 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	if _, err := w.AddNodeByClass("example.com/NodeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("AddNodeByClass after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
+	if _, err := w.SpawnNodeWorker(nodeAID, func() {}, ""); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SpawnNodeWorker after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	var wg sync.WaitGroup
+	if _, err := w.SpawnNodeWorkerWg(nodeAID, func() {}, &wg, ""); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SpawnNodeWorkerWg after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
 	if _, ok := w.NodeClass("example.com/NodeA"); ok {
 		t.Fatal("NodeClass after Close returned ok")
 	}
@@ -3247,7 +3593,7 @@ func assertJSONSerializable(t *testing.T, value any) {
 }
 
 func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
-	if len(a.Classes) != len(b.Classes) || len(a.Nodes) != len(b.Nodes) || len(a.Ports) != len(b.Ports) || len(a.Links) != len(b.Links) {
+	if len(a.Classes) != len(b.Classes) || len(a.Nodes) != len(b.Nodes) || len(a.Ports) != len(b.Ports) || len(a.Links) != len(b.Links) || len(a.Workers) != len(b.Workers) {
 		return false
 	}
 	for name, class := range a.Classes {
@@ -3267,6 +3613,11 @@ func equalWorkspaceSnapshot(a, b pasta.WorkspaceSnapshot) bool {
 	}
 	for id, link := range a.Links {
 		if link != b.Links[id] {
+			return false
+		}
+	}
+	for id, worker := range a.Workers {
+		if worker != b.Workers[id] {
 			return false
 		}
 	}

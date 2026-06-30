@@ -4,15 +4,17 @@ import "slices"
 
 // WorkspaceSnapshot is a JSON-serializable copy of a workspace graph.
 //
-// Nodes, ports, and links are keyed by their workspace-scoped IDs. Individual
-// snapshot values do not include their own IDs.
+// Nodes, ports, links, and workers are keyed by their workspace-scoped IDs.
+// Individual graph values do not include their own IDs; worker values include
+// their IDs because they are also used as standalone diagnostic values.
 type WorkspaceSnapshot struct {
 	// Classes is keyed by class name.
 	Classes map[string]NodeClassSnapshot `json:"classes"`
-	// Nodes, Ports, and Links are keyed by workspace-scoped IDs.
-	Nodes map[uint64]NodeSnapshot `json:"nodes"`
-	Ports map[uint64]PortSnapshot `json:"ports"`
-	Links map[uint64]LinkSnapshot `json:"links"`
+	// Nodes, Ports, Links, and Workers are keyed by workspace-scoped IDs.
+	Nodes   map[uint64]NodeSnapshot   `json:"nodes"`
+	Ports   map[uint64]PortSnapshot   `json:"ports"`
+	Links   map[uint64]LinkSnapshot   `json:"links"`
+	Workers map[uint64]WorkerSnapshot `json:"workers"`
 }
 
 // NodeClassSnapshot is a JSON-serializable class-list entry.
@@ -91,6 +93,7 @@ func (w *Workspace) snapshotLocked() WorkspaceSnapshot {
 		Nodes:   make(map[uint64]NodeSnapshot, w.nodes.Len()),
 		Ports:   make(map[uint64]PortSnapshot, w.ports.Len()),
 		Links:   make(map[uint64]LinkSnapshot, w.links.Len()),
+		Workers: w.workerSnapshotMapLocked(),
 	}
 
 	for pair := w.classes.Oldest(); pair != nil; pair = pair.Next() {

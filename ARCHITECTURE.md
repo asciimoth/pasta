@@ -45,6 +45,10 @@ inbox messages, Formular messages, and save.0
 Callback errors and panics are contained by stopping or replacing the affected
 implementation with a placeholder where needed, preserving graph structure when
 possible.
+Node implementations can also spawn node-attached background workers through
+the workspace. Worker panics are contained like callback panics and replace the
+attached node with a placeholder; workspace close waits for tracked workers to
+stop after node stop callbacks run.
 
 `Workspace` uses a recursive lock plus a pending-operation queue.
 Event and inbox delivery are scheduled and revalidated immediately before delivery,
@@ -99,4 +103,3 @@ Undo/redo is best-effort and bounded to 64 entries.
 It covers topology-focused node and link add/remove operations and groups where appropriate.
 Failed rollback entries are dropped silently, so undo should be treated as user 
 convenience rather than durable history.
-

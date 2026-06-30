@@ -35,6 +35,13 @@ const (
 	// NotificationLinkUpdated carries the link snapshot after a mutation.
 	NotificationLinkUpdated NotificationKind = "link_updated"
 
+	// NotificationWorkerSpawned carries a snapshot of a newly spawned worker.
+	NotificationWorkerSpawned NotificationKind = "worker_spawned"
+	// NotificationWorkerStopped carries the last snapshot of a normally stopped worker.
+	NotificationWorkerStopped NotificationKind = "worker_stopped"
+	// NotificationWorkerFailed carries the last snapshot of a panicked worker.
+	NotificationWorkerFailed NotificationKind = "worker_failed"
+
 	// NotificationNodeMenu carries one Formular backend-to-frontend message for
 	// a node menu. It is delivered only to notification subscribers that
 	// explicitly subscribed to that node menu.
@@ -43,10 +50,10 @@ const (
 
 // WorkspaceNotification describes one observable workspace state change.
 //
-// Snapshot is set for NotificationWorkspaceSnapshot. NodeClass, Node, Port, or
-// Link is set for matching node-class/node/port/link notifications. Formular is
-// set for NotificationNodeMenu. Removed notifications carry the last snapshot
-// of the removed entity.
+// Snapshot is set for NotificationWorkspaceSnapshot. NodeClass, Node, Port,
+// Link, or Worker is set for matching node-class/node/port/link/worker
+// notifications. Formular is set for NotificationNodeMenu. Removed, stopped,
+// and failed notifications carry the last snapshot of the removed entity.
 type WorkspaceNotification struct {
 	SubscriptionID uint64 `json:"-"`
 
@@ -60,6 +67,7 @@ type WorkspaceNotification struct {
 	Node      *NodeSnapshot      `json:"node,omitempty"`
 	Port      *PortSnapshot      `json:"port,omitempty"`
 	Link      *LinkSnapshot      `json:"link,omitempty"`
+	Worker    *WorkerSnapshot    `json:"worker,omitempty"`
 	Formular  any                `json:"formular,omitempty"`
 
 	snapshotRequest bool
@@ -193,6 +201,14 @@ func (w *Workspace) enqueueLinkNotification(kind NotificationKind, id uint64, li
 		Kind: kind,
 		ID:   id,
 		Link: &link,
+	})
+}
+
+func (w *Workspace) enqueueWorkerNotification(kind NotificationKind, id uint64, worker WorkerSnapshot) {
+	w.enqueueNotification(WorkspaceNotification{
+		Kind:   kind,
+		ID:     id,
+		Worker: &worker,
 	})
 }
 
