@@ -314,6 +314,13 @@ func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, noti
 		return false
 	}
 
+	w.log.Errf(
+		"node callback failed; replacing node with placeholder node=%d class=%s callback=%s cause=%v",
+		id,
+		record.Class,
+		callback,
+		cause,
+	)
 	nodeStop(record.Node)
 	w.closeNodeResourcesLocked(id)
 	record.Node = nil

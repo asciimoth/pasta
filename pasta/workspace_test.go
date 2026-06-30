@@ -2263,6 +2263,37 @@ func TestWorkspaceNodeCallbackFailuresBecomePlaceholders(t *testing.T) {
 	})
 }
 
+func TestWorkspaceLogsNodeFailurePlaceholderReplacement(t *testing.T) {
+	t.Run("callback error", func(t *testing.T) {
+		logf := &StringLoggerFactory{}
+		w := pasta.NewWorkspace(logf)
+		node := &workspaceNode{failOn: map[string]error{"OnInbox": errors.New("logged boom")}}
+		nodeID, err := w.AddNode(node, "example.com/LoggedNode")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+
+		w.SendInbox(pasta.InboxMessage{ReceiverNode: nodeID, Payload: "payload"})
+
+		assertFailedPlaceholder(t, w, nodeID, "OnInbox", "logged boom")
+		assertNodeFailureLog(t, logf.Result(), nodeID, "example.com/LoggedNode", "OnInbox", "logged boom")
+	})
+
+	t.Run("callback panic", func(t *testing.T) {
+		logf := &StringLoggerFactory{}
+		w := pasta.NewWorkspace(logf)
+		node := &workspaceNode{panicOn: map[string]bool{"OnReady": true}}
+
+		nodeID, err := w.AddNode(node, "example.com/PanicNode")
+		if !errors.Is(err, pasta.ErrNodePanic) {
+			t.Fatalf("AddNode error = %v, want %v", err, pasta.ErrNodePanic)
+		}
+
+		assertFailedPlaceholder(t, w, nodeID, "OnReady", "node panic")
+		assertNodeFailureLog(t, logf.Result(), nodeID, "example.com/PanicNode", "OnReady", "node panic")
+	})
+}
+
 func TestWorkspaceReplaceNodeFailuresBecomePlaceholders(t *testing.T) {
 	failErr := errors.New("replace boom")
 
@@ -3150,6 +3181,22 @@ func assertFailedPlaceholder(t *testing.T, w *pasta.Workspace, nodeID uint64, ca
 	}
 	if !strings.Contains(popup.Text, callback) || !strings.Contains(popup.Text, reason) {
 		t.Fatalf("failure popup text = %q, want callback %q and reason %q", popup.Text, callback, reason)
+	}
+}
+
+func assertNodeFailureLog(t *testing.T, logs string, nodeID uint64, class, callback, cause string) {
+	t.Helper()
+
+	for _, part := range []string{
+		"workspace[err]node callback failed; replacing node with placeholder",
+		fmt.Sprintf("node=%d", nodeID),
+		"class=" + class,
+		"callback=" + callback,
+		"cause=" + cause,
+	} {
+		if !strings.Contains(logs, part) {
+			t.Fatalf("failure log missing %q in:\n%s", part, logs)
+		}
 	}
 }
 
