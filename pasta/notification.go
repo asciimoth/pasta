@@ -67,7 +67,6 @@ type WorkspaceNotification struct {
 	Node      *NodeSnapshot      `json:"node,omitempty"`
 	Port      *PortSnapshot      `json:"port,omitempty"`
 	Link      *LinkSnapshot      `json:"link,omitempty"`
-	Worker    *WorkerSnapshot    `json:"worker,omitempty"`
 	Formular  any                `json:"formular,omitempty"`
 
 	snapshotRequest bool
@@ -201,14 +200,6 @@ func (w *Workspace) enqueueLinkNotification(kind NotificationKind, id uint64, li
 		Kind: kind,
 		ID:   id,
 		Link: &link,
-	})
-}
-
-func (w *Workspace) enqueueWorkerNotification(kind NotificationKind, id uint64, worker WorkerSnapshot) {
-	w.enqueueNotification(WorkspaceNotification{
-		Kind:   kind,
-		ID:     id,
-		Worker: &worker,
 	})
 }
 

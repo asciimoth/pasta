@@ -87,8 +87,6 @@ type Workspace struct {
 	redoLog               []undoEntry
 	undoRecordingDisabled int
 
-	workers *workspaceWorkers
-
 	log  Logger
 	logf LogFactory
 }
@@ -118,7 +116,6 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		notifications:       make([]WorkspaceNotification, 0),
 		undoLog:             make([]undoEntry, 0, undoLogLimit),
 		redoLog:             make([]undoEntry, 0, undoLogLimit),
-		workers:             newWorkspaceWorkers(),
 
 		log:  logf.WorkspaceLogger(),
 		logf: logf,
@@ -238,14 +235,6 @@ func (w *Workspace) AddPendingOp(op func()) {
 // operations from mutating state.
 func (w *Workspace) Close() {
 	w.Lock()
-	if w.closed {
-		workers := w.workers
-		w.Unlock()
-		if workers != nil {
-			workers.wait()
-		}
-		return
-	}
 	w.closed = true
 
 	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
@@ -267,23 +256,6 @@ func (w *Workspace) Close() {
 		}
 		w.Lock()
 	}
-
-	aliveWorkers := w.workerSnapshotsLocked(false)
-	for _, worker := range aliveWorkers {
-		w.log.Debugf(
-			"waiting for node worker worker=%d node=%d class=%s name=%q worker_name=%q orphan=%t",
-			worker.ID,
-			worker.Node,
-			worker.Class,
-			worker.Name,
-			worker.WorkerName,
-			worker.Orphan,
-		)
-	}
-	workers := w.workers
-	w.Unlock()
-	workers.wait()
-	w.Lock()
 
 	w.enqueueNotification(WorkspaceNotification{Kind: NotificationWorkspaceStopped})
 	deliveries := w.drainNotificationDeliveries()
