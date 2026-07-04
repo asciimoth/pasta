@@ -18,7 +18,14 @@ type InboxMessage struct {
 // The receiver node is validated immediately before delivery. If it no longer
 // exists, the message is dropped.
 func (w *Workspace) SendInbox(message InboxMessage) {
-	w.AddPendingOp(func() {
+	w.Lock()
+	defer w.Unlock()
+	w.SendInboxLocked(message)
+}
+
+// SendInboxLocked is SendInbox for callers that already hold the workspace lock.
+func (w *Workspace) SendInboxLocked(message InboxMessage) {
+	w.AddPendingOpLocked(func() {
 		w.deliverInbox(message)
 	})
 }

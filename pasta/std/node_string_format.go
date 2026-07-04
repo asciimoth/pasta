@@ -71,7 +71,7 @@ func (n *stringFormatNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64,
 		}
 		n.refreshLefts()
 	}
-	if err := n.w.SetNodePrimary(n.id, TypeString); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, TypeString); err != nil {
 		return err
 	}
 	n.recalculate(false)
@@ -101,7 +101,7 @@ func (n *stringFormatNode) PreLinkAdd(port uint64, linkType, portDirection strin
 	if !stringFormatTypeSupported(linkType) {
 		return pasta.LinkTypeErr(linkType)
 	}
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	if ok && len(snapshot.Links) > 0 {
 		return pasta.ErrLinkDup
 	}
@@ -146,7 +146,7 @@ func (n *stringFormatNode) OnPortRemoved(port uint64, direction string) error {
 func (n *stringFormatNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
 	if receiverPortDirection == "right" {
 		if linkType == TypeString && isValueRequest(event.Payload) {
-			n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: String(n.value)})
+			n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: String(n.value)})
 		}
 		return nil
 	}
@@ -249,11 +249,11 @@ func (n *stringFormatNode) updatePorts() error {
 		}
 	}
 	current := []uint64{}
-	snapshot, ok := n.w.NodeSnapshot(n.id)
+	snapshot, ok := n.w.NodeSnapshotLocked(n.id)
 	if ok {
 		current = append([]uint64{}, snapshot.LeftPorts...)
 		for _, port := range current {
-			if ps, ok := n.w.PortSnapshot(port); ok {
+			if ps, ok := n.w.PortSnapshotLocked(port); ok {
 				byName[ps.Name] = port
 			}
 		}
@@ -266,18 +266,18 @@ func (n *stringFormatNode) updatePorts() error {
 		if existing := byPart[desired.PartID]; existing > 0 {
 			keep[existing] = struct{}{}
 			ordered = append(ordered, existing)
-			_ = n.w.SetPortName(existing, port.Name)
-			_ = n.w.SetPortTypes(existing, port.Types)
+			_ = n.w.SetPortNameLocked(existing, port.Name)
+			_ = n.w.SetPortTypesLocked(existing, port.Types)
 			continue
 		}
 		if existing := byName[port.Name]; existing > 0 {
 			keep[existing] = struct{}{}
 			ordered = append(ordered, existing)
-			_ = n.w.SetPortTypes(existing, port.Types)
+			_ = n.w.SetPortTypesLocked(existing, port.Types)
 			continue
 		}
 		port.Node = n.id
-		id, err := n.w.AddPort(port)
+		id, err := n.w.AddPortLocked(port)
 		if err != nil {
 			return err
 		}
@@ -286,12 +286,12 @@ func (n *stringFormatNode) updatePorts() error {
 	}
 	for _, port := range current {
 		if _, ok := keep[port]; !ok {
-			n.w.RemovePort(port)
+			n.w.RemovePortLocked(port)
 		}
 	}
 	n.refreshLefts()
 	if len(ordered) > 0 {
-		if err := n.w.SetNodePortOrder(n.id, "left", ordered); err != nil {
+		if err := n.w.SetNodePortOrderLocked(n.id, "left", ordered); err != nil {
 			return err
 		}
 	}
@@ -304,13 +304,13 @@ func (n *stringFormatNode) refreshLefts() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	snapshot, ok := n.w.NodeSnapshot(n.id)
+	snapshot, ok := n.w.NodeSnapshotLocked(n.id)
 	if !ok {
 		return
 	}
 	byName := map[string]uint64{}
 	for _, port := range snapshot.LeftPorts {
-		if ps, ok := n.w.PortSnapshot(port); ok {
+		if ps, ok := n.w.PortSnapshotLocked(port); ok {
 			byName[ps.Name] = port
 		}
 	}
@@ -323,7 +323,7 @@ func (n *stringFormatNode) refreshLefts() {
 
 func (n *stringFormatNode) requestAll() {
 	for _, port := range n.lefts {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if !ok {
 			continue
 		}
@@ -334,16 +334,16 @@ func (n *stringFormatNode) requestAll() {
 }
 
 func (n *stringFormatNode) requestLink(link, port uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *stringFormatNode) sendAll() {
-	port, ok := n.w.PortSnapshot(n.out)
+	port, ok := n.w.PortSnapshotLocked(n.out)
 	if !ok {
 		return
 	}
@@ -353,23 +353,23 @@ func (n *stringFormatNode) sendAll() {
 }
 
 func (n *stringFormatNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: String(n.value)})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: String(n.value)})
 }
 
 func (n *stringFormatNode) updateLabel() error {
 	if n.w == nil || n.id == 0 {
 		return nil
 	}
-	return n.w.SetNodeLabel(n.id, n.value)
+	return n.w.SetNodeLabelLocked(n.id, n.value)
 }
 
 func (n *stringFormatNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
@@ -379,7 +379,7 @@ func (n *stringFormatNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
 		Block:       n.menuBlock(),
 	})

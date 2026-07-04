@@ -41,7 +41,7 @@ topology can survive until a matching class is registered.
 ## Lifecycle
 Nodes receive callbacks through the `Node` interface: initialization, readiness,
 root-path status, port changes, link validation, link changes, events,
-inbox messages, Formular messages, and save.0
+inbox messages, Formular messages, and save.
 Callback errors and panics are contained by stopping or replacing the affected
 implementation with a placeholder where needed, preserving graph structure when
 possible.
@@ -50,9 +50,18 @@ the workspace. Worker panics are contained like callback panics and replace the
 attached node with a placeholder; workspace close waits for tracked workers to
 stop after node stop callbacks run.
 
-`Workspace` uses a recursive lock plus a pending-operation queue.
-Event and inbox delivery are scheduled and revalidated immediately before delivery,
-so stale graph references are dropped instead of delivered.
+`Workspace` uses a regular non-recursive mutex plus a pending-operation queue.
+Public workspace methods acquire the mutex themselves and are intended for
+external callers. Node callbacks run while the workspace mutex is already held,
+so callback code and helper functions called from callbacks must use the
+matching exported `Locked` methods. Manual callers that invoke `Workspace.Lock`
+follow the same rule until they invoke `Workspace.Unlock`.
+
+`Unlock` drains pending operations after every outer unlock. Delivery callbacks
+and notification callbacks therefore run after the mutation that scheduled them,
+while a guard prevents nested post-unlock processing from reordering queued
+work. Event and inbox delivery are scheduled and revalidated immediately before
+delivery, so stale graph references are dropped instead of delivered.
 
 ## Core Invariants
 - Workspace IDs are positive and unique across nodes, ports, and links.
@@ -94,7 +103,7 @@ Formular node-menu messages are delivered only to subscribers that explicitly
 subscribe to that node menu.
 
 Resources registered with nodes or links are `io.Closer` values.
-They are closed when the owner is removed, replaced, failed into a placeholder,0
+They are closed when the owner is removed, replaced, failed into a placeholder,
 or when the workspace closes.
 The same resource bound to multiple owners is deduplicated and closed once.
 

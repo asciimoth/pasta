@@ -120,7 +120,7 @@ func (n *httpClientNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _
 		}
 	}
 
-	if err := n.w.SetNodePrimary(n.id, typeNetwork); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, typeNetwork); err != nil {
 		return err
 	}
 
@@ -170,11 +170,11 @@ func (n *httpClientNode) PreLinkAdd(port uint64, linkType, portDirection string)
 func (n *httpClientNode) OnLinkAdd(link, port uint64, _, _ string) error {
 	switch port {
 	case n.netp:
-		std.Request(n.w, n.id, link)
+		std.RequestLocked(n.w, n.id, link)
 
 	case n.urlp, n.methodp, n.bodyp:
 		n.sendRequestBlock()
-		std.Request(n.w, n.id, link)
+		std.RequestLocked(n.w, n.id, link)
 	}
 
 	return nil
@@ -349,7 +349,7 @@ func (n *httpClientNode) sendRequest() {
 	select {
 	case n.jobs <- req:
 	default:
-		n.w.SendInbox(pasta.InboxMessage{
+		n.w.SendInboxLocked(pasta.InboxMessage{
 			ReceiverNode: n.id,
 			Payload:      httpClientResult{id: req.id, err: "worker is busy"},
 		})
@@ -474,21 +474,21 @@ func (n *httpClientNode) requestBody() {
 }
 
 func (n *httpClientNode) requestPort(port uint64) {
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	if !ok {
 		return
 	}
 	for _, link := range snapshot.Links {
-		std.Request(n.w, n.id, link)
+		std.RequestLocked(n.w, n.id, link)
 	}
 }
 
 func (n *httpClientNode) updateLabel() error {
-	return n.w.SetNodeLabel(n.id, n.currentStatusText())
+	return n.w.SetNodeLabelLocked(n.id, n.currentStatusText())
 }
 
 func (n *httpClientNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageMenuSnapshot,
 			MenuID:         pasta.NodeMenuID(n.id),
@@ -502,7 +502,7 @@ func (n *httpClientNode) sendRequestBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:            formular.MessageBlockSnapshot,
 			MenuID:          pasta.NodeMenuID(n.id),
@@ -517,7 +517,7 @@ func (n *httpClientNode) sendResultBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:            formular.MessageBlockSnapshot,
 			MenuID:          pasta.NodeMenuID(n.id),
@@ -670,6 +670,6 @@ func (n *httpClientNode) portHasLinks(port uint64) bool {
 		return false
 	}
 
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	return ok && len(snapshot.Links) > 0
 }

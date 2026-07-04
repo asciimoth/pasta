@@ -20,6 +20,13 @@ const (
 // CamelCase; node implementations should use lower-case keys for node-owned
 // state saved by OnSave.
 func (w *Workspace) SaveConfig(cfg configer.Config) error {
+	w.Lock()
+	defer w.Unlock()
+	return w.SaveConfigLocked(cfg)
+}
+
+// SaveConfigLocked is SaveConfig for callers that already hold the workspace lock.
+func (w *Workspace) SaveConfigLocked(cfg configer.Config) error {
 	if cfg == nil {
 		return errors.New("nil config")
 	}
@@ -27,8 +34,6 @@ func (w *Workspace) SaveConfig(cfg configer.Config) error {
 		return configer.ErrReadOnly
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return ErrWorkspaceClosed
 	}

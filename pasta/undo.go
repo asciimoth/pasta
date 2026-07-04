@@ -61,11 +61,33 @@ func (w *Workspace) Undo() {
 	w.applyHistory(true)
 }
 
+// UndoLocked is Undo for callers that already hold the workspace lock.
+//
+// Undo applies regular workspace operations internally, so it releases the
+// workspace mutex while reusing the normal undo path and reacquires it before
+// returning.
+func (w *Workspace) UndoLocked() {
+	w.mu.Unlock()
+	w.Undo()
+	w.mu.Lock()
+}
+
 // Redo reapplies the latest operation rolled back by Undo.
 //
 // Failed rollback entries are silently dropped.
 func (w *Workspace) Redo() {
 	w.applyHistory(false)
+}
+
+// RedoLocked is Redo for callers that already hold the workspace lock.
+//
+// Redo applies regular workspace operations internally, so it releases the
+// workspace mutex while reusing the normal redo path and reacquires it before
+// returning.
+func (w *Workspace) RedoLocked() {
+	w.mu.Unlock()
+	w.Redo()
+	w.mu.Lock()
 }
 
 func (w *Workspace) applyHistory(undo bool) {

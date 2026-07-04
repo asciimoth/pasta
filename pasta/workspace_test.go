@@ -49,12 +49,12 @@ func (n *workspaceNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, cl
 	}
 	l.Debugf("init id=%d class=%s", id, class)
 	if n.initPrimary != "" {
-		if err := w.SetNodePrimary(id, n.initPrimary); err != nil {
+		if err := w.SetNodePrimaryLocked(id, n.initPrimary); err != nil {
 			return err
 		}
 	}
 	if n.initLabel != "" {
-		return w.SetNodeLabel(id, n.initLabel)
+		return w.SetNodeLabelLocked(id, n.initLabel)
 	}
 	return n.maybeFail("OnInit")
 }

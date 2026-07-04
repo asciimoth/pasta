@@ -13,7 +13,6 @@ require (
 )
 
 require (
-	github.com/asciimoth/badlock v0.1.1 // indirect
 	github.com/asciimoth/bufpool v0.3.0 // indirect
 	github.com/asciimoth/ident v0.2.0 // indirect
 	github.com/asciimoth/putback v0.3.0 // indirect

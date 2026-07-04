@@ -37,7 +37,7 @@ func (n *stringNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ str
 		}
 		n.lefts = append([]uint64{}, restored.LeftPorts...)
 	}
-	if err := n.w.SetNodePrimary(n.id, n.outputType()); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, n.outputType()); err != nil {
 		return err
 	}
 	n.recalculate(false)
@@ -63,7 +63,7 @@ func (n *stringNode) PreLinkAdd(port uint64, linkType, portDirection string) err
 		if linkType != TypeString {
 			return pasta.LinkTypeErr(linkType)
 		}
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) > 0 {
 			return pasta.ErrLinkDup
 		}
@@ -123,7 +123,7 @@ func (n *stringNode) OnPortRemoved(port uint64, direction string) error {
 func (n *stringNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
 	if receiverPortDirection == "right" {
 		if linkType == n.outputType() && isValueRequest(event.Payload) {
-			n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.payload()})
+			n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.payload()})
 		}
 		return nil
 	}
@@ -227,7 +227,7 @@ func (n *stringNode) menuValue() any {
 
 func (n *stringNode) requestAll() {
 	for _, port := range n.lefts {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if !ok {
 			continue
 		}
@@ -238,16 +238,16 @@ func (n *stringNode) requestAll() {
 }
 
 func (n *stringNode) requestLink(link, port uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *stringNode) sendAll() {
-	port, ok := n.w.PortSnapshot(n.out)
+	port, ok := n.w.PortSnapshotLocked(n.out)
 	if !ok {
 		return
 	}
@@ -257,16 +257,16 @@ func (n *stringNode) sendAll() {
 }
 
 func (n *stringNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.payload()})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.payload()})
 }
 
 func (n *stringNode) scheduleBalanceInputs() {
-	n.w.SendInbox(pasta.InboxMessage{ReceiverNode: n.id, Payload: "balanceInputs"})
+	n.w.SendInboxLocked(pasta.InboxMessage{ReceiverNode: n.id, Payload: "balanceInputs"})
 }
 
 func (n *stringNode) OnInbox(message pasta.InboxMessage) error {
@@ -278,7 +278,7 @@ func (n *stringNode) OnInbox(message pasta.InboxMessage) error {
 
 func (n *stringNode) balanceInputs() {
 	for len(n.freeInputPorts()) == 0 {
-		_, _ = n.w.AddPort(stringInputPortForNode(n.id, len(n.lefts)+1))
+		_, _ = n.w.AddPortLocked(stringInputPortForNode(n.id, len(n.lefts)+1))
 		n.refreshLefts()
 	}
 	for {
@@ -290,14 +290,14 @@ func (n *stringNode) balanceInputs() {
 		if trailing == 0 {
 			break
 		}
-		n.w.RemovePort(trailing)
+		n.w.RemovePortLocked(trailing)
 		n.refreshLefts()
 	}
 	n.sortInputs()
 }
 
 func (n *stringNode) refreshLefts() {
-	snapshot, ok := n.w.NodeSnapshot(n.id)
+	snapshot, ok := n.w.NodeSnapshotLocked(n.id)
 	if !ok {
 		n.lefts = nil
 		return
@@ -309,7 +309,7 @@ func (n *stringNode) refreshLefts() {
 func (n *stringNode) freeInputPorts() []uint64 {
 	free := []uint64{}
 	for _, port := range n.lefts {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) == 0 {
 			free = append(free, port)
 		}
@@ -320,7 +320,7 @@ func (n *stringNode) freeInputPorts() []uint64 {
 func (n *stringNode) trailingFreePort() uint64 {
 	for i := len(n.lefts) - 1; i >= 0; i-- {
 		port := n.lefts[i]
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) == 0 {
 			return port
 		}
@@ -335,18 +335,18 @@ func (n *stringNode) sortInputs() {
 	slices.SortFunc(n.lefts, func(a, b uint64) int {
 		return inputIndex(n.w, a) - inputIndex(n.w, b)
 	})
-	_ = n.w.SetNodePortOrder(n.id, "left", n.lefts)
+	_ = n.w.SetNodePortOrderLocked(n.id, "left", n.lefts)
 }
 
 func (n *stringNode) updateLabel() error {
 	if n.w == nil || n.id == 0 {
 		return nil
 	}
-	return n.w.SetNodeLabel(n.id, n.label())
+	return n.w.SetNodeLabelLocked(n.id, n.label())
 }
 
 func (n *stringNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
@@ -356,7 +356,7 @@ func (n *stringNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
 		Block:       n.menuBlock(),
 	})

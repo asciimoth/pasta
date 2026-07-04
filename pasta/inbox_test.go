@@ -38,11 +38,11 @@ func TestWorkspaceDropsInboxWhenReceiverRemovedBeforeDelivery(t *testing.T) {
 	}
 
 	w.Lock()
-	w.SendInbox(pasta.InboxMessage{
+	w.SendInboxLocked(pasta.InboxMessage{
 		ReceiverNode: nodeID,
 		Payload:      "late",
 	})
-	w.RemoveNode(nodeID)
+	w.RemoveNodeLocked(nodeID)
 	w.Unlock()
 
 	if got := logf.Result(); strings.Contains(got, "payload=late") {

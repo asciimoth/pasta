@@ -26,7 +26,14 @@ type Event struct {
 // If either endpoint no longer exists, the ports no longer belong to the given
 // nodes, or the ports are no longer connected, the event is dropped.
 func (w *Workspace) SendEvent(event Event) {
-	w.AddPendingOp(func() {
+	w.Lock()
+	defer w.Unlock()
+	w.SendEventLocked(event)
+}
+
+// SendEventLocked is SendEvent for callers that already hold the workspace lock.
+func (w *Workspace) SendEventLocked(event Event) {
+	w.AddPendingOpLocked(func() {
 		w.deliverEvent(event)
 	})
 }
@@ -34,13 +41,20 @@ func (w *Workspace) SendEvent(event Event) {
 // EmitEvent builds event from sender id, link id and payload and sends it.
 // sender can be ether sender node or sender port
 func (w *Workspace) EmitEvent(sender, link uint64, payload any) {
+	w.Lock()
+	defer w.Unlock()
+	w.EmitEventLocked(sender, link, payload)
+}
+
+// EmitEventLocked is EmitEvent for callers that already hold the workspace lock.
+func (w *Workspace) EmitEventLocked(sender, link uint64, payload any) {
 	event := Event{
 		SenderNode: sender,
 		Link:       link,
 		Payload:    payload,
 	}
 
-	ls, ok := w.LinkSnapshot(link)
+	ls, ok := w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
@@ -69,7 +83,7 @@ func (w *Workspace) EmitEvent(sender, link uint64, payload any) {
 		return
 	}
 
-	w.SendEvent(event)
+	w.SendEventLocked(event)
 }
 
 func (w *Workspace) deliverEvent(event Event) {

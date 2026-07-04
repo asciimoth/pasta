@@ -34,6 +34,11 @@ type resourceState struct {
 func (w *Workspace) AddNodeResource(id uint64, resource io.Closer) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.AddNodeResourceLocked(id, resource)
+}
+
+// AddNodeResourceLocked is AddNodeResource for callers that already hold the workspace lock.
+func (w *Workspace) AddNodeResourceLocked(id uint64, resource io.Closer) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -51,6 +56,11 @@ func (w *Workspace) AddNodeResource(id uint64, resource io.Closer) error {
 func (w *Workspace) AddLinkResource(id uint64, resource io.Closer) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.AddLinkResourceLocked(id, resource)
+}
+
+// AddLinkResourceLocked is AddLinkResource for callers that already hold the workspace lock.
+func (w *Workspace) AddLinkResourceLocked(id uint64, resource io.Closer) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}

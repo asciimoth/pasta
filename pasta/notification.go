@@ -92,8 +92,17 @@ func (w *Workspace) SubscribeNotifications(callback NotificationCallback) uint64
 	}
 
 	w.Lock()
+	defer w.Unlock()
+	return w.SubscribeNotificationsLocked(callback)
+}
+
+// SubscribeNotificationsLocked is SubscribeNotifications for callers that already hold the workspace lock.
+func (w *Workspace) SubscribeNotificationsLocked(callback NotificationCallback) uint64 {
+	if callback == nil {
+		return 0
+	}
+
 	if w.closed {
-		w.Unlock()
 		return 0
 	}
 	id := w.nextSubscriptionID
@@ -103,24 +112,30 @@ func (w *Workspace) SubscribeNotifications(callback NotificationCallback) uint64
 	w.nextSubscriptionID = id + 1
 	w.subscribers[id] = callback
 	snapshot := w.snapshotLocked()
-	w.Unlock()
 
+	w.mu.Unlock()
 	callback(WorkspaceNotification{
 		SubscriptionID: id,
 		Kind:           NotificationWorkspaceSnapshot,
 		Snapshot:       &snapshot,
 	})
+	w.mu.Lock()
 	return id
 }
 
 // UnsubscribeNotifications removes a notification subscription.
 func (w *Workspace) UnsubscribeNotifications(id uint64) bool {
+	w.Lock()
+	defer w.Unlock()
+	return w.UnsubscribeNotificationsLocked(id)
+}
+
+// UnsubscribeNotificationsLocked is UnsubscribeNotifications for callers that already hold the workspace lock.
+func (w *Workspace) UnsubscribeNotificationsLocked(id uint64) bool {
 	if id < 1 {
 		return false
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return false
 	}
@@ -144,12 +159,17 @@ func (w *Workspace) UnsubscribeNotifications(id uint64) bool {
 // The snapshot is formed when notifications are drained for delivery, not when
 // the request is made.
 func (w *Workspace) RequestFullSnapshot(subscriptionID uint64) bool {
+	w.Lock()
+	defer w.Unlock()
+	return w.RequestFullSnapshotLocked(subscriptionID)
+}
+
+// RequestFullSnapshotLocked is RequestFullSnapshot for callers that already hold the workspace lock.
+func (w *Workspace) RequestFullSnapshotLocked(subscriptionID uint64) bool {
 	if subscriptionID < 1 {
 		return false
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return false
 	}

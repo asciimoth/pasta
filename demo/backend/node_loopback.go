@@ -45,11 +45,11 @@ func (n *loopbackNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ s
 	if restored != nil && len(restored.LeftPorts) > 0 {
 		n.out = restored.LeftPorts[0]
 	}
-	if err := n.w.SetNodePrimary(n.id, typeNetwork); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, typeNetwork); err != nil {
 		return err
 	}
-	_ = n.w.SetNodeLabel(n.id, "loopback")
-	return n.w.AddNodeResource(n.id, n.base)
+	_ = n.w.SetNodeLabelLocked(n.id, "loopback")
+	return n.w.AddNodeResourceLocked(n.id, n.base)
 }
 
 func (n *loopbackNode) OnReady() error {
@@ -80,7 +80,7 @@ func (n *loopbackNode) OnEvent(event pasta.Event, linkType string, _ []string, r
 }
 
 func (n *loopbackNode) sendAll() {
-	port, ok := n.w.PortSnapshot(n.out)
+	port, ok := n.w.PortSnapshotLocked(n.out)
 	if !ok {
 		return
 	}
@@ -92,5 +92,5 @@ func (n *loopbackNode) sendAll() {
 func (n *loopbackNode) sendToLink(link uint64) {
 	wrapper := gonnect.DetachNetwork(n.base, nil)
 	bindNetworkResource(n.w, n.id, link, wrapper)
-	n.w.EmitEvent(n.id, link, networkPayload{Network: wrapper})
+	n.w.EmitEventLocked(n.id, link, networkPayload{Network: wrapper})
 }

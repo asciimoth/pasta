@@ -31,7 +31,7 @@ func (n *compareNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ st
 		}
 		n.lefts = append([]uint64{}, restored.LeftPorts...)
 	}
-	if err := n.w.SetNodePrimary(n.id, TypeBool); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, TypeBool); err != nil {
 		return err
 	}
 	n.recalculate(false)
@@ -51,7 +51,7 @@ func (n *compareNode) OnReady() error {
 func (n *compareNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	switch portDirection {
 	case "left":
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) > 0 {
 			return pasta.ErrLinkDup
 		}
@@ -88,7 +88,7 @@ func (n *compareNode) OnLinkRemoved(_ uint64, port uint64, _ string, portDirecti
 func (n *compareNode) OnEvent(event pasta.Event, linkType string, _ []string, receiverPortDirection string) error {
 	if receiverPortDirection == "right" {
 		if linkType == TypeBool && isBoolRequest(event.Payload) {
-			n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value})
+			n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value})
 		}
 		return nil
 	}
@@ -134,7 +134,7 @@ func (n *compareNode) input(index int) Comparable {
 
 func (n *compareNode) requestAll() {
 	for _, port := range n.lefts {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if !ok {
 			continue
 		}
@@ -145,16 +145,16 @@ func (n *compareNode) requestAll() {
 }
 
 func (n *compareNode) requestLink(link, port uint64, linkType string) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *compareNode) sendAll() {
-	port, ok := n.w.PortSnapshot(n.out)
+	port, ok := n.w.PortSnapshotLocked(n.out)
 	if !ok {
 		return
 	}
@@ -164,20 +164,20 @@ func (n *compareNode) sendAll() {
 }
 
 func (n *compareNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value})
 }
 
 func (n *compareNode) updateLabel() error {
-	return n.w.SetNodeLabel(n.id, boolLabel(n.value))
+	return n.w.SetNodeLabelLocked(n.id, boolLabel(n.value))
 }
 
 func (n *compareNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
@@ -187,7 +187,7 @@ func (n *compareNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
 		Block:       n.menuBlock(),
 	})

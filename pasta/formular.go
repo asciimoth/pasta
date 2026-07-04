@@ -21,19 +21,23 @@ func NodeMenuID(node uint64) string {
 // exists, the watcher receives a forced snapshot before SubscribeNodeMenu
 // returns.
 func (w *Workspace) SubscribeNodeMenu(node, subscriptionID uint64) bool {
+	w.Lock()
+	defer w.Unlock()
+	return w.SubscribeNodeMenuLocked(node, subscriptionID)
+}
+
+// SubscribeNodeMenuLocked is SubscribeNodeMenu for callers that already hold the workspace lock.
+func (w *Workspace) SubscribeNodeMenuLocked(node, subscriptionID uint64) bool {
 	if node < 1 || subscriptionID < 1 {
 		return false
 	}
 
-	w.Lock()
 	if w.closed {
-		w.Unlock()
 		return false
 	}
 	callback, subscribed := w.subscribers[subscriptionID]
 	record, present := w.nodes.Get(node)
 	if !subscribed || !present || record == nil || callback == nil {
-		w.Unlock()
 		return false
 	}
 	if w.nodeMenuSubscribers[node] == nil {
@@ -48,27 +52,33 @@ func (w *Workspace) SubscribeNodeMenu(node, subscriptionID uint64) bool {
 			snapshot = &copied
 		}
 	}
-	w.Unlock()
 
 	if snapshot != nil {
+		w.mu.Unlock()
 		callback(WorkspaceNotification{
 			SubscriptionID: subscriptionID,
 			Kind:           NotificationNodeMenu,
 			ID:             node,
 			Formular:       snapshot.Copy(),
 		})
+		w.mu.Lock()
 	}
 	return true
 }
 
 // UnsubscribeNodeMenu removes one notification subscription from one node menu.
 func (w *Workspace) UnsubscribeNodeMenu(node, subscriptionID uint64) bool {
+	w.Lock()
+	defer w.Unlock()
+	return w.UnsubscribeNodeMenuLocked(node, subscriptionID)
+}
+
+// UnsubscribeNodeMenuLocked is UnsubscribeNodeMenu for callers that already hold the workspace lock.
+func (w *Workspace) UnsubscribeNodeMenuLocked(node, subscriptionID uint64) bool {
 	if node < 1 || subscriptionID < 1 {
 		return false
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return false
 	}
@@ -89,12 +99,17 @@ func (w *Workspace) UnsubscribeNodeMenu(node, subscriptionID uint64) bool {
 // SendNodeMenuMsg sends one Formular backend-to-frontend message from a node
 // menu to subscribed watchers and updates the workspace's cached menu state.
 func (w *Workspace) SendNodeMenuMsg(node uint64, message any) {
+	w.Lock()
+	defer w.Unlock()
+	w.SendNodeMenuMsgLocked(node, message)
+}
+
+// SendNodeMenuMsgLocked is SendNodeMenuMsg for callers that already hold the workspace lock.
+func (w *Workspace) SendNodeMenuMsgLocked(node uint64, message any) {
 	if node < 1 || message == nil {
 		return
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return
 	}
@@ -125,12 +140,17 @@ func (w *Workspace) SendNodeMenuMsg(node uint64, message any) {
 // node. Missing nodes, placeholders, nil messages, and closed workspaces drop
 // the message silently.
 func (w *Workspace) SendNodeFormularMsg(node uint64, message any) {
+	w.Lock()
+	defer w.Unlock()
+	w.SendNodeFormularMsgLocked(node, message)
+}
+
+// SendNodeFormularMsgLocked is SendNodeFormularMsg for callers that already hold the workspace lock.
+func (w *Workspace) SendNodeFormularMsgLocked(node uint64, message any) {
 	if node < 1 || message == nil {
 		return
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return
 	}

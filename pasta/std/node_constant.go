@@ -34,7 +34,7 @@ func (n *constantNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ s
 	if restored != nil && len(restored.RightPorts) > 0 {
 		n.out = restored.RightPorts[0]
 	}
-	if err := n.w.SetNodePrimary(n.id, n.value.typ); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, n.value.typ); err != nil {
 		return err
 	}
 	if err := n.updateLabel(); err != nil {
@@ -112,11 +112,11 @@ func (n *constantNode) OnSave(cfg configer.Config) error {
 }
 
 func (n *constantNode) updateLabel() error {
-	return n.w.SetNodeLabel(n.id, n.value.label())
+	return n.w.SetNodeLabelLocked(n.id, n.value.label())
 }
 
 func (n *constantNode) sendAll() {
-	port, ok := n.w.PortSnapshot(n.out)
+	port, ok := n.w.PortSnapshotLocked(n.out)
 	if !ok {
 		return
 	}
@@ -126,27 +126,27 @@ func (n *constantNode) sendAll() {
 }
 
 func (n *constantNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value.payload()})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value.payload()})
 }
 
 func (n *constantNode) sendToLinkByEvent(event pasta.Event) {
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value.payload()})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value.payload()})
 }
 
 func (n *constantNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
 }
 
 func (n *constantNode) sendMenuBlock() {
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
 		Block:       n.menuBlock(),
 	})

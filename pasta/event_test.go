@@ -237,7 +237,7 @@ func (n *calcNode) sendAll() {
 	if n.right == 0 {
 		return
 	}
-	port, ok := n.w.PortSnapshot(n.right)
+	port, ok := n.w.PortSnapshotLocked(n.right)
 	if !ok {
 		return
 	}
@@ -253,7 +253,7 @@ func (n *calcNode) sendToLink(link uint64) {
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.right)
 	n.log("send link=%d payload=%g receiver=%d:%d", link, n.value, receiverNode, receiverPort)
-	n.w.SendEvent(pasta.Event{
+	n.w.SendEventLocked(pasta.Event{
 		SenderNode:   n.id,
 		SenderPort:   n.right,
 		ReceiverNode: receiverNode,
@@ -263,7 +263,7 @@ func (n *calcNode) sendToLink(link uint64) {
 }
 
 func (n *calcNode) link(link uint64) (pasta.LinkSnapshot, bool) {
-	return n.w.LinkSnapshot(link)
+	return n.w.LinkSnapshotLocked(link)
 }
 
 func (n *calcNode) log(format string, args ...any) {
@@ -287,14 +287,14 @@ func (n *calcNode) updateLabel() error {
 	if n.w == nil || n.id == 0 {
 		return nil
 	}
-	return n.w.SetNodeLabel(n.id, fmt.Sprintf("%g", n.value))
+	return n.w.SetNodeLabelLocked(n.id, fmt.Sprintf("%g", n.value))
 }
 
 func (n *calcNode) sendMenuSnapshot() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageMenuSnapshot,
 			MenuID:         pasta.NodeMenuID(n.id),
@@ -308,7 +308,7 @@ func (n *calcNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:            formular.MessageBlockSnapshot,
 			MenuID:          pasta.NodeMenuID(n.id),
@@ -516,14 +516,14 @@ func TestWorkspaceDropsEventWhenLinkChangesBeforeDelivery(t *testing.T) {
 	}
 
 	w.Lock()
-	w.SendEvent(pasta.Event{
+	w.SendEventLocked(pasta.Event{
 		SenderNode:   senderID,
 		SenderPort:   senderPort,
 		ReceiverNode: receiverID,
 		ReceiverPort: receiverPort,
 		Payload:      float64(1),
 	})
-	w.RemoveLink(link)
+	w.RemoveLinkLocked(link)
 	w.Unlock()
 
 	if got := logf.Result(); strings.Contains(got, "payload=1") {

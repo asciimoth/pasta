@@ -38,7 +38,7 @@ func (n *resourceInitNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64,
 	if err := n.workspaceNode.OnInit(w, l, id, class, restored, isReplacement, isPlaceholderReplacement, isClassConstructed, isRestored); err != nil {
 		return err
 	}
-	if err := w.AddNodeResource(id, n.resource); err != nil {
+	if err := w.AddNodeResourceLocked(id, n.resource); err != nil {
 		return err
 	}
 	return n.err
@@ -60,7 +60,7 @@ func (n *resourceLinkAddNode) OnLinkAdd(link, port uint64, linkType, portDirecti
 	if err := n.workspaceNode.OnLinkAdd(link, port, linkType, portDirection); err != nil {
 		return err
 	}
-	if err := n.w.AddLinkResource(link, n.resource); err != nil {
+	if err := n.w.AddLinkResourceLocked(link, n.resource); err != nil {
 		return err
 	}
 	return n.err

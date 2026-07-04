@@ -67,7 +67,7 @@ func (n *selectOutNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ 
 	n.id = id
 	if restored != nil {
 		for _, port := range restored.LeftPorts {
-			snapshot, ok := w.PortSnapshot(port)
+			snapshot, ok := w.PortSnapshotLocked(port)
 			if !ok {
 				continue
 			}
@@ -79,7 +79,7 @@ func (n *selectOutNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ 
 			}
 		}
 		for _, port := range restored.RightPorts {
-			snapshot, ok := w.PortSnapshot(port)
+			snapshot, ok := w.PortSnapshotLocked(port)
 			if !ok {
 				continue
 			}
@@ -110,7 +110,7 @@ func (n *selectOutNode) OnReady() error {
 
 func (n *selectOutNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if portDirection == "left" {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) > 0 {
 			return pasta.ErrLinkDup
 		}
@@ -189,14 +189,14 @@ func (n *selectOutNode) OnEvent(event pasta.Event, linkType string, _ []string, 
 
 func (n *selectOutNode) applyDataType(typ string) error {
 	n.dataType = typ
-	if err := n.w.SetNodePrimary(n.id, typ); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, typ); err != nil {
 		return err
 	}
 	for _, port := range []uint64{n.in, n.out0, n.out1} {
 		if port == 0 {
 			continue
 		}
-		if err := n.w.SetPortTypes(port, []string{typ}); err != nil {
+		if err := n.w.SetPortTypesLocked(port, []string{typ}); err != nil {
 			return err
 		}
 	}
@@ -220,7 +220,7 @@ func (n *selectOutNode) requestActivePath() {
 }
 
 func (n *selectOutNode) requestPort(port uint64) {
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	if !ok || len(snapshot.Links) == 0 {
 		return
 	}
@@ -230,41 +230,41 @@ func (n *selectOutNode) requestPort(port uint64) {
 }
 
 func (n *selectOutNode) requestLink(link, port uint64) {
-	linkSnapshot, ok := n.w.LinkSnapshot(link)
+	linkSnapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *selectOutNode) forwardToActiveOutput(payload any) {
 	port := n.activeOutput()
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	if !ok {
 		return
 	}
 	for _, link := range snapshot.Links {
-		linkSnapshot, ok := n.w.LinkSnapshot(link)
+		linkSnapshot, ok := n.w.LinkSnapshotLocked(link)
 		if !ok {
 			continue
 		}
 		receiverNode, receiverPort := otherEndpoint(linkSnapshot, port)
-		n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+		n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
 	}
 }
 
 func (n *selectOutNode) forwardToIn(payload any) {
-	snapshot, ok := n.w.PortSnapshot(n.in)
+	snapshot, ok := n.w.PortSnapshotLocked(n.in)
 	if !ok || len(snapshot.Links) == 0 {
 		return
 	}
-	linkSnapshot, ok := n.w.LinkSnapshot(snapshot.Links[0])
+	linkSnapshot, ok := n.w.LinkSnapshotLocked(snapshot.Links[0])
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(linkSnapshot, n.in)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.in, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.in, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: payload})
 }
 
 func (n *selectOutNode) trackPayload(payload any) {
@@ -286,13 +286,13 @@ func (n *selectOutNode) closePayloads() {
 
 func (n *selectOutNode) updateLabel() error {
 	if n.selector {
-		return n.w.SetNodeLabel(n.id, "in -> out 1")
+		return n.w.SetNodeLabelLocked(n.id, "in -> out 1")
 	}
-	return n.w.SetNodeLabel(n.id, "in -> out 0")
+	return n.w.SetNodeLabelLocked(n.id, "in -> out 0")
 }
 
 func (n *selectOutNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
@@ -302,7 +302,7 @@ func (n *selectOutNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
 		Block:       n.menuBlock(),
 	})

@@ -52,6 +52,11 @@ type clipboardLink struct {
 func (w *Workspace) Copy(ids []uint64) string {
 	w.Lock()
 	defer w.Unlock()
+	return w.CopyLocked(ids)
+}
+
+// CopyLocked is Copy for callers that already hold the workspace lock.
+func (w *Workspace) CopyLocked(ids []uint64) string {
 	if w.closed {
 		return ""
 	}
@@ -142,6 +147,21 @@ func (w *Workspace) copyClipboardPorts(ids []uint64) []clipboardPort {
 // Available class factories may recreate live nodes; otherwise placeholders are
 // created so copied graph structure can still be restored.
 func (w *Workspace) Paste(data string) []uint64 {
+	return w.paste(data)
+}
+
+// PasteLocked is Paste for callers that already hold the workspace lock.
+//
+// Paste may call node class factories, so the workspace mutex is released
+// while reusing the normal paste path and reacquired before this method returns.
+func (w *Workspace) PasteLocked(data string) []uint64 {
+	w.mu.Unlock()
+	pasted := w.paste(data)
+	w.mu.Lock()
+	return pasted
+}
+
+func (w *Workspace) paste(data string) []uint64 {
 	var payload clipboardPayload
 	if err := json.Unmarshal([]byte(data), &payload); err != nil || payload.Version != 1 {
 		return nil

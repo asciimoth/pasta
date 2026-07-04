@@ -3,7 +3,6 @@ module github.com/asciimoth/pasta/pasta
 go 1.25.5
 
 require (
-	github.com/asciimoth/badlock v0.1.1
 	github.com/asciimoth/configer/configer v0.3.1
 	github.com/asciimoth/configer/hujson v0.3.1
 	github.com/asciimoth/formular v0.3.1

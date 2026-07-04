@@ -57,9 +57,9 @@ func bindNetworkResource(w *pasta.Workspace, node, link uint64, n networkCloser)
 	if w == nil || n == nil {
 		return
 	}
-	_ = w.AddNodeResource(node, n)
+	_ = w.AddNodeResourceLocked(node, n)
 	if link != 0 {
-		_ = w.AddLinkResource(link, n)
+		_ = w.AddLinkResourceLocked(link, n)
 	}
 }
 

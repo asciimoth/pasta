@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/formular"
@@ -663,17 +664,60 @@ func (n *customValueNode) OnEvent(event pasta.Event, _ string, _ []string, recei
 		return nil
 	}
 	n.requests++
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: event.SenderNode, ReceiverPort: event.SenderPort, Payload: n.value})
 	return nil
 }
 
 func (n *customValueNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: n.out, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: n.value})
+}
+
+func TestStdSelectCallbackReentryDoesNotDeadlock(t *testing.T) {
+	w := newStdWorkspace(t)
+	source0Class := &customValueClass{name: "example.com/DeadlockSelectSource0", value: "zero"}
+	source1Class := &customValueClass{name: "example.com/DeadlockSelectSource1", value: "one"}
+	sinkClass := &customSinkClass{}
+	for _, class := range []pasta.NodeClass{source0Class, source1Class, sinkClass} {
+		if err := w.AddNodeClass(class); err != nil {
+			t.Fatalf("AddNodeClass %s: %v", class.ClassName(), err)
+		}
+	}
+
+	source0 := addByClass(t, w, source0Class.ClassName(), "source0")
+	source1 := addByClass(t, w, source1Class.ClassName(), "source1")
+	selectNode := addByClass(t, w, NodeTypeSelect, "select")
+	selector := addByClass(t, w, NodeTypeTrueConstant, "selector")
+	sink := addByClass(t, w, sinkClass.ClassName(), "sink")
+
+	linkByPortName(t, w, source0, "output", selectNode, "In 0")
+	linkByPortName(t, w, source1, "output", selectNode, "In 1")
+	linkByPortName(t, w, selectNode, "Out", sink, "input")
+
+	snapshot := w.Snapshot()
+	from := portByName(t, snapshot, selector, "right", "output")
+	to := portByName(t, snapshot, selectNode, "left", "Selector")
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := w.AddLink(from, to)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AddLink selector: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("selector AddLink deadlocked while std callbacks re-entered workspace")
+	}
+	if got := sinkClass.node.value; got != "one" {
+		t.Fatalf("sink after selector = %q, want one", got)
+	}
 }
 
 type customSinkClass struct {

@@ -79,6 +79,11 @@ type LinkSnapshot struct {
 func (w *Workspace) Snapshot() WorkspaceSnapshot {
 	w.Lock()
 	defer w.Unlock()
+	return w.SnapshotLocked()
+}
+
+// SnapshotLocked is Snapshot for callers that already hold the workspace lock.
+func (w *Workspace) SnapshotLocked() WorkspaceSnapshot {
 	if w.closed {
 		return WorkspaceSnapshot{}
 	}
@@ -130,7 +135,11 @@ func (w *Workspace) NodeClassSnapshot(name string) (NodeClassSnapshot, bool) {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.NodeClassSnapshotLocked(name)
+}
 
+// NodeClassSnapshotLocked is NodeClassSnapshot for callers that already hold the workspace lock.
+func (w *Workspace) NodeClassSnapshotLocked(name string) (NodeClassSnapshot, bool) {
 	class, present := w.classes.Get(name)
 	if w.closed || !present || class == nil {
 		return NodeClassSnapshot{}, false
@@ -142,7 +151,11 @@ func (w *Workspace) NodeClassSnapshot(name string) (NodeClassSnapshot, bool) {
 func (w *Workspace) NodeSnapshot(id uint64) (NodeSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
+	return w.NodeSnapshotLocked(id)
+}
 
+// NodeSnapshotLocked is NodeSnapshot for callers that already hold the workspace lock.
+func (w *Workspace) NodeSnapshotLocked(id uint64) (NodeSnapshot, bool) {
 	record, present := w.nodes.Get(id)
 	if w.closed || !present || record == nil {
 		return NodeSnapshot{}, false
@@ -154,7 +167,11 @@ func (w *Workspace) NodeSnapshot(id uint64) (NodeSnapshot, bool) {
 func (w *Workspace) PortSnapshot(id uint64) (PortSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
+	return w.PortSnapshotLocked(id)
+}
 
+// PortSnapshotLocked is PortSnapshot for callers that already hold the workspace lock.
+func (w *Workspace) PortSnapshotLocked(id uint64) (PortSnapshot, bool) {
 	port, present := w.ports.Get(id)
 	if w.closed || !present || port == nil {
 		return PortSnapshot{}, false
@@ -166,7 +183,11 @@ func (w *Workspace) PortSnapshot(id uint64) (PortSnapshot, bool) {
 func (w *Workspace) LinkSnapshot(id uint64) (LinkSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
+	return w.LinkSnapshotLocked(id)
+}
 
+// LinkSnapshotLocked is LinkSnapshot for callers that already hold the workspace lock.
+func (w *Workspace) LinkSnapshotLocked(id uint64) (LinkSnapshot, bool) {
 	link, present := w.links.Get(id)
 	if w.closed || !present || link == nil {
 		return LinkSnapshot{}, false

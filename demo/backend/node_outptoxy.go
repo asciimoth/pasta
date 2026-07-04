@@ -59,7 +59,7 @@ func (o *outproxyNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, _ s
 		}
 	}
 
-	if err := o.w.SetNodePrimary(o.id, typeNetwork); err != nil {
+	if err := o.w.SetNodePrimaryLocked(o.id, typeNetwork); err != nil {
 		return err
 	}
 
@@ -114,7 +114,7 @@ func (o *outproxyNode) OnLinkAdd(link, port uint64, _, _ string) error {
 
 	case o.urlp:
 		o.sendURLBlock()
-		std.Request(o.w, o.id, link)
+		std.RequestLocked(o.w, o.id, link)
 	}
 
 	return nil
@@ -212,13 +212,13 @@ func (o *outproxyNode) requestPort(port uint64) {
 		return
 	}
 
-	snapshot, ok := o.w.PortSnapshot(port)
+	snapshot, ok := o.w.PortSnapshotLocked(port)
 	if !ok {
 		return
 	}
 
 	for _, link := range snapshot.Links {
-		std.Request(o.w, o.id, link)
+		std.RequestLocked(o.w, o.id, link)
 	}
 }
 
@@ -226,7 +226,7 @@ func (o *outproxyNode) updateLabel() error {
 	if o.w == nil || o.id == 0 {
 		return nil
 	}
-	return o.w.SetNodeLabel(o.id, o.url)
+	return o.w.SetNodeLabelLocked(o.id, o.url)
 }
 
 func (o *outproxyNode) sendAll() {
@@ -234,7 +234,7 @@ func (o *outproxyNode) sendAll() {
 		return
 	}
 
-	port, ok := o.w.PortSnapshot(o.out)
+	port, ok := o.w.PortSnapshotLocked(o.out)
 	if !ok {
 		return
 	}
@@ -251,7 +251,7 @@ func (o *outproxyNode) sendToLink(link uint64) {
 
 	wrapper := gonnect.DetachNetwork(o.base, nil)
 	bindNetworkResource(o.w, o.id, link, wrapper)
-	o.w.EmitEvent(o.id, link, networkPayload{Network: wrapper})
+	o.w.EmitEventLocked(o.id, link, networkPayload{Network: wrapper})
 }
 
 func (o *outproxyNode) sendMenuSnapshot() {
@@ -259,7 +259,7 @@ func (o *outproxyNode) sendMenuSnapshot() {
 		return
 	}
 
-	o.w.SendNodeMenuMsg(o.id, formular.MenuSnapshotMessage{
+	o.w.SendNodeMenuMsgLocked(o.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageMenuSnapshot,
 			MenuID:         pasta.NodeMenuID(o.id),
@@ -274,7 +274,7 @@ func (o *outproxyNode) sendURLBlock() {
 		return
 	}
 
-	o.w.SendNodeMenuMsg(o.id, formular.BlockSnapshotMessage{
+	o.w.SendNodeMenuMsgLocked(o.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:            formular.MessageBlockSnapshot,
 			MenuID:          pasta.NodeMenuID(o.id),
@@ -323,6 +323,6 @@ func (o *outproxyNode) portHasLinks(port uint64) bool {
 		return false
 	}
 
-	snapshot, ok := o.w.PortSnapshot(port)
+	snapshot, ok := o.w.PortSnapshotLocked(port)
 	return ok && len(snapshot.Links) > 0
 }

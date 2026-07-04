@@ -27,8 +27,8 @@ import (
 	"math/rand"
 	"slices"
 	"strings"
+	"sync"
 
-	"github.com/asciimoth/badlock"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
 
@@ -60,13 +60,17 @@ var (
 // Workspace owns nodes, ports, and links and coordinates their lifecycle callbacks.
 type Workspace struct {
 	// mu should not be used directly. Use Lock and Unlock so post-lock hooks run.
-	mu *badlock.BadLock
+	mu sync.Mutex
 
 	nextid  uint64
 	isReady bool
 	closed  bool
 
 	pending []func()
+	// postlocking is true while pending operations and notifications are being
+	// drained after an unlock. Nested unlocks leave draining to the outer loop
+	// so pending operations keep FIFO batch order.
+	postlocking bool
 
 	nodes    *orderedmap.OrderedMap[uint64, *nodeRecord]
 	ports    *orderedmap.OrderedMap[uint64, *Port]
@@ -94,8 +98,6 @@ type Workspace struct {
 // NewWorkspace creates a ready workspace using logf for workspace and node loggers.
 func NewWorkspace(logf LogFactory) *Workspace {
 	return &Workspace{
-		mu: badlock.New(),
-
 		nextid:  1,
 		isReady: true,
 
@@ -128,6 +130,11 @@ func NewWorkspace(logf LogFactory) *Workspace {
 func (w *Workspace) NextID() uint64 {
 	w.Lock()
 	defer w.Unlock()
+	return w.NextIDLocked()
+}
+
+// NextIDLocked is NextID for callers that already hold the workspace lock.
+func (w *Workspace) NextIDLocked() uint64 {
 	if w.closed {
 		return 0
 	}
@@ -173,6 +180,11 @@ func (w *Workspace) idAvailableLocked(id uint64) bool {
 func (w *Workspace) IsReady() bool {
 	w.Lock()
 	defer w.Unlock()
+	return w.IsReadyLocked()
+}
+
+// IsReadyLocked is IsReady for callers that already hold the workspace lock.
+func (w *Workspace) IsReadyLocked() bool {
 	if w.closed {
 		return false
 	}
@@ -183,7 +195,11 @@ func (w *Workspace) IsReady() bool {
 func (w *Workspace) Ready() {
 	w.Lock()
 	defer w.Unlock()
+	w.ReadyLocked()
+}
 
+// ReadyLocked is Ready for callers that already hold the workspace lock.
+func (w *Workspace) ReadyLocked() {
 	if w.closed || w.isReady {
 		return
 	}
@@ -205,12 +221,9 @@ func (w *Workspace) Lock() {
 	w.mu.Lock()
 }
 
-// Unlock unlocks the workspace and runs pending operations after the top-level unlock.
+// Unlock unlocks the workspace and runs pending operations.
 func (w *Workspace) Unlock() {
-	r := w.mu.Unlock()
-	if r > 0 {
-		return
-	}
+	w.mu.Unlock()
 	w.postlock()
 }
 
@@ -221,6 +234,11 @@ func (w *Workspace) Unlock() {
 func (w *Workspace) AddPendingOp(op func()) {
 	w.Lock()
 	defer w.Unlock()
+	w.AddPendingOpLocked(op)
+}
+
+// AddPendingOpLocked is AddPendingOp for callers that already hold the workspace lock.
+func (w *Workspace) AddPendingOpLocked(op func()) {
 	if w.closed {
 		return
 	}
@@ -235,6 +253,12 @@ func (w *Workspace) AddPendingOp(op func()) {
 // operations from mutating state.
 func (w *Workspace) Close() {
 	w.Lock()
+	defer w.Unlock()
+	w.CloseLocked()
+}
+
+// CloseLocked is Close for callers that already hold the workspace lock.
+func (w *Workspace) CloseLocked() {
 	w.closed = true
 
 	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
@@ -248,32 +272,38 @@ func (w *Workspace) Close() {
 	for len(w.pending) > 0 {
 		ops := w.pending
 		w.pending = make([]func(), 0)
-		w.Unlock()
+		w.mu.Unlock()
 		for _, op := range ops {
 			if op != nil {
 				op()
 			}
 		}
-		w.Lock()
+		w.mu.Lock()
 	}
 
 	w.enqueueNotification(WorkspaceNotification{Kind: NotificationWorkspaceStopped})
 	deliveries := w.drainNotificationDeliveries()
 	w.subscribers = make(map[uint64]NotificationCallback)
 	w.nodeMenuSubscribers = make(map[uint64]map[uint64]struct{})
-	w.Unlock()
 
+	w.mu.Unlock()
 	deliverNotifications(deliveries)
+	w.mu.Lock()
 }
 
 // RemoveNode removes a node and all of its ports and links.
 func (w *Workspace) RemoveNode(id uint64) {
+	w.Lock()
+	defer w.Unlock()
+	w.RemoveNodeLocked(id)
+}
+
+// RemoveNodeLocked is RemoveNode for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodeLocked(id uint64) {
 	if id < 1 {
 		return
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return
 	}
@@ -293,7 +323,7 @@ func (w *Workspace) RemoveNode(id uint64) {
 
 	w.undoRecordingDisabled += 1
 	for port := range record.Ports() {
-		w.RemovePort(port)
+		w.RemovePortLocked(port)
 	}
 	w.undoRecordingDisabled -= 1
 	record.LeftPorts = nil
@@ -328,7 +358,7 @@ func (w *Workspace) replaceFailedNodeWithPlaceholderLocked(id uint64, record *no
 	record.Node = nil
 	record.stopped = false
 	record.Popups = []NodePopup{{
-		ID:   w.NextID(),
+		ID:   w.NextIDLocked(),
 		Type: NodePopupErr,
 		Text: popupText,
 	}}
@@ -357,6 +387,11 @@ func (w *Workspace) NodesByClass(class string) ([]uint64, error) {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.NodesByClassLocked(class)
+}
+
+// NodesByClassLocked is NodesByClass for callers that already hold the workspace lock.
+func (w *Workspace) NodesByClassLocked(class string) ([]uint64, error) {
 	if w.closed {
 		return nil, nil
 	}
@@ -379,12 +414,17 @@ func (w *Workspace) RemoveNodesByClass(class string) error {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.RemoveNodesByClassLocked(class)
+}
+
+// RemoveNodesByClassLocked is RemoveNodesByClass for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodesByClassLocked(class string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
 
 	for _, id := range w.nodeIDsByClassLocked(class) {
-		w.RemoveNode(id)
+		w.RemoveNodeLocked(id)
 	}
 	return nil
 }
@@ -398,12 +438,17 @@ func (w *Workspace) ReplaceNodesByClassWithPlaceholders(class string) error {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.ReplaceNodesByClassWithPlaceholdersLocked(class)
+}
+
+// ReplaceNodesByClassWithPlaceholdersLocked is ReplaceNodesByClassWithPlaceholders for callers that already hold the workspace lock.
+func (w *Workspace) ReplaceNodesByClassWithPlaceholdersLocked(class string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
 
 	for _, id := range w.nodeIDsByClassLocked(class) {
-		if err := w.ReplaceNodeWithPlaceholder(id, nil); err != nil {
+		if err := w.ReplaceNodeWithPlaceholderLocked(id, nil); err != nil {
 			return err
 		}
 	}
@@ -412,12 +457,17 @@ func (w *Workspace) ReplaceNodesByClassWithPlaceholders(class string) error {
 
 // RemovePort removes a port and all links attached to it.
 func (w *Workspace) RemovePort(id uint64) {
+	w.Lock()
+	defer w.Unlock()
+	w.RemovePortLocked(id)
+}
+
+// RemovePortLocked is RemovePort for callers that already hold the workspace lock.
+func (w *Workspace) RemovePortLocked(id uint64) {
 	if id < 1 {
 		return
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return
 	}
@@ -435,7 +485,7 @@ func (w *Workspace) RemovePort(id uint64) {
 	port.Links = make([]uint64, 0)
 	w.undoRecordingDisabled += 1
 	for _, link := range links {
-		w.RemoveLink(link)
+		w.RemoveLinkLocked(link)
 	}
 	w.undoRecordingDisabled -= 1
 
@@ -450,12 +500,17 @@ func (w *Workspace) RemovePort(id uint64) {
 
 // RemoveLink removes a link and updates both endpoint ports and nodes.
 func (w *Workspace) RemoveLink(id uint64) {
+	w.Lock()
+	defer w.Unlock()
+	w.RemoveLinkLocked(id)
+}
+
+// RemoveLinkLocked is RemoveLink for callers that already hold the workspace lock.
+func (w *Workspace) RemoveLinkLocked(id uint64) {
 	if id < 1 {
 		return
 	}
 
-	w.Lock()
-	defer w.Unlock()
 	if w.closed {
 		return
 	}
@@ -502,24 +557,41 @@ func (w *Workspace) RemoveLink(id uint64) {
 // and label from OnInit or later callbacks with SetNodePrimary and
 // SetNodeLabel. If name is empty or omitted, a generic unique name is generated.
 func (w *Workspace) AddNode(node Node, class string, name ...string) (uint64, error) {
-	return w.AddNodeWithRoot(node, class, false, optionalName(name))
+	w.Lock()
+	defer w.Unlock()
+	return w.AddNodeLocked(node, class, name...)
+}
+
+// AddNodeLocked is AddNode for callers that already hold the workspace lock.
+func (w *Workspace) AddNodeLocked(node Node, class string, name ...string) (uint64, error) {
+	return w.addNodeLocked(node, class, false, optionalName(name), "", nil, nil, false, false)
 }
 
 // AddRootNode adds node to the workspace as a root node.
 func (w *Workspace) AddRootNode(node Node, class string, name ...string) (uint64, error) {
-	return w.AddNodeWithRoot(node, class, true, optionalName(name))
+	w.Lock()
+	defer w.Unlock()
+	return w.AddRootNodeLocked(node, class, name...)
+}
+
+// AddRootNodeLocked is AddRootNode for callers that already hold the workspace lock.
+func (w *Workspace) AddRootNodeLocked(node Node, class string, name ...string) (uint64, error) {
+	return w.addNodeLocked(node, class, true, optionalName(name), "", nil, nil, false, false)
 }
 
 // AddNodeWithRoot adds node to the workspace and sets its initial root status.
 func (w *Workspace) AddNodeWithRoot(node Node, class string, root bool, name ...string) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
+	return w.AddNodeWithRootLocked(node, class, root, name...)
+}
+
+// AddNodeWithRootLocked is AddNodeWithRoot for callers that already hold the workspace lock.
+func (w *Workspace) AddNodeWithRootLocked(node Node, class string, root bool, name ...string) (uint64, error) {
 	return w.addNodeLocked(node, class, root, optionalName(name), "", nil, nil, false, false)
 }
 
-func (w *Workspace) addNodeByClassWithParams(node Node, class string, params NodeClassParams, name string) (uint64, error) {
-	w.Lock()
-	defer w.Unlock()
+func (w *Workspace) addNodeByClassWithParamsLocked(node Node, class string, params NodeClassParams, name string) (uint64, error) {
 	if err := validateNodeClassParams(params); err != nil {
 		return 0, err
 	}
@@ -664,19 +736,37 @@ func (w *Workspace) addNodeLockedWithIDs(node Node, class string, root bool, nam
 // Placeholder nodes have no Node implementation, but their ports and links
 // participate in snapshots, copy/paste, save/restore, and DAG checks.
 func (w *Workspace) AddPlaceholderNode(class string, ports []Port, name ...string) (uint64, error) {
-	return w.AddPlaceholderNodeWithRoot(class, false, ports, optionalName(name))
+	w.Lock()
+	defer w.Unlock()
+	return w.AddPlaceholderNodeLocked(class, ports, name...)
+}
+
+// AddPlaceholderNodeLocked is AddPlaceholderNode for callers that already hold the workspace lock.
+func (w *Workspace) AddPlaceholderNodeLocked(class string, ports []Port, name ...string) (uint64, error) {
+	return w.addPlaceholderNodeWithRootLocked(class, false, ports, nil, 0, optionalName(name))
 }
 
 // AddPlaceholderNodeWithRoot adds a placeholder node with predefined ports and
 // an initial root flag. Placeholder root state is stored but ignored by
 // snapshots and root-path tracing until the node is replaced by a normal node.
 func (w *Workspace) AddPlaceholderNodeWithRoot(class string, root bool, ports []Port, name ...string) (uint64, error) {
-	return w.addPlaceholderNodeWithRoot(class, root, ports, nil, 0, optionalName(name))
+	w.Lock()
+	defer w.Unlock()
+	return w.AddPlaceholderNodeWithRootLocked(class, root, ports, name...)
+}
+
+// AddPlaceholderNodeWithRootLocked is AddPlaceholderNodeWithRoot for callers that already hold the workspace lock.
+func (w *Workspace) AddPlaceholderNodeWithRootLocked(class string, root bool, ports []Port, name ...string) (uint64, error) {
+	return w.addPlaceholderNodeWithRootLocked(class, root, ports, nil, 0, optionalName(name))
 }
 
 func (w *Workspace) addPlaceholderNodeWithRoot(class string, root bool, ports []Port, portIDs []uint64, nodeID uint64, nodeName string) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
+	return w.addPlaceholderNodeWithRootLocked(class, root, ports, portIDs, nodeID, nodeName)
+}
+
+func (w *Workspace) addPlaceholderNodeWithRootLocked(class string, root bool, ports []Port, portIDs []uint64, nodeID uint64, nodeName string) (uint64, error) {
 	if w.closed {
 		return 0, ErrWorkspaceClosed
 	}
@@ -742,19 +832,31 @@ func (w *Workspace) addPlaceholderNodeWithRoot(class string, root bool, ports []
 // the replacement node starts; any popups added by the replacement are treated
 // as new observable state.
 func (w *Workspace) ReplaceNode(id uint64, node Node) error {
-	return w.replaceNode(id, node, "", false)
+	w.Lock()
+	defer w.Unlock()
+	return w.ReplaceNodeLocked(id, node)
+}
+
+// ReplaceNodeLocked is ReplaceNode for callers that already hold the workspace lock.
+func (w *Workspace) ReplaceNodeLocked(id uint64, node Node) error {
+	return w.replaceNodeLocked(id, node, "", false)
 }
 
 // ReplaceNodeWithName replaces the Node implementation and sets the node name.
 //
 // If name is empty, a generic unique name is generated.
 func (w *Workspace) ReplaceNodeWithName(id uint64, node Node, name string) error {
-	return w.replaceNode(id, node, name, true)
-}
-
-func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.ReplaceNodeWithNameLocked(id, node, name)
+}
+
+// ReplaceNodeWithNameLocked is ReplaceNodeWithName for callers that already hold the workspace lock.
+func (w *Workspace) ReplaceNodeWithNameLocked(id uint64, node Node, name string) error {
+	return w.replaceNodeLocked(id, node, name, true)
+}
+
+func (w *Workspace) replaceNodeLocked(id uint64, node Node, name string, rename bool) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -876,19 +978,31 @@ func (w *Workspace) replaceNode(id uint64, node Node, name string, rename bool) 
 // placeholder record while preserving existing ports and links. Any supplied
 // ports are added to the placeholder.
 func (w *Workspace) ReplaceNodeWithPlaceholder(id uint64, ports []Port) error {
-	return w.replaceNodeWithPlaceholder(id, ports, "", false)
+	w.Lock()
+	defer w.Unlock()
+	return w.ReplaceNodeWithPlaceholderLocked(id, ports)
+}
+
+// ReplaceNodeWithPlaceholderLocked is ReplaceNodeWithPlaceholder for callers that already hold the workspace lock.
+func (w *Workspace) ReplaceNodeWithPlaceholderLocked(id uint64, ports []Port) error {
+	return w.replaceNodeWithPlaceholderLocked(id, ports, "", false)
 }
 
 // ReplaceNodeWithPlaceholderWithName replaces an existing node implementation
 // with a placeholder record and sets the node name. If name is empty, a generic
 // unique name is generated.
 func (w *Workspace) ReplaceNodeWithPlaceholderWithName(id uint64, ports []Port, name string) error {
-	return w.replaceNodeWithPlaceholder(id, ports, name, true)
-}
-
-func (w *Workspace) replaceNodeWithPlaceholder(id uint64, ports []Port, name string, rename bool) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.ReplaceNodeWithPlaceholderWithNameLocked(id, ports, name)
+}
+
+// ReplaceNodeWithPlaceholderWithNameLocked is ReplaceNodeWithPlaceholderWithName for callers that already hold the workspace lock.
+func (w *Workspace) ReplaceNodeWithPlaceholderWithNameLocked(id uint64, ports []Port, name string) error {
+	return w.replaceNodeWithPlaceholderLocked(id, ports, name, true)
+}
+
+func (w *Workspace) replaceNodeWithPlaceholderLocked(id uint64, ports []Port, name string, rename bool) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -943,18 +1057,30 @@ func (w *Workspace) replaceNodeWithPlaceholder(id uint64, ports []Port, name str
 
 // ReplacePlaceholderNode replaces a placeholder node with a normal Node.
 func (w *Workspace) ReplacePlaceholderNode(id uint64, node Node) error {
-	return w.ReplaceNode(id, node)
+	w.Lock()
+	defer w.Unlock()
+	return w.ReplacePlaceholderNodeLocked(id, node)
+}
+
+// ReplacePlaceholderNodeLocked is ReplacePlaceholderNode for callers that already hold the workspace lock.
+func (w *Workspace) ReplacePlaceholderNodeLocked(id uint64, node Node) error {
+	return w.ReplaceNodeLocked(id, node)
 }
 
 // ReplacePlaceholderNodeWithName replaces a placeholder node with a normal Node
 // and sets the node name. If name is empty, a generic unique name is generated.
 func (w *Workspace) ReplacePlaceholderNodeWithName(id uint64, node Node, name string) error {
-	return w.ReplaceNodeWithName(id, node, name)
-}
-
-func (w *Workspace) replacePlaceholderWithClassState(id uint64, class string, node Node, state NodeClassState) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.ReplacePlaceholderNodeWithNameLocked(id, node, name)
+}
+
+// ReplacePlaceholderNodeWithNameLocked is ReplacePlaceholderNodeWithName for callers that already hold the workspace lock.
+func (w *Workspace) ReplacePlaceholderNodeWithNameLocked(id uint64, node Node, name string) error {
+	return w.ReplaceNodeWithNameLocked(id, node, name)
+}
+
+func (w *Workspace) replacePlaceholderWithClassStateLocked(id uint64, class string, node Node, state NodeClassState) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1051,6 +1177,14 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.AddPortLocked(port)
+}
+
+// AddPortLocked is AddPort for callers that already hold the workspace lock.
+func (w *Workspace) AddPortLocked(port Port) (uint64, error) {
+	port = port.Copy()
+	port.Links = []uint64{}
+
 	if w.closed {
 		return 0, ErrWorkspaceClosed
 	}
@@ -1067,7 +1201,7 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 		return 0, err
 	}
 
-	id := w.NextID()
+	id := w.NextIDLocked()
 	port.ID = id
 	w.ports.Set(id, &port)
 
@@ -1101,6 +1235,11 @@ func (w *Workspace) AddPort(port Port) (uint64, error) {
 func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	w.Lock()
 	defer w.Unlock()
+	return w.AddLinkLocked(pa, pb)
+}
+
+// AddLinkLocked is AddLink for callers that already hold the workspace lock.
+func (w *Workspace) AddLinkLocked(pa, pb uint64) (uint64, string, error) {
 	if w.closed {
 		return 0, "", ErrWorkspaceClosed
 	}
@@ -1174,7 +1313,7 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 	}
 
 	link := Link{
-		ID:   w.NextID(),
+		ID:   w.NextIDLocked(),
 		Type: linkType,
 
 		LeftPort:     Left.ID,
@@ -1228,6 +1367,11 @@ func (w *Workspace) AddLink(pa, pb uint64) (uint64, string, error) {
 func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 	w.Lock()
 	defer w.Unlock()
+	return w.PortsConnectedLocked(pa, pb)
+}
+
+// PortsConnectedLocked is PortsConnected for callers that already hold the workspace lock.
+func (w *Workspace) PortsConnectedLocked(pa, pb uint64) bool {
 	if w.closed {
 		return false
 	}
@@ -1249,6 +1393,11 @@ func (w *Workspace) PortsConnected(pa, pb uint64) bool {
 func (w *Workspace) NodesConnected(na, nb uint64) bool {
 	w.Lock()
 	defer w.Unlock()
+	return w.NodesConnectedLocked(na, nb)
+}
+
+// NodesConnectedLocked is NodesConnected for callers that already hold the workspace lock.
+func (w *Workspace) NodesConnectedLocked(na, nb uint64) bool {
 	if w.closed {
 		return false
 	}
@@ -1261,6 +1410,11 @@ func (w *Workspace) NodesConnected(na, nb uint64) bool {
 func (w *Workspace) LinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
 	w.Lock()
 	defer w.Unlock()
+	return w.LinkByPortsLocked(pa, pb)
+}
+
+// LinkByPortsLocked is LinkByPorts for callers that already hold the workspace lock.
+func (w *Workspace) LinkByPortsLocked(pa, pb uint64) (uint64, LinkSnapshot, bool) {
 	if w.closed {
 		return 0, LinkSnapshot{}, false
 	}
@@ -1286,10 +1440,20 @@ func (w *Workspace) GetLinkByPorts(pa, pb uint64) (uint64, LinkSnapshot, bool) {
 	return w.LinkByPorts(pa, pb)
 }
 
+// GetLinkByPortsLocked is GetLinkByPorts for callers that already hold the workspace lock.
+func (w *Workspace) GetLinkByPortsLocked(pa, pb uint64) (uint64, LinkSnapshot, bool) {
+	return w.LinkByPortsLocked(pa, pb)
+}
+
 // LinksByNodes returns snapshots of all direct links between two nodes.
 func (w *Workspace) LinksByNodes(na, nb uint64) map[uint64]LinkSnapshot {
 	w.Lock()
 	defer w.Unlock()
+	return w.LinksByNodesLocked(na, nb)
+}
+
+// LinksByNodesLocked is LinksByNodes for callers that already hold the workspace lock.
+func (w *Workspace) LinksByNodesLocked(na, nb uint64) map[uint64]LinkSnapshot {
 	if w.closed {
 		return nil
 	}
@@ -1307,17 +1471,27 @@ func (w *Workspace) GetLinksByNodes(na, nb uint64) map[uint64]LinkSnapshot {
 	return w.LinksByNodes(na, nb)
 }
 
+// GetLinksByNodesLocked is GetLinksByNodes for callers that already hold the workspace lock.
+func (w *Workspace) GetLinksByNodesLocked(na, nb uint64) map[uint64]LinkSnapshot {
+	return w.LinksByNodesLocked(na, nb)
+}
+
 // RemoveLinksByNodes removes every direct link between two nodes.
 func (w *Workspace) RemoveLinksByNodes(na, nb uint64) {
 	w.Lock()
 	defer w.Unlock()
+	w.RemoveLinksByNodesLocked(na, nb)
+}
+
+// RemoveLinksByNodesLocked is RemoveLinksByNodes for callers that already hold the workspace lock.
+func (w *Workspace) RemoveLinksByNodesLocked(na, nb uint64) {
 	if w.closed {
 		return
 	}
 
 	links := w.linksBetweenNodes(na, nb)
 	for _, link := range links {
-		w.RemoveLink(link.ID)
+		w.RemoveLinkLocked(link.ID)
 	}
 }
 
@@ -1328,6 +1502,11 @@ func (w *Workspace) RemoveLinksByNodes(na, nb uint64) {
 func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodePrimaryLocked(id, typ)
+}
+
+// SetNodePrimaryLocked is SetNodePrimary for callers that already hold the workspace lock.
+func (w *Workspace) SetNodePrimaryLocked(id uint64, typ string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1351,6 +1530,11 @@ func (w *Workspace) SetNodePrimary(id uint64, typ string) error {
 func (w *Workspace) SetNodeLabel(id uint64, label string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodeLabelLocked(id, label)
+}
+
+// SetNodeLabelLocked is SetNodeLabel for callers that already hold the workspace lock.
+func (w *Workspace) SetNodeLabelLocked(id uint64, label string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1371,6 +1555,11 @@ func (w *Workspace) SetNodeLabel(id uint64, label string) error {
 func (w *Workspace) SetNodePosition(id uint64, position string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodePositionLocked(id, position)
+}
+
+// SetNodePositionLocked is SetNodePosition for callers that already hold the workspace lock.
+func (w *Workspace) SetNodePositionLocked(id uint64, position string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1395,6 +1584,11 @@ func (w *Workspace) SetNodePosition(id uint64, position string) error {
 func (w *Workspace) SetNodeName(id uint64, name string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodeNameLocked(id, name)
+}
+
+// SetNodeNameLocked is SetNodeName for callers that already hold the workspace lock.
+func (w *Workspace) SetNodeNameLocked(id uint64, name string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1422,6 +1616,11 @@ func (w *Workspace) NodeIDByName(name string) (uint64, bool) {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.NodeIDByNameLocked(name)
+}
+
+// NodeIDByNameLocked is NodeIDByName for callers that already hold the workspace lock.
+func (w *Workspace) NodeIDByNameLocked(name string) (uint64, bool) {
 	if w.closed {
 		return 0, false
 	}
@@ -1443,6 +1642,11 @@ func (w *Workspace) NodeIDByName(name string) (uint64, bool) {
 func (w *Workspace) AddNodePopup(id uint64, popupType, text string, deduplicate bool) (uint64, error) {
 	w.Lock()
 	defer w.Unlock()
+	return w.AddNodePopupLocked(id, popupType, text, deduplicate)
+}
+
+// AddNodePopupLocked is AddNodePopup for callers that already hold the workspace lock.
+func (w *Workspace) AddNodePopupLocked(id uint64, popupType, text string, deduplicate bool) (uint64, error) {
 	if w.closed {
 		return 0, ErrWorkspaceClosed
 	}
@@ -1459,7 +1663,7 @@ func (w *Workspace) AddNodePopup(id uint64, popupType, text string, deduplicate 
 			return popup.Type == popupType && popup.Text == text
 		})
 	}
-	popupID := w.NextID()
+	popupID := w.NextIDLocked()
 	record.Popups = append(record.Popups, NodePopup{
 		ID:   popupID,
 		Type: popupType,
@@ -1473,6 +1677,11 @@ func (w *Workspace) AddNodePopup(id uint64, popupType, text string, deduplicate 
 func (w *Workspace) RemoveNodePopups(id uint64) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.RemoveNodePopupsLocked(id)
+}
+
+// RemoveNodePopupsLocked is RemoveNodePopups for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodePopupsLocked(id uint64) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1493,6 +1702,11 @@ func (w *Workspace) RemoveNodePopups(id uint64) error {
 func (w *Workspace) RemoveNodePopup(id, popupID uint64) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.RemoveNodePopupLocked(id, popupID)
+}
+
+// RemoveNodePopupLocked is RemoveNodePopup for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodePopupLocked(id, popupID uint64) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1515,6 +1729,11 @@ func (w *Workspace) RemoveNodePopup(id, popupID uint64) error {
 func (w *Workspace) RemoveNodePopupsByText(id uint64, text string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.RemoveNodePopupsByTextLocked(id, text)
+}
+
+// RemoveNodePopupsByTextLocked is RemoveNodePopupsByText for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodePopupsByTextLocked(id uint64, text string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1537,6 +1756,11 @@ func (w *Workspace) RemoveNodePopupsByText(id uint64, text string) error {
 func (w *Workspace) RemoveNodePopupsByType(id uint64, popupType string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.RemoveNodePopupsByTypeLocked(id, popupType)
+}
+
+// RemoveNodePopupsByTypeLocked is RemoveNodePopupsByType for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodePopupsByTypeLocked(id uint64, popupType string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1562,6 +1786,11 @@ func (w *Workspace) RemoveNodePopupsByType(id uint64, popupType string) error {
 func (w *Workspace) SetNodeRoot(id uint64, root bool) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodeRootLocked(id, root)
+}
+
+// SetNodeRootLocked is SetNodeRoot for callers that already hold the workspace lock.
+func (w *Workspace) SetNodeRootLocked(id uint64, root bool) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1589,6 +1818,11 @@ func (w *Workspace) SetNodeRoot(id uint64, root bool) error {
 func (w *Workspace) SetNodePortOrder(id uint64, direction string, ports []uint64) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodePortOrderLocked(id, direction, ports)
+}
+
+// SetNodePortOrderLocked is SetNodePortOrder for callers that already hold the workspace lock.
+func (w *Workspace) SetNodePortOrderLocked(id uint64, direction string, ports []uint64) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1617,6 +1851,11 @@ func (w *Workspace) SetNodePortOrder(id uint64, direction string, ports []uint64
 func (w *Workspace) SetNodePortsOrder(id uint64, leftPorts, rightPorts []uint64) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetNodePortsOrderLocked(id, leftPorts, rightPorts)
+}
+
+// SetNodePortsOrderLocked is SetNodePortsOrder for callers that already hold the workspace lock.
+func (w *Workspace) SetNodePortsOrderLocked(id uint64, leftPorts, rightPorts []uint64) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1644,6 +1883,11 @@ func (w *Workspace) SetNodePortsOrder(id uint64, leftPorts, rightPorts []uint64)
 func (w *Workspace) SetPortName(id uint64, name string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetPortNameLocked(id, name)
+}
+
+// SetPortNameLocked is SetPortName for callers that already hold the workspace lock.
+func (w *Workspace) SetPortNameLocked(id uint64, name string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1674,6 +1918,11 @@ func (w *Workspace) SetPortName(id uint64, name string) error {
 func (w *Workspace) SetPortTypes(id uint64, types []string) error {
 	w.Lock()
 	defer w.Unlock()
+	return w.SetPortTypesLocked(id, types)
+}
+
+// SetPortTypesLocked is SetPortTypes for callers that already hold the workspace lock.
+func (w *Workspace) SetPortTypesLocked(id uint64, types []string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -1983,7 +2232,7 @@ func (w *Workspace) removeUniqueNodeClassDuplicatesLocked(class string) {
 	keep := slices.Min(nodes)
 	for _, id := range nodes {
 		if id != keep {
-			w.RemoveNode(id)
+			w.RemoveNodeLocked(id)
 		}
 	}
 }
@@ -2058,7 +2307,7 @@ func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeCla
 
 	for i := range leftPorts {
 		if leftPorts[i].ID == 0 {
-			leftPorts[i].ID = w.NextID()
+			leftPorts[i].ID = w.NextIDLocked()
 			leftPorts[i].Node = record.ID
 			leftPorts[i].Links = []uint64{}
 			w.ports.Set(leftPorts[i].ID, &leftPorts[i])
@@ -2069,7 +2318,7 @@ func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeCla
 	}
 	for i := range rightPorts {
 		if rightPorts[i].ID == 0 {
-			rightPorts[i].ID = w.NextID()
+			rightPorts[i].ID = w.NextIDLocked()
 			rightPorts[i].Node = record.ID
 			rightPorts[i].Links = []uint64{}
 			w.ports.Set(rightPorts[i].ID, &rightPorts[i])
@@ -2135,7 +2384,7 @@ func (w *Workspace) removeOmittedPlaceholderClassPorts(record *nodeRecord, desir
 	for _, id := range slices.Clone(existing) {
 		if _, ok := kept[id]; !ok {
 			w.undoRecordingDisabled += 1
-			w.RemovePort(id)
+			w.RemovePortLocked(id)
 			w.undoRecordingDisabled -= 1
 		}
 	}
@@ -2173,7 +2422,7 @@ func (w *Workspace) removeIncompatiblePlaceholderPortLinks(port *Port) {
 		peer, present := w.ports.Get(peerID)
 		if !present || peer == nil {
 			w.undoRecordingDisabled += 1
-			w.RemoveLink(linkID)
+			w.RemoveLinkLocked(linkID)
 			w.undoRecordingDisabled -= 1
 			continue
 		}
@@ -2187,7 +2436,7 @@ func (w *Workspace) removeIncompatiblePlaceholderPortLinks(port *Port) {
 		}
 		if !portsSupportLinkType(port, peer, link.Type) {
 			w.undoRecordingDisabled += 1
-			w.RemoveLink(linkID)
+			w.RemoveLinkLocked(linkID)
 			w.undoRecordingDisabled -= 1
 		}
 	}
@@ -2497,24 +2746,39 @@ func firstError(errs map[uint64]error) error {
 	return nil
 }
 
-// postlock executes after top-level unlock (one with recursion == 0).
+// postlock executes pending operations and notifications after an unlock.
 func (w *Workspace) postlock() {
-	// It is only place where we should call mu.Lock/mu.Unlock directly instead
-	// of w.Lock/w.Unlock.
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	if w.postlocking {
+		w.mu.Unlock()
+		return
+	}
+	w.postlocking = true
+	w.mu.Unlock()
 
-	// Call pending operations
-	for len(w.pending) > 0 {
+	for {
+		w.mu.Lock()
 		ops := w.pending
 		w.pending = make([]func(), 0)
-		for _, op := range ops {
-			op()
-		}
-	}
+		deliveries := w.drainNotificationDeliveries()
+		w.mu.Unlock()
 
-	deliveries := w.drainNotificationDeliveries()
-	deliverNotifications(deliveries)
+		for _, op := range ops {
+			if op != nil {
+				op()
+			}
+		}
+		deliverNotifications(deliveries)
+
+		w.mu.Lock()
+		done := len(ops) == 0 && len(deliveries) == 0 && len(w.pending) == 0 && len(w.notifications) == 0
+		if done {
+			w.postlocking = false
+			w.mu.Unlock()
+			return
+		}
+		w.mu.Unlock()
+	}
 }
 
 func (w *Workspace) portsSharedType(portA, portB *Port) string {

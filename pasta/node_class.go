@@ -77,6 +77,13 @@ type NodeClassState struct {
 // Re-adding the same class name replaces the previous class and emits the same
 // class-added notification as adding a new class.
 func (w *Workspace) AddNodeClass(class NodeClass) error {
+	w.Lock()
+	defer w.Unlock()
+	return w.AddNodeClassLocked(class)
+}
+
+// AddNodeClassLocked is AddNodeClass for callers that already hold the workspace lock.
+func (w *Workspace) AddNodeClassLocked(class NodeClass) error {
 	if class == nil {
 		return ErrNoNodeClass
 	}
@@ -89,9 +96,7 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 		return err
 	}
 
-	w.Lock()
 	if w.closed {
-		w.Unlock()
 		return ErrWorkspaceClosed
 	}
 
@@ -107,7 +112,6 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 	if !wasPresent {
 		placeholders = w.nodeClassPlaceholderCandidatesLocked(name)
 	}
-	w.Unlock()
 
 	factory, ok := class.(NodeClassFactory)
 	if !ok || wasPresent {
@@ -115,14 +119,16 @@ func (w *Workspace) AddNodeClass(class NodeClass) error {
 	}
 	for _, placeholder := range placeholders {
 		state := placeholder.state
+		w.mu.Unlock()
 		node, err := factory.NewNode(nil, &state)
+		w.mu.Lock()
 		if err != nil {
 			return err
 		}
 		if node == nil {
 			continue
 		}
-		if err := w.replacePlaceholderWithClassState(placeholder.id, name, node, state); err != nil {
+		if err := w.replacePlaceholderWithClassStateLocked(placeholder.id, name, node, state); err != nil {
 			return err
 		}
 	}
@@ -140,6 +146,11 @@ func (w *Workspace) RemoveNodeClass(name string) error {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.RemoveNodeClassLocked(name)
+}
+
+// RemoveNodeClassLocked is RemoveNodeClass for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodeClassLocked(name string) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
@@ -160,6 +171,11 @@ func (w *Workspace) NodeClass(name string) (NodeClass, bool) {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.NodeClassLocked(name)
+}
+
+// NodeClassLocked is NodeClass for callers that already hold the workspace lock.
+func (w *Workspace) NodeClassLocked(name string) (NodeClass, bool) {
 	if w.closed {
 		return nil, false
 	}
@@ -176,6 +192,11 @@ func (w *Workspace) NodeClassLongDescription(name string) (string, bool) {
 
 	w.Lock()
 	defer w.Unlock()
+	return w.NodeClassLongDescriptionLocked(name)
+}
+
+// NodeClassLongDescriptionLocked is NodeClassLongDescription for callers that already hold the workspace lock.
+func (w *Workspace) NodeClassLongDescriptionLocked(name string) (string, bool) {
 	if w.closed {
 		return "", false
 	}
@@ -192,23 +213,26 @@ func (w *Workspace) NodeClassLongDescription(name string) (string, bool) {
 // applied before OnInit. If name is empty or omitted, a generic unique name is
 // generated.
 func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error) {
+	w.Lock()
+	defer w.Unlock()
+	return w.AddNodeByClassLocked(class, name...)
+}
+
+// AddNodeByClassLocked is AddNodeByClass for callers that already hold the workspace lock.
+func (w *Workspace) AddNodeByClassLocked(class string, name ...string) (uint64, error) {
 	if err := ValidateClassName(class); err != nil {
 		return 0, err
 	}
 	requestedName := optionalName(name)
 
-	w.Lock()
 	if w.closed {
-		w.Unlock()
 		return 0, ErrWorkspaceClosed
 	}
 	if requestedName != "" {
 		if err := ValidateNodeName(requestedName); err != nil {
-			w.Unlock()
 			return 0, err
 		}
 		if err := w.rejectNodeNameDuplicateLocked(requestedName, 0); err != nil {
-			w.Unlock()
 			return 0, err
 		}
 	}
@@ -217,12 +241,10 @@ func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error)
 		params := nodeClass.DefaultNodeParams()
 		if params.Unique {
 			if err := w.rejectUniqueNodeDuplicateLocked(class, 0); err != nil {
-				w.Unlock()
 				return 0, err
 			}
 		}
 	}
-	w.Unlock()
 	if !present || nodeClass == nil {
 		return 0, ErrNoNodeClass
 	}
@@ -231,7 +253,9 @@ func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error)
 	if !ok {
 		return 0, ErrNodeClassFactory
 	}
+	w.mu.Unlock()
 	node, err := factory.NewNode(nil)
+	w.mu.Lock()
 	if err != nil {
 		return 0, err
 	}
@@ -239,7 +263,7 @@ func (w *Workspace) AddNodeByClass(class string, name ...string) (uint64, error)
 		return 0, ErrNoNode
 	}
 	params := nodeClass.DefaultNodeParams()
-	return w.addNodeByClassWithParams(node, class, params, requestedName)
+	return w.addNodeByClassWithParamsLocked(node, class, params, requestedName)
 }
 
 func nodeClassSnapshot(class NodeClass) NodeClassSnapshot {

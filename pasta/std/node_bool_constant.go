@@ -44,7 +44,7 @@ func (n *mutableBoolConstantNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id 
 	if restored != nil && len(restored.RightPorts) > 0 {
 		n.out = restored.RightPorts[0]
 	}
-	if err := n.w.SetNodePrimary(n.id, TypeBool); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, TypeBool); err != nil {
 		return err
 	}
 	if err := n.updateLabel(); err != nil {
@@ -116,11 +116,11 @@ func (n *mutableBoolConstantNode) OnSave(cfg configer.Config) error {
 }
 
 func (n *mutableBoolConstantNode) updateLabel() error {
-	return n.w.SetNodeLabel(n.id, boolLabel(n.value))
+	return n.w.SetNodeLabelLocked(n.id, boolLabel(n.value))
 }
 
 func (n *mutableBoolConstantNode) sendAll() {
-	port, ok := n.w.PortSnapshot(n.out)
+	port, ok := n.w.PortSnapshotLocked(n.out)
 	if !ok {
 		return
 	}
@@ -130,12 +130,12 @@ func (n *mutableBoolConstantNode) sendAll() {
 }
 
 func (n *mutableBoolConstantNode) sendToLink(link uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, n.out)
-	n.w.SendEvent(pasta.Event{
+	n.w.SendEventLocked(pasta.Event{
 		SenderNode:   n.id,
 		SenderPort:   n.out,
 		ReceiverNode: receiverNode,
@@ -145,7 +145,7 @@ func (n *mutableBoolConstantNode) sendToLink(link uint64) {
 }
 
 func (n *mutableBoolConstantNode) sendToLinkByEvent(event pasta.Event) {
-	n.w.SendEvent(pasta.Event{
+	n.w.SendEventLocked(pasta.Event{
 		SenderNode:   n.id,
 		SenderPort:   n.out,
 		ReceiverNode: event.SenderNode,
@@ -155,7 +155,7 @@ func (n *mutableBoolConstantNode) sendToLinkByEvent(event pasta.Event) {
 }
 
 func (n *mutableBoolConstantNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageMenuSnapshot,
 			MenuID:         pasta.NodeMenuID(n.id),
@@ -166,7 +166,7 @@ func (n *mutableBoolConstantNode) sendMenuSnapshot() {
 }
 
 func (n *mutableBoolConstantNode) sendMenuBlock() {
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:            formular.MessageBlockSnapshot,
 			MenuID:          pasta.NodeMenuID(n.id),

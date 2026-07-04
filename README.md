@@ -83,6 +83,66 @@ panics are contained by stopping or replacing the affected implementation with a
 placeholder where possible, preserving graph structure instead of corrupting the
 workspace.
 
+## Workspace locking and callbacks
+`Workspace` uses a regular non-recursive mutex. Public methods such as
+`AddNode`, `Snapshot`, `SendEvent`, and `SetNodeLabel` acquire and release that
+mutex themselves, so they are the right API for external callers such as UI
+handlers, HTTP or RPC handlers, background goroutines, and tests.
+
+Node callbacks run while the workspace mutex is already held. Code running from a
+`Node` callback must use the matching `Locked` method, such as
+`AddNodeLocked`, `SnapshotLocked`, `SendEventLocked`, or `SetNodeLabelLocked`.
+This also applies to shared helper functions when they are called by a callback.
+
+```go
+// External code.
+if err := workspace.SetNodeLabel(nodeID, "ready"); err != nil {
+	return err
+}
+
+// Code already running under the workspace lock, such as a Node callback.
+if err := workspace.SetNodeLabelLocked(nodeID, "ready"); err != nil {
+	return err
+}
+```
+
+The same rule applies after manually calling `workspace.Lock()`: use `Locked`
+methods until the matching `workspace.Unlock()`. `Unlock` drains pending
+operations and notifications after each outer call, so scheduled events,
+inbox messages, and notification callbacks are still delivered after the locked
+mutation completes.
+
+### Migrating from recursive-lock versions
+Older Pasta versions used a recursive workspace lock, so callback code could call
+the normal public methods without blocking. New versions reject that pattern:
+calling a public workspace method from a node callback attempts to lock the
+already-held mutex and can deadlock.
+
+When migrating existing node implementations:
+
+- Keep public workspace methods in external code paths.
+- Replace workspace calls inside `Node` callbacks with their `Locked`
+  counterparts, for example `NextID` -> `NextIDLocked`, `Snapshot` ->
+  `SnapshotLocked`, `NodeSnapshot` -> `NodeSnapshotLocked`, `AddPort` ->
+  `AddPortLocked`, `RemovePort` -> `RemovePortLocked`, `AddLink` ->
+  `AddLinkLocked`, `RemoveLink` -> `RemoveLinkLocked`, `SetPortTypes` ->
+  `SetPortTypesLocked`, and `SetNodePortOrder` -> `SetNodePortOrderLocked`.
+- Replace callback-side runtime messaging with locked methods:
+  `SendEvent` -> `SendEventLocked`, `EmitEvent` -> `EmitEventLocked`,
+  `SendInbox` -> `SendInboxLocked`, `SendNodeMenuMsg` ->
+  `SendNodeMenuMsgLocked`, and `SendNodeFormularMsg` ->
+  `SendNodeFormularMsgLocked`.
+- Replace callback-side resource and subscription calls with locked methods:
+  `AddNodeResource` -> `AddNodeResourceLocked`, `AddLinkResource` ->
+  `AddLinkResourceLocked`, `SubscribeNotifications` ->
+  `SubscribeNotificationsLocked`, and `SubscribeNodeMenu` ->
+  `SubscribeNodeMenuLocked`.
+- In `pasta/std`, use `std.RequestLocked` from callback code and keep
+  `std.Request` for external code.
+- Split helper functions that are used from both callback and external paths, or
+  make the helper accept a function parameter so each caller can choose the
+  correct public or locked workspace operation.
+
 ## Persistence and snapshots
 `Snapshot()` returns JSON-serializable class, node, port, and link maps keyed by
 IDs. It is intended for frontends, observers, and synchronization layers.

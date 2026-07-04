@@ -1,5 +1,3 @@
-github.com/asciimoth/badlock v0.1.1 h1:XO7bHuC/U+o8FAaQzSD92hnuPzaAKW/HYTEmQGGb6Zo=
-github.com/asciimoth/badlock v0.1.1/go.mod h1:cLiOGSU1lNHVYytvc5Uy87gmeeP6b+aDbvm6M4YGnV0=
 github.com/asciimoth/configer/configer v0.3.1 h1:7Yre5IQ9qihv2LhJNmnlv2ViKAGNVEN6SmwrPJKuiG8=
 github.com/asciimoth/configer/configer v0.3.1/go.mod h1:SL8ymjshD5/tNKeLp5UBp+/2dEoB9D1fgjdfSrdQQek=
 github.com/asciimoth/configer/hujson v0.3.1 h1:+aXIekLOqm6uPjS8cwI6h/jz9inZXObksmRvoJMloow=

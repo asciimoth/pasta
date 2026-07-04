@@ -46,14 +46,14 @@ func (n *testNetworkConsumerNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id 
 	if restored != nil && len(restored.RightPorts) > 0 {
 		n.netp = restored.RightPorts[0]
 	}
-	return n.w.SetNodePrimary(n.id, typeNetwork)
+	return n.w.SetNodePrimaryLocked(n.id, typeNetwork)
 }
 
 func (n *testNetworkConsumerNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
 	if port != n.netp || portDirection != "right" || linkType != typeNetwork {
 		return pasta.LinkTypeErr(linkType)
 	}
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	if ok && len(snapshot.Links) > 0 {
 		return pasta.ErrLinkDup
 	}
@@ -89,7 +89,7 @@ func (n *testNetworkConsumerNode) OnEvent(event pasta.Event, linkType string, _ 
 }
 
 func (n *testNetworkConsumerNode) requestLink(link uint64) {
-	std.Request(n.w, n.id, link)
+	std.RequestLocked(n.w, n.id, link)
 }
 
 func TestSelectSwitchClosesInactiveNetworkAndRefreshesActiveNetwork(t *testing.T) {
@@ -126,6 +126,43 @@ func TestSelectSwitchClosesInactiveNetworkAndRefreshesActiveNetwork(t *testing.T
 	if first1 == first0 {
 		t.Fatal("consumer1 received the same network instance that consumer0 had before switch")
 	}
+}
+
+func TestDemoBackendNetworkCallbacksDoNotDeadlock(t *testing.T) {
+	w, consumerClass := newNetworkSelectWorkspace(t)
+	defer w.Close()
+
+	loopback := addDemoByClass(t, w, nodeTypeLoopback, "loopback")
+	selectNode := addDemoByClass(t, w, std.NodeTypeSelect, "select")
+	falseNode := addDemoByClass(t, w, std.NodeTypeFalseConstant, "false")
+	trueNode := addDemoByClass(t, w, std.NodeTypeTrueConstant, "true")
+	consumer0 := addDemoByClass(t, w, consumerClass.ClassName(), "consumer0")
+	consumer1 := addDemoByClass(t, w, consumerClass.ClassName(), "consumer1")
+
+	linkByDemoPortName(t, w, selectNode, "Out", loopback, "Network")
+	falseLink := linkByDemoPortName(t, w, falseNode, "output", selectNode, "Selector")
+	linkByDemoPortName(t, w, consumer0, "Network", selectNode, "In 0")
+	linkByDemoPortName(t, w, consumer1, "Network", selectNode, "In 1")
+	w.RemoveLink(falseLink)
+
+	snapshot := w.Snapshot()
+	from := demoPortByName(t, snapshot, trueNode, "right", "output")
+	to := demoPortByName(t, snapshot, selectNode, "left", "Selector")
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := w.AddLink(from, to)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AddLink true selector: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("network selector AddLink deadlocked while demo callbacks re-entered workspace")
+	}
+	requireConsumerNetwork(t, consumerClass.nodes[1], "consumer1 after timed switch")
 }
 
 func TestSelectNetworkLifecycleAfterConsumerAndProviderReattach(t *testing.T) {

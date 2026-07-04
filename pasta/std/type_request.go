@@ -35,3 +35,7 @@ func IsRequest(payload any) bool {
 func Request(w *pasta.Workspace, sender, link uint64) {
 	w.EmitEvent(sender, link, RequestValue{})
 }
+
+func RequestLocked(w *pasta.Workspace, sender, link uint64) {
+	w.EmitEventLocked(sender, link, RequestValue{})
+}

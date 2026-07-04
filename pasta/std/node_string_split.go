@@ -57,7 +57,7 @@ func (n *stringSplitNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, 
 	n.id = id
 	if restored != nil {
 		for _, port := range restored.RightPorts {
-			snapshot, ok := w.PortSnapshot(port)
+			snapshot, ok := w.PortSnapshotLocked(port)
 			if !ok {
 				continue
 			}
@@ -69,7 +69,7 @@ func (n *stringSplitNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, 
 			}
 		}
 		for _, port := range restored.LeftPorts {
-			snapshot, ok := w.PortSnapshot(port)
+			snapshot, ok := w.PortSnapshotLocked(port)
 			if !ok {
 				continue
 			}
@@ -81,7 +81,7 @@ func (n *stringSplitNode) OnInit(w *pasta.Workspace, _ pasta.Logger, id uint64, 
 			}
 		}
 	}
-	if err := n.w.SetNodePrimary(n.id, TypeString); err != nil {
+	if err := n.w.SetNodePrimaryLocked(n.id, TypeString); err != nil {
 		return err
 	}
 	n.recalculate(false)
@@ -103,7 +103,7 @@ func (n *stringSplitNode) PreLinkAdd(port uint64, linkType, portDirection string
 		return pasta.LinkTypeErr(linkType)
 	}
 	if portDirection == "left" {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) > 0 {
 			return pasta.ErrLinkDup
 		}
@@ -138,7 +138,7 @@ func (n *stringSplitNode) OnEvent(event pasta.Event, linkType string, _ []string
 	}
 	if receiverPortDirection == "right" {
 		if isValueRequest(event.Payload) {
-			n.w.SendEvent(pasta.Event{
+			n.w.SendEventLocked(pasta.Event{
 				SenderNode:   n.id,
 				SenderPort:   event.ReceiverPort,
 				ReceiverNode: event.SenderNode,
@@ -200,7 +200,7 @@ func (n *stringSplitNode) valueForPort(port uint64) string {
 
 func (n *stringSplitNode) requestAll() {
 	for _, port := range []uint64{n.textPort, n.separatorPort} {
-		snapshot, ok := n.w.PortSnapshot(port)
+		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if !ok {
 			continue
 		}
@@ -211,12 +211,12 @@ func (n *stringSplitNode) requestAll() {
 }
 
 func (n *stringSplitNode) requestLink(link, port uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: RequestValue{}})
 }
 
 func (n *stringSplitNode) sendAll() {
@@ -225,7 +225,7 @@ func (n *stringSplitNode) sendAll() {
 }
 
 func (n *stringSplitNode) sendPort(port uint64) {
-	snapshot, ok := n.w.PortSnapshot(port)
+	snapshot, ok := n.w.PortSnapshotLocked(port)
 	if !ok {
 		return
 	}
@@ -235,20 +235,20 @@ func (n *stringSplitNode) sendPort(port uint64) {
 }
 
 func (n *stringSplitNode) sendToLink(link, port uint64) {
-	snapshot, ok := n.w.LinkSnapshot(link)
+	snapshot, ok := n.w.LinkSnapshotLocked(link)
 	if !ok {
 		return
 	}
 	receiverNode, receiverPort := otherEndpoint(snapshot, port)
-	n.w.SendEvent(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: String(n.valueForPort(port))})
+	n.w.SendEventLocked(pasta.Event{SenderNode: n.id, SenderPort: port, ReceiverNode: receiverNode, ReceiverPort: receiverPort, Payload: String(n.valueForPort(port))})
 }
 
 func (n *stringSplitNode) updateLabel() error {
-	return n.w.SetNodeLabel(n.id, n.before+" | "+n.after)
+	return n.w.SetNodeLabelLocked(n.id, n.before+" | "+n.after)
 }
 
 func (n *stringSplitNode) sendMenuSnapshot() {
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
@@ -258,7 +258,7 @@ func (n *stringSplitNode) sendMenuBlock() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.BlockSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
 		Block:       n.menuBlock(),
 	})

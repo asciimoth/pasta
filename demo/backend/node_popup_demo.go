@@ -42,8 +42,8 @@ func (n *popupDemoNode) OnInit(
 ) error {
 	n.w = w
 	n.id = id
-	_ = n.w.SetNodeLabel(n.id, "popups")
-	if _, err := n.w.AddNodePopup(n.id, pasta.NodePopupInfo, "Popup demo node is ready.", true); err != nil {
+	_ = n.w.SetNodeLabelLocked(n.id, "popups")
+	if _, err := n.w.AddNodePopupLocked(n.id, pasta.NodePopupInfo, "Popup demo node is ready.", true); err != nil {
 		return err
 	}
 	n.sendMenu()
@@ -67,7 +67,7 @@ func (n *popupDemoNode) OnFormularMsg(message any) error {
 		return nil
 	}
 	n.count++
-	_, err := n.w.AddNodePopup(n.id, popupType, fmt.Sprintf("%s popup %d from the demo node menu", popupType, n.count), false)
+	_, err := n.w.AddNodePopupLocked(n.id, popupType, fmt.Sprintf("%s popup %d from the demo node menu", popupType, n.count), false)
 	return err
 }
 
@@ -75,7 +75,7 @@ func (n *popupDemoNode) sendMenu() {
 	if n.w == nil || n.id == 0 {
 		return
 	}
-	n.w.SendNodeMenuMsg(n.id, formular.MenuSnapshotMessage{
+	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageMenuSnapshot,
 			MenuID:         pasta.NodeMenuID(n.id),

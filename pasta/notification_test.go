@@ -2,6 +2,7 @@ package pasta_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/asciimoth/pasta/pasta"
 )
@@ -189,6 +190,47 @@ func TestWorkspaceNotificationSubscriptionObservesSnapshotsAndMutations(t *testi
 	}
 }
 
+func TestWorkspaceNotificationCallbackCanReenterWorkspace(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+
+	reentered := make(chan bool, 1)
+	var subscriptionID uint64
+	subscriptionID = w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		if notification.Kind != pasta.NotificationNodeAdded {
+			return
+		}
+		_ = w.Snapshot()
+		reentered <- w.RequestFullSnapshot(subscriptionID)
+	})
+	if subscriptionID == 0 {
+		t.Fatal("SubscribeNotifications returned 0")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.AddNode(&workspaceNode{}, "example.com/ReentrantNotification")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AddNode deadlocked while notification callback re-entered workspace")
+	}
+
+	select {
+	case ok := <-reentered:
+		if !ok {
+			t.Fatal("RequestFullSnapshot from notification callback returned false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notification callback did not re-enter workspace")
+	}
+}
+
 func TestWorkspaceNotificationMultipleSubscriptions(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 
@@ -266,10 +308,10 @@ func TestWorkspaceNotificationSubscriberCanRequestFullSnapshot(t *testing.T) {
 	second = nil
 
 	w.Lock()
-	if !w.RequestFullSnapshot(firstID) {
+	if !w.RequestFullSnapshotLocked(firstID) {
 		t.Fatalf("RequestFullSnapshot(%d) returned false", firstID)
 	}
-	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	nodeID, err := w.AddNodeLocked(&workspaceNode{}, "example.com/NodeA")
 	if err != nil {
 		t.Fatalf("AddNode while snapshot request pending: %v", err)
 	}
