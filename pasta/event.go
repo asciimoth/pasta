@@ -38,6 +38,26 @@ func (w *Workspace) SendEventLocked(event Event) {
 	})
 }
 
+// SendLowPriorityEvent schedules delivery of event after all regular pending
+// operations, regular events, and notification deliveries are complete.
+//
+// The event is validated immediately before delivery, not when it is queued.
+// If a low-priority event queues new regular work while it is being delivered,
+// that regular work runs before the next low-priority event.
+func (w *Workspace) SendLowPriorityEvent(event Event) {
+	w.Lock()
+	defer w.Unlock()
+	w.SendLowPriorityEventLocked(event)
+}
+
+// SendLowPriorityEventLocked is SendLowPriorityEvent for callers that already
+// hold the workspace lock.
+func (w *Workspace) SendLowPriorityEventLocked(event Event) {
+	w.addLowPriorityPendingOpLocked(func() {
+		w.deliverEvent(event)
+	})
+}
+
 // EmitEvent builds event from sender id, link id and payload and sends it.
 // sender can be ether sender node or sender port
 func (w *Workspace) EmitEvent(sender, link uint64, payload any) {
@@ -48,6 +68,36 @@ func (w *Workspace) EmitEvent(sender, link uint64, payload any) {
 
 // EmitEventLocked is EmitEvent for callers that already hold the workspace lock.
 func (w *Workspace) EmitEventLocked(sender, link uint64, payload any) {
+	event, ok := w.eventFromLinkLocked(sender, link, payload)
+	if !ok {
+		return
+	}
+
+	w.SendEventLocked(event)
+}
+
+// EmitLowPriorityEvent builds an event from sender id, link id, and payload,
+// then schedules it behind all regular pending work.
+//
+// sender can be either the sender node ID or sender port ID.
+func (w *Workspace) EmitLowPriorityEvent(sender, link uint64, payload any) {
+	w.Lock()
+	defer w.Unlock()
+	w.EmitLowPriorityEventLocked(sender, link, payload)
+}
+
+// EmitLowPriorityEventLocked is EmitLowPriorityEvent for callers that already
+// hold the workspace lock.
+func (w *Workspace) EmitLowPriorityEventLocked(sender, link uint64, payload any) {
+	event, ok := w.eventFromLinkLocked(sender, link, payload)
+	if !ok {
+		return
+	}
+
+	w.SendLowPriorityEventLocked(event)
+}
+
+func (w *Workspace) eventFromLinkLocked(sender, link uint64, payload any) (Event, bool) {
 	event := Event{
 		SenderNode: sender,
 		Link:       link,
@@ -56,7 +106,7 @@ func (w *Workspace) EmitEventLocked(sender, link uint64, payload any) {
 
 	ls, ok := w.LinkSnapshotLocked(link)
 	if !ok {
-		return
+		return Event{}, false
 	}
 
 	if ls.LeftPortNode == sender {
@@ -71,19 +121,21 @@ func (w *Workspace) EmitEventLocked(sender, link uint64, payload any) {
 		event.ReceiverNode = ls.LeftPortNode
 	} else if ls.LeftPort == sender {
 		event.SenderNode = ls.LeftPortNode
+		event.SenderPort = ls.LeftPort
 
 		event.ReceiverPort = ls.RightPort
 		event.ReceiverNode = ls.RightPortNode
 	} else if ls.RightPort == sender {
 		event.SenderNode = ls.RightPortNode
+		event.SenderPort = ls.RightPort
 
 		event.ReceiverPort = ls.LeftPort
 		event.ReceiverNode = ls.LeftPortNode
 	} else {
-		return
+		return Event{}, false
 	}
 
-	w.SendEventLocked(event)
+	return event, true
 }
 
 func (w *Workspace) deliverEvent(event Event) {

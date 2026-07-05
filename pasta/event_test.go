@@ -364,6 +364,90 @@ type calcGraph struct {
 	links map[string]uint64
 }
 
+type priorityEventNode struct {
+	pasta.BasicNode
+
+	w     *pasta.Workspace
+	id    uint64
+	order *[]string
+}
+
+func (n *priorityEventNode) OnInit(w *pasta.Workspace, l pasta.Logger, id uint64, class string, restored *pasta.NodeInitData, isReplacement bool, isPlaceholderReplacement bool, isClassConstructed bool, isRestored bool) error {
+	n.w = w
+	n.id = id
+	return nil
+}
+
+func (n *priorityEventNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
+	return nil
+}
+
+func (n *priorityEventNode) OnEvent(event pasta.Event, linkType string, receiverPortTypes []string, receiverPortDirection string) error {
+	payload := fmt.Sprint(event.Payload)
+	*n.order = append(*n.order, payload)
+	if payload == "low1" {
+		n.w.SendEventLocked(pasta.Event{
+			SenderNode:   event.ReceiverNode,
+			SenderPort:   event.ReceiverPort,
+			ReceiverNode: event.SenderNode,
+			ReceiverPort: event.SenderPort,
+			Payload:      "regular-from-low1",
+		})
+	}
+	if payload == "low-notify" {
+		if err := n.w.SetNodeLabelLocked(n.id, "changed during low priority"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type lowPriorityEventGraph struct {
+	w           *pasta.Workspace
+	leftNodeID  uint64
+	rightNodeID uint64
+	leftPortID  uint64
+	rightPortID uint64
+	linkID      uint64
+	eventOrder  *[]string
+}
+
+func newLowPriorityEventGraph(t *testing.T) lowPriorityEventGraph {
+	t.Helper()
+
+	order := make([]string, 0)
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		order = append(order, "notification:"+string(notification.Kind))
+	})
+
+	leftNodeID, err := w.AddNode(&priorityEventNode{order: &order}, "example.com/LowPriorityLeft")
+	if err != nil {
+		t.Fatalf("AddNode left: %v", err)
+	}
+	rightNodeID, err := w.AddNode(&priorityEventNode{order: &order}, "example.com/LowPriorityRight")
+	if err != nil {
+		t.Fatalf("AddNode right: %v", err)
+	}
+	leftPortID := mustAddPort(t, w, leftNodeID, "left", calcType)
+	rightPortID := mustAddPort(t, w, rightNodeID, "right", calcType)
+	linkID, _, err := w.AddLink(leftPortID, rightPortID)
+	if err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+
+	order = order[:0]
+	return lowPriorityEventGraph{
+		w:           w,
+		leftNodeID:  leftNodeID,
+		rightNodeID: rightNodeID,
+		leftPortID:  leftPortID,
+		rightPortID: rightPortID,
+		linkID:      linkID,
+		eventOrder:  &order,
+	}
+}
+
 func TestWorkspaceEventsCalculatorTopology(t *testing.T) {
 	/*
 		Data flow, using events sent right -> left:
@@ -498,6 +582,70 @@ func TestWorkspaceDeliversEventsBothDirections(t *testing.T) {
 	}
 	if !strings.Contains(got, "receiver_direction=left payload=9") {
 		t.Fatalf("right->left event was not delivered with left receiver metadata:\n%s", got)
+	}
+}
+
+func TestWorkspaceLowPriorityEventsRunAfterRegularEventsAndNotifications(t *testing.T) {
+	graph := newLowPriorityEventGraph(t)
+
+	event := func(payload string) pasta.Event {
+		return pasta.Event{
+			SenderNode:   graph.leftNodeID,
+			SenderPort:   graph.leftPortID,
+			ReceiverNode: graph.rightNodeID,
+			ReceiverPort: graph.rightPortID,
+			Payload:      payload,
+		}
+	}
+
+	graph.w.Lock()
+	graph.w.SendLowPriorityEventLocked(event("low1"))
+	graph.w.SendEventLocked(event("regular1"))
+	if err := graph.w.SetNodeLabelLocked(graph.rightNodeID, "changed"); err != nil {
+		t.Fatalf("SetNodeLabelLocked: %v", err)
+	}
+	graph.w.SendLowPriorityEventLocked(event("low2"))
+	graph.w.Unlock()
+
+	want := []string{"regular1", "notification:node_updated", "low1", "regular-from-low1", "low2"}
+	if !reflect.DeepEqual(*graph.eventOrder, want) {
+		t.Fatalf("event order = %#v, want %#v", *graph.eventOrder, want)
+	}
+}
+
+func TestWorkspaceLowPriorityEventsDrainNewNotificationsBeforeReturning(t *testing.T) {
+	graph := newLowPriorityEventGraph(t)
+
+	event := func(payload string) pasta.Event {
+		return pasta.Event{
+			SenderNode:   graph.leftNodeID,
+			SenderPort:   graph.leftPortID,
+			ReceiverNode: graph.rightNodeID,
+			ReceiverPort: graph.rightPortID,
+			Payload:      payload,
+		}
+	}
+
+	graph.w.Lock()
+	graph.w.SendLowPriorityEventLocked(event("low-notify"))
+	graph.w.SendLowPriorityEventLocked(event("low-after-notification"))
+	graph.w.Unlock()
+
+	want := []string{"low-notify", "notification:node_updated", "low-after-notification"}
+	if !reflect.DeepEqual(*graph.eventOrder, want) {
+		t.Fatalf("event order = %#v, want %#v", *graph.eventOrder, want)
+	}
+}
+
+func TestWorkspaceEmitLowPriorityEventBuildsEventFromNodeOrPortSender(t *testing.T) {
+	graph := newLowPriorityEventGraph(t)
+
+	graph.w.EmitLowPriorityEvent(graph.leftNodeID, graph.linkID, "by-node")
+	graph.w.EmitLowPriorityEvent(graph.leftPortID, graph.linkID, "by-port")
+
+	want := []string{"by-node", "by-port"}
+	if !reflect.DeepEqual(*graph.eventOrder, want) {
+		t.Fatalf("event order = %#v, want %#v", *graph.eventOrder, want)
 	}
 }
 

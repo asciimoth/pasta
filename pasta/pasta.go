@@ -67,6 +67,9 @@ type Workspace struct {
 	closed  bool
 
 	pending []func()
+	// pendingLowPrior holds callbacks that may run only after regular pending
+	// operations and notification deliveries are fully drained.
+	pendingLowPrior []func()
 	// postlocking is true while pending operations and notifications are being
 	// drained after an unlock. Nested unlocks leave draining to the outer loop
 	// so pending operations keep FIFO batch order.
@@ -101,12 +104,13 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		nextid:  1,
 		isReady: true,
 
-		pending:  make([]func(), 0),
-		nodes:    orderedmap.New[uint64, *nodeRecord](),
-		ports:    orderedmap.New[uint64, *Port](),
-		links:    orderedmap.New[uint64, *Link](),
-		classes:  orderedmap.New[string, NodeClass](),
-		nameRand: rand.New(rand.NewSource(1)),
+		pending:         make([]func(), 0),
+		pendingLowPrior: make([]func(), 0),
+		nodes:           orderedmap.New[uint64, *nodeRecord](),
+		ports:           orderedmap.New[uint64, *Port](),
+		links:           orderedmap.New[uint64, *Link](),
+		classes:         orderedmap.New[string, NodeClass](),
+		nameRand:        rand.New(rand.NewSource(1)),
 
 		resources:     make(map[resourceKey]*resourceState),
 		nodeResources: make(map[uint64]map[resourceKey]struct{}),
@@ -248,6 +252,22 @@ func (w *Workspace) AddPendingOpLocked(op func()) {
 	w.pending = append(w.pending, op)
 }
 
+// addLowPriorityPendingOpLocked queues op behind all regular pending work.
+//
+// Low-priority operations run only after regular pending operations and
+// notification deliveries are fully drained. They are still delivered after
+// Unlock, outside the workspace mutex, and each low-priority operation gives
+// newly queued regular work a chance to run before the next low-priority item.
+func (w *Workspace) addLowPriorityPendingOpLocked(op func()) {
+	if w.closed {
+		return
+	}
+	if w.pendingLowPrior == nil {
+		w.pendingLowPrior = make([]func(), 0, 1)
+	}
+	w.pendingLowPrior = append(w.pendingLowPrior, op)
+}
+
 // Close stops all nodes, waits for node workers to return, notifies
 // subscribers, drains pending operations, and prevents future workspace
 // operations from mutating state.
@@ -269,9 +289,13 @@ func (w *Workspace) CloseLocked() {
 	}
 	w.closeAllResourcesLocked()
 
-	for len(w.pending) > 0 {
+	for len(w.pending) > 0 || len(w.pendingLowPrior) > 0 {
 		ops := w.pending
 		w.pending = make([]func(), 0)
+		if len(ops) == 0 {
+			ops = w.pendingLowPrior
+			w.pendingLowPrior = make([]func(), 0)
+		}
 		w.mu.Unlock()
 		for _, op := range ops {
 			if op != nil {
@@ -2757,27 +2781,72 @@ func (w *Workspace) postlock() {
 	w.mu.Unlock()
 
 	for {
-		w.mu.Lock()
-		ops := w.pending
-		w.pending = make([]func(), 0)
-		deliveries := w.drainNotificationDeliveries()
-		w.mu.Unlock()
+		w.drainRegularPendingAndNotifications()
 
-		for _, op := range ops {
+		if op, ok := w.popLowPriorityPendingOp(); ok {
 			if op != nil {
 				op()
 			}
+			continue
 		}
-		deliverNotifications(deliveries)
 
 		w.mu.Lock()
-		done := len(ops) == 0 && len(deliveries) == 0 && len(w.pending) == 0 && len(w.notifications) == 0
+		done := len(w.pending) == 0 && len(w.notifications) == 0 && len(w.pendingLowPrior) == 0
 		if done {
 			w.postlocking = false
 			w.mu.Unlock()
 			return
 		}
 		w.mu.Unlock()
+	}
+}
+
+// drainRegularPendingAndNotifications drains regular pending operations and
+// notifications until no newly queued regular work remains. Low-priority work
+// is intentionally left queued for postlock to run one item at a time.
+func (w *Workspace) drainRegularPendingAndNotifications() {
+	for {
+		w.mu.Lock()
+		ops := w.pending
+		w.pending = make([]func(), 0)
+		deliveries := w.drainNotificationDeliveries()
+		w.mu.Unlock()
+
+		runPendingOps(ops)
+		deliverNotifications(deliveries)
+
+		w.mu.Lock()
+		done := len(w.pending) == 0 && len(w.notifications) == 0
+		w.mu.Unlock()
+		if done {
+			return
+		}
+	}
+}
+
+// popLowPriorityPendingOp returns one low-priority operation only when regular
+// pending operations and notifications are quiet. This preserves regular work
+// priority even when another goroutine queues work while postlock is running.
+func (w *Workspace) popLowPriorityPendingOp() (func(), bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.pending) > 0 || len(w.notifications) > 0 || len(w.pendingLowPrior) == 0 {
+		return nil, false
+	}
+
+	op := w.pendingLowPrior[0]
+	copy(w.pendingLowPrior, w.pendingLowPrior[1:])
+	w.pendingLowPrior[len(w.pendingLowPrior)-1] = nil
+	w.pendingLowPrior = w.pendingLowPrior[:len(w.pendingLowPrior)-1]
+	return op, true
+}
+
+func runPendingOps(ops []func()) {
+	for _, op := range ops {
+		if op != nil {
+			op()
+		}
 	}
 }
 
