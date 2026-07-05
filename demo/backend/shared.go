@@ -595,6 +595,18 @@ const initialConfig = `{
 			"Out -> [Client] URL",
 		],
 	},
+	"Manual Trigger": {
+		"Class": "pasta/Trigger",
+		"Pos":   "{\"x\":1380,\"y\":1220}",
+	},
+	"Trigger Gateway": {
+		"Class": "pasta/Gateway",
+		"Pos":   "{\"x\":1540,\"y\":1220}",
+	},
+	"Trigger Popup": {
+		"Class": "pasta/PopUp",
+		"Pos":   "{\"x\":1700,\"y\":1220}",
+	},
 	"Popup Demo": {
 		"Class": "demo.pasta/PopupDemo",
 		"Pos":   "{\"x\":1650,\"y\":1320}",

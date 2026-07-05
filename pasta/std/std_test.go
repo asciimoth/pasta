@@ -1057,7 +1057,8 @@ func allStdClasses() []pasta.NodeClass {
 		StringConcatClass{}, StringFormatClass{}, StringLengthClass{}, StringContainsClass{}, StringSplitClass{}, StringUpperClass{}, StringLowerClass{}, StringTrimSpaceClass{},
 		TrueConstantClass{}, FalseConstantClass{}, BoolAndClass{}, BoolNotClass{}, BoolOrClass{},
 		MoreClass{}, LessClass{}, EqualClass{}, NotEqualClass{},
-		SelectClass{},
+		TriggerClass{}, PopUpClass{}, GatewayClass{},
+		SelectClass{}, SelectOutClass{},
 	}
 }
 

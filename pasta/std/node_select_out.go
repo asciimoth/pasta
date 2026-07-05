@@ -109,7 +109,7 @@ func (n *selectOutNode) OnReady() error {
 }
 
 func (n *selectOutNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
-	if portDirection == "left" {
+	if portDirection == "left" && (port == n.selectorPort || linkType != TypeTrigger) {
 		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) > 0 {
 			return pasta.ErrLinkDup
@@ -136,6 +136,9 @@ func (n *selectOutNode) OnLinkAdd(link uint64, port uint64, linkType, _ string) 
 			return err
 		}
 	}
+	if port != n.selectorPort && (n.dataType == TypeTrigger || linkType == TypeTrigger) {
+		return nil
+	}
 	if port == n.selectorPort || port == n.in {
 		n.requestLink(link, port)
 	}
@@ -146,6 +149,9 @@ func (n *selectOutNode) OnLinkAdd(link uint64, port uint64, linkType, _ string) 
 }
 
 func (n *selectOutNode) OnLinkRemoved(_ uint64, port uint64, _ string, _ string) error {
+	if n.dataType == TypeTrigger {
+		return nil
+	}
 	if port == n.activeOutput() {
 		n.requestActivePath()
 	}
@@ -172,6 +178,12 @@ func (n *selectOutNode) OnEvent(event pasta.Event, linkType string, _ []string, 
 		if err := n.applyDataType(linkType); err != nil {
 			return err
 		}
+	}
+	if linkType == TypeTrigger {
+		if receiverPortDirection == "left" && event.ReceiverPort == n.in && !IsRequest(event.Payload) {
+			n.forwardToActiveOutput(event.Payload)
+		}
+		return nil
 	}
 	if receiverPortDirection == "left" {
 		if event.ReceiverPort == n.in {
@@ -215,6 +227,9 @@ func (n *selectOutNode) isDataPort(port uint64) bool {
 }
 
 func (n *selectOutNode) requestActivePath() {
+	if n.dataType == TypeTrigger {
+		return
+	}
 	n.requestPort(n.in)
 	n.requestPort(n.activeOutput())
 }

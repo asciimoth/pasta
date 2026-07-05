@@ -39,7 +39,7 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 47; got != want {
+	if got, want := len(snapshot.Nodes), 50; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
 	if got, want := len(snapshot.Links), 70; got != want {

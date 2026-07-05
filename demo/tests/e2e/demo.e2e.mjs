@@ -68,7 +68,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const bootValue = await boot.jsonValue();
 
   assert.equal(bootValue.status, "Go WASM backend running");
-  assert.equal(bootValue.nodes, 47);
+  assert.equal(bootValue.nodes, 50);
   assert.equal(bootValue.links, 70);
   assert.ok(bootValue.classes >= 20);
   assert.match(bootValue.sidekick, /Create node/);
@@ -76,7 +76,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const initialConfig = await page.locator("#config-text").inputValue();
   await setConfigText(page, "{");
   await page.click("#reload-config");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 47);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 50);
   await page.waitForTimeout(100);
 
   await setConfigText(page, `{
@@ -97,7 +97,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
 
   await setConfigText(page, initialConfig);
   await page.click("#reload-config");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 47);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 50);
   await page.mouse.click(20, 120);
   await page.waitForFunction(() => /Create node/.test(document.querySelector("#sidekick")?.textContent || ""));
 
@@ -311,7 +311,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   await page.keyboard.press("Escape");
 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Z" : "Control+Z");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 47);
+  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 50);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+Z" : "Control+Shift+Z");
   await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length >= 29);
 
