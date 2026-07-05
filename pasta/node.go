@@ -143,6 +143,14 @@ type Node interface {
 	// frontend-to-backend message to this node's menu.
 	OnFormularMsg(message any) error
 
+	// OnTrigger is called when external code explicitly triggers this node.
+	//
+	// Triggering is intended for demand-driven actions that are not naturally
+	// modeled as graph events, such as running a request, refreshing cached
+	// data, or performing the same action normally exposed as a node-menu
+	// button. The workspace lock is held while this callback runs.
+	OnTrigger() error
+
 	// OnSave is called when the workspace is explicitly saved to a Config.
 	//
 	// The Config is rooted at this node's object. Workspace-owned keys use
@@ -234,6 +242,10 @@ func (BasicNode) OnInbox(message InboxMessage) error {
 }
 
 func (BasicNode) OnFormularMsg(message any) error {
+	return nil
+}
+
+func (BasicNode) OnTrigger() error {
 	return nil
 }
 
@@ -469,6 +481,20 @@ func (n *nodeRecord) OnFormularMsg(message any) (err error) {
 		}
 	}()
 	err = n.Node.OnFormularMsg(copyFormularMessage(message))
+	return
+}
+
+func (n *nodeRecord) OnTrigger() (err error) {
+	if n.stopped || n.Node == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			n.stopped = true
+			err = ErrNodePanic
+		}
+	}()
+	err = n.Node.OnTrigger()
 	return
 }
 

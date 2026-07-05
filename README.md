@@ -186,6 +186,19 @@ Frontend-to-backend Formular messages should be sent with
 through `Node.OnFormularMsg`; missing nodes, placeholders, closed workspaces, and
 nil messages are dropped silently.
 
+## Triggering nodes
+Some nodes perform demand-driven actions: send an HTTP request, refresh an
+external resource, poll a device, or run the same action exposed as a node-menu
+button. For these cases, implement `Node.OnTrigger()` and call
+`Workspace.Trigger(nodeID)` from API, CLI, RPC, or test code.
+
+`Trigger` is synchronous and returns `ErrNoNode` for missing nodes or
+placeholders, `ErrWorkspaceClosed` after close, and any error returned by the
+node. If `OnTrigger` returns an error or panics, the workspace handles it like
+other node callback failures: the node is replaced with a placeholder carrying
+an error popup. Nodes that do not support a trigger can embed `BasicNode`, whose
+`OnTrigger` implementation is a no-op.
+
 ## Resources and undo/redo
 Resources registered with nodes or links are `io.Closer` values. They are closed
 when the owner is removed, replaced, failed into a placeholder, or when the

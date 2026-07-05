@@ -102,6 +102,14 @@ class, node, port, link, workspace-stop, and node-menu notifications.
 Formular node-menu messages are delivered only to subscribers that explicitly
 subscribe to that node menu.
 
+`Workspace.Trigger(nodeID)` calls `Node.OnTrigger()` synchronously for
+demand-driven node actions such as sending a request or refreshing external
+state. It is the API/CLI-friendly equivalent of pressing a node-menu action
+button when a node exposes such an action. Missing nodes and placeholders return
+`ErrNoNode`, closed workspaces return `ErrWorkspaceClosed`, and callback errors
+or panics replace the node with an error placeholder like other mutation and
+delivery callback failures.
+
 Resources registered with nodes or links are `io.Closer` values.
 They are closed when the owner is removed, replaced, failed into a placeholder,
 or when the workspace closes.

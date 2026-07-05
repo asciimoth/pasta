@@ -186,6 +186,10 @@ func (n *calcNode) OnFormularMsg(message any) error {
 	return nil
 }
 
+func (n *calcNode) OnTrigger() error {
+	return nil
+}
+
 func (n *calcNode) OnSave(cfg configer.Config) error {
 	if n.kind != "constant" {
 		return nil

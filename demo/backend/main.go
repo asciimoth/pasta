@@ -281,6 +281,14 @@ func (b *backend) handle(req callRequest) (any, error) {
 			return nil, err
 		}
 		return w.UnsubscribeNodeMenu(p.ID, b.subscriptionID), nil
+	case "trigger":
+		var p struct {
+			ID uint64 `json:"id"`
+		}
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return true, w.Trigger(p.ID)
 	case "formular":
 		var p struct {
 			ID      uint64          `json:"id"`

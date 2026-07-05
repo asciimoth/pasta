@@ -10,10 +10,11 @@
 //
 // Node implementations receive lifecycle callbacks for initialization,
 // readiness, root-path status, port and link changes, link events, direct inbox
-// messages, Formular messages, and saving. Mutation and delivery callback
-// failures are contained by replacing the implementation with a placeholder
-// record that preserves graph structure where possible. Placeholders are also
-// used when restoring or pasting nodes whose class factory is unavailable.
+// messages, Formular messages, explicit triggers, and saving. Mutation and
+// delivery callback failures are contained by replacing the implementation
+// with a placeholder record that preserves graph structure where possible.
+// Placeholders are also used when restoring or pasting nodes whose class
+// factory is unavailable.
 //
 // The package also includes class factories, snapshots and notifications for
 // frontends, Formular node-menu delivery, copy/paste payloads, Config

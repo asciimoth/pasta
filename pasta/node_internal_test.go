@@ -106,6 +106,11 @@ func (n *internalNode) OnFormularMsg(message any) error {
 	return nil
 }
 
+func (n *internalNode) OnTrigger() error {
+	n.call("trigger")
+	return nil
+}
+
 func (n *internalNode) OnSave(cfg configer.Config) error {
 	n.call("save")
 	return nil
@@ -147,6 +152,9 @@ func TestBasicNodeDefaults(t *testing.T) {
 	}
 	if err := node.OnFormularMsg(nil); err != nil {
 		t.Fatalf("OnFormularMsg error = %v, want nil", err)
+	}
+	if err := node.OnTrigger(); err != nil {
+		t.Fatalf("OnTrigger error = %v, want nil", err)
 	}
 	if err := node.OnSave(nil); err != nil {
 		t.Fatalf("OnSave error = %v, want nil", err)

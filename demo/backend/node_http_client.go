@@ -306,6 +306,11 @@ func (n *httpClientNode) onButtonPress(msg formular.ButtonPressMessage) error {
 	return nil
 }
 
+func (n *httpClientNode) OnTrigger() error {
+	n.sendRequest()
+	return nil
+}
+
 func (n *httpClientNode) OnSave(cfg configer.Config) error {
 	if err := pasta.DeleteNodeOwnedConfigKeys(cfg); err != nil {
 		return err

@@ -14,16 +14,17 @@ import (
 )
 
 type workspaceNode struct {
-	l           pasta.Logger
-	initPrimary string
-	initLabel   string
-	failOn      map[string]error
-	panicOn     map[string]bool
-	rootStatus  []bool
-	initData    *pasta.NodeInitData
-	initFlags   workspaceNodeInitFlags
-	readyCount  int
-	stopCount   int
+	l            pasta.Logger
+	initPrimary  string
+	initLabel    string
+	failOn       map[string]error
+	panicOn      map[string]bool
+	rootStatus   []bool
+	initData     *pasta.NodeInitData
+	initFlags    workspaceNodeInitFlags
+	readyCount   int
+	stopCount    int
+	triggerCount int
 }
 
 type workspaceNodeInitFlags struct {
@@ -113,6 +114,12 @@ func (n *workspaceNode) OnInbox(message pasta.InboxMessage) error {
 func (n *workspaceNode) OnFormularMsg(message any) error {
 	n.l.Debugf("formular payload=%v", message)
 	return n.maybeFail("OnFormularMsg")
+}
+
+func (n *workspaceNode) OnTrigger() error {
+	n.triggerCount += 1
+	n.l.Debug("trigger")
+	return n.maybeFail("OnTrigger")
 }
 
 func (n *workspaceNode) OnSave(cfg configer.Config) error {
@@ -2259,6 +2266,116 @@ func TestWorkspaceNodeCallbackFailuresBecomePlaceholders(t *testing.T) {
 		assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
 		if got := notifications[len(notifications)-1].Node.Popups; len(got) != 1 || got[0].Type != pasta.NodePopupErr {
 			t.Fatalf("failure notification popups = %#v, want one error popup", got)
+		}
+	})
+
+	t.Run("OnTrigger", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{failOn: map[string]error{"OnTrigger": failErr}}
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		addOldPopup(t, w, nodeID)
+
+		var notifications []pasta.WorkspaceNotification
+		w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+			notifications = append(notifications, notification)
+		})
+		notifications = nil
+
+		if err := w.Trigger(nodeID); !errors.Is(err, failErr) {
+			t.Fatalf("Trigger error = %v, want %v", err, failErr)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnTrigger", "boom")
+		assertHasNotification(t, notifications, pasta.NotificationNodeUpdated, nodeID)
+		if got := notifications[len(notifications)-1].Node.Popups; len(got) != 1 || got[0].Type != pasta.NodePopupErr {
+			t.Fatalf("failure notification popups = %#v, want one error popup", got)
+		}
+	})
+
+	t.Run("OnTrigger panic", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		node := &workspaceNode{panicOn: map[string]bool{"OnTrigger": true}}
+		nodeID, err := w.AddNode(node, "example.com/Node")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		addOldPopup(t, w, nodeID)
+
+		if err := w.Trigger(nodeID); !errors.Is(err, pasta.ErrNodePanic) {
+			t.Fatalf("Trigger error = %v, want %v", err, pasta.ErrNodePanic)
+		}
+		assertFailedPlaceholder(t, w, nodeID, "OnTrigger", "node panic")
+	})
+}
+
+func TestWorkspaceTrigger(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	node := &workspaceNode{}
+	nodeID, err := w.AddNode(node, "example.com/TriggerNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	if err := w.Trigger(nodeID); err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	if node.triggerCount != 1 {
+		t.Fatalf("trigger count = %d, want 1", node.triggerCount)
+	}
+
+	w.Lock()
+	if err := w.TriggerLocked(nodeID); err != nil {
+		w.Unlock()
+		t.Fatalf("TriggerLocked: %v", err)
+	}
+	w.Unlock()
+	if node.triggerCount != 2 {
+		t.Fatalf("trigger count after TriggerLocked = %d, want 2", node.triggerCount)
+	}
+}
+
+func TestWorkspaceTriggerBasicNodeNoop(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeID, err := w.AddNode(pasta.BasicNode{}, "example.com/BasicNode")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	if err := w.Trigger(nodeID); err != nil {
+		t.Fatalf("Trigger BasicNode: %v", err)
+	}
+}
+
+func TestWorkspaceTriggerRejectsUnavailableNode(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		if err := w.Trigger(999); !errors.Is(err, pasta.ErrNoNode) {
+			t.Fatalf("Trigger missing node error = %v, want %v", err, pasta.ErrNoNode)
+		}
+	})
+
+	t.Run("placeholder", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		nodeID, err := w.AddPlaceholderNode("example.com/Missing", nil)
+		if err != nil {
+			t.Fatalf("AddPlaceholderNode: %v", err)
+		}
+		if err := w.Trigger(nodeID); !errors.Is(err, pasta.ErrNoNode) {
+			t.Fatalf("Trigger placeholder error = %v, want %v", err, pasta.ErrNoNode)
+		}
+	})
+
+	t.Run("closed", func(t *testing.T) {
+		w := pasta.NewWorkspace(&StringLoggerFactory{})
+		nodeID, err := w.AddNode(&workspaceNode{}, "example.com/TriggerNode")
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		w.Close()
+		if err := w.Trigger(nodeID); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+			t.Fatalf("Trigger closed workspace error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 		}
 	})
 }
