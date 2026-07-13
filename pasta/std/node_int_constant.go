@@ -15,7 +15,7 @@ type IntConstantClass struct{}
 func (IntConstantClass) ClassName() string        { return NodeTypeIntConstant }
 func (IntConstantClass) ShortDescription() string { return "Integer constant" }
 func (IntConstantClass) LongDescription() string {
-	return "Outputs an editable int value on one pasta/int right-directed port. The label and menu field always show the current value."
+	return "Outputs an editable int value on one pasta/int right-directed port. The value changes when the menu form is applied."
 }
 func (IntConstantClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: TypeInt, InitialPorts: []pasta.Port{rightPort(TypeInt)}}

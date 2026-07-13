@@ -15,7 +15,7 @@ type FloatConstantClass struct{}
 func (FloatConstantClass) ClassName() string        { return NodeTypeFloatConstant }
 func (FloatConstantClass) ShortDescription() string { return "Floating-point constant" }
 func (FloatConstantClass) LongDescription() string {
-	return "Outputs an editable float64 value on one pasta/float right-directed port. The label and menu field always show the current value."
+	return "Outputs an editable float64 value on one pasta/float right-directed port. The value changes when the menu form is applied."
 }
 func (FloatConstantClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: TypeFloat, InitialPorts: []pasta.Port{rightPort(TypeFloat)}}

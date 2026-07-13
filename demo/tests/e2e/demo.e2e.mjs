@@ -336,7 +336,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   assert.equal(replacedLink.linkedToSumInput2.length, 1);
   assert.equal(replacedLink.linkedToSumInput2[0].right_port_node, replacedLink.aID);
 
-  const label = await page.evaluate(() => {
+  const labels = await page.evaluate(() => {
     const api = window.__pastaDemo;
     const snapshot = api.snapshot();
     const entry = Object.entries(snapshot.nodes).find(([, node]) => node.name === "A");
@@ -352,9 +352,25 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
         value: 42,
       },
     });
-    return api.call("snapshot").nodes[String(id)].label;
+    const draftLabel = api.call("snapshot").nodes[String(id)].label;
+    api.call("formular", {
+      id,
+      message: {
+        type: "form.apply",
+        menuId: `NODE${id}MENU`,
+        menuGeneration: 1,
+        blockGeneration: 1,
+        blockId: "state",
+        values: { value: 42 },
+      },
+    });
+    return {
+      draft: draftLabel,
+      applied: api.call("snapshot").nodes[String(id)].label,
+    };
   });
-  assert.equal(label, "42");
+  assert.equal(labels.draft, "7");
+  assert.equal(labels.applied, "42");
   assert.deepEqual(browserErrors, []);
 });
 

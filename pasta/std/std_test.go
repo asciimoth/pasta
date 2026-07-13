@@ -60,6 +60,47 @@ func TestStdMathChoosesPrimaryTypeConvertsAndUpdatesMenus(t *testing.T) {
 	assertMenuValue(t, w, i10, 20, false)
 }
 
+func TestStdEditableConstantsCommitOnlyOnFormApply(t *testing.T) {
+	w := newStdWorkspace(t)
+	nodes := map[string]uint64{
+		"int":    addByClass(t, w, NodeTypeIntConstant, "int"),
+		"float":  addByClass(t, w, NodeTypeFloatConstant, "float"),
+		"string": addByClass(t, w, NodeTypeStringConstant, "string"),
+		"bool":   addByClass(t, w, NodeTypeBoolConstant, "bool"),
+	}
+	menus := subscribeStdMenus(t, w, nodes)
+	assertConstantMenuForm(t, menus, nodes["int"], 0, false)
+	assertConstantMenuForm(t, menus, nodes["float"], float64(0), false)
+	assertConstantMenuForm(t, menus, nodes["string"], "", false)
+	assertConstantMenuForm(t, menus, nodes["bool"], false, false)
+
+	sendConstantFieldUpdate(t, w, nodes["int"], 11)
+	sendConstantFieldUpdate(t, w, nodes["float"], 2.5)
+	sendConstantFieldUpdate(t, w, nodes["string"], "draft")
+	sendConstantFieldUpdate(t, w, nodes["bool"], true)
+	assertNodeLabel(t, w, nodes["int"], "0")
+	assertNodeLabel(t, w, nodes["float"], "0")
+	assertNodeLabel(t, w, nodes["string"], "")
+	assertNodeLabel(t, w, nodes["bool"], "false")
+	assertConstantMenuForm(t, menus, nodes["int"], 0, false)
+	assertConstantMenuForm(t, menus, nodes["float"], float64(0), false)
+	assertConstantMenuForm(t, menus, nodes["string"], "", false)
+	assertConstantMenuForm(t, menus, nodes["bool"], false, false)
+
+	setConstant(t, w, nodes["int"], 11)
+	setConstant(t, w, nodes["float"], 2.5)
+	setConstant(t, w, nodes["string"], "applied")
+	setConstant(t, w, nodes["bool"], true)
+	assertNodeLabel(t, w, nodes["int"], "11")
+	assertNodeLabel(t, w, nodes["float"], "2.5")
+	assertNodeLabel(t, w, nodes["string"], "applied")
+	assertNodeLabel(t, w, nodes["bool"], "true")
+	assertConstantMenuForm(t, menus, nodes["int"], 11, false)
+	assertConstantMenuForm(t, menus, nodes["float"], 2.5, false)
+	assertConstantMenuForm(t, menus, nodes["string"], "applied", false)
+	assertConstantMenuForm(t, menus, nodes["bool"], true, false)
+}
+
 func TestStdMathAnyOutputCanBeLinkedBeforeTypeDecision(t *testing.T) {
 	w := newStdWorkspace(t)
 	a := addByClass(t, w, NodeTypeIntConstant, "a")
@@ -1079,11 +1120,27 @@ func addByClass(t *testing.T, w *pasta.Workspace, class, name string) uint64 {
 
 func setConstant(t *testing.T, w *pasta.Workspace, node uint64, value any) {
 	t.Helper()
+	w.SendNodeFormularMsg(node, formular.FormApplyMessage{
+		MessageBase: formular.MessageBase{Type: formular.MessageFormApply, MenuID: pasta.NodeMenuID(node), MenuGeneration: 1},
+		BlockID:     "state",
+		Values:      map[string]any{"value": value},
+	})
+}
+
+func sendConstantFieldUpdate(t *testing.T, w *pasta.Workspace, node uint64, value any) {
+	t.Helper()
 	w.SendNodeFormularMsg(node, formular.FieldUpdateMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageFieldUpdate, MenuID: pasta.NodeMenuID(node), MenuGeneration: 1},
 		Field:       formular.FieldRef{BlockID: "state", FieldID: "value"},
 		Value:       value,
 	})
+}
+
+func assertNodeLabel(t *testing.T, w *pasta.Workspace, node uint64, want string) {
+	t.Helper()
+	if got := w.Snapshot().Nodes[node].Label; got != want {
+		t.Fatalf("node %d label = %q, want %q", node, got, want)
+	}
 }
 
 type formatPartSpec struct {
@@ -1253,6 +1310,31 @@ func assertMenuValue(t *testing.T, w *pasta.Workspace, node uint64, want any, re
 			if item.ID == "value" && item.Field != nil {
 				if item.Field.Value != want || item.Field.Readonly != readonly {
 					t.Fatalf("menu field = value %#v readonly %v, want %#v %v", item.Field.Value, item.Field.Readonly, want, readonly)
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("missing state.value field in %#v", snapshot)
+}
+
+func assertConstantMenuForm(t *testing.T, state *formular.MenuSnapshotState, node uint64, want any, readonly bool) {
+	t.Helper()
+	snapshot, ok := state.Snapshot(pasta.NodeMenuID(node))
+	if !ok {
+		t.Fatalf("missing menu snapshot for node %d", node)
+	}
+	for _, block := range snapshot.Blocks {
+		if block.ID != "state" {
+			continue
+		}
+		if !block.Form {
+			t.Fatalf("node %d state block Form = false, want true", node)
+		}
+		for _, item := range block.Items {
+			if item.ID == "value" && item.Field != nil {
+				if item.Field.Value != want || item.Field.Readonly != readonly {
+					t.Fatalf("node %d menu field = value %#v readonly %v, want %#v %v", node, item.Field.Value, item.Field.Readonly, want, readonly)
 				}
 				return
 			}
@@ -1501,7 +1583,7 @@ func stdStringMenuValue(t *testing.T, state *formular.MenuSnapshotState, node ui
 
 func isConstantClass(class string) bool {
 	return class == NodeTypeIntConstant || class == NodeTypeFloatConstant ||
-		class == NodeTypeStringConstant ||
+		class == NodeTypeStringConstant || class == NodeTypeBoolConstant ||
 		class == NodeTypeTrueConstant || class == NodeTypeFalseConstant
 }
 

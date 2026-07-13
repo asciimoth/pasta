@@ -16,7 +16,7 @@ type StringConstantClass struct{}
 func (StringConstantClass) ClassName() string        { return NodeTypeStringConstant }
 func (StringConstantClass) ShortDescription() string { return "String constant" }
 func (StringConstantClass) LongDescription() string {
-	return "Outputs an editable string value on one pasta/string right-directed port. The label and menu field always show the current value."
+	return "Outputs an editable string value on one pasta/string right-directed port. The value changes when the menu form is applied."
 }
 func (StringConstantClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: TypeString, InitialPorts: []pasta.Port{rightPort(TypeString)}}
@@ -82,12 +82,18 @@ func (n *stringConstantNode) OnEvent(event pasta.Event, linkType string, _ []str
 }
 
 func (n *stringConstantNode) OnFormularMsg(message any) error {
-	msg, ok := message.(formular.FieldUpdateMessage)
-	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.Field.BlockID != "state" || msg.Field.FieldID != "value" {
+	msg, ok := message.(formular.FormApplyMessage)
+	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.BlockID != "state" {
 		return nil
 	}
-	next, ok := parseStringAny(msg.Value)
-	if !ok || next == n.value {
+	// The frontend may send field updates while a form value is being edited;
+	// only an explicit apply commits the constant and propagates it.
+	next, ok := parseStringAny(msg.Values["value"])
+	if !ok {
+		n.sendMenuSnapshotWithForce(true)
+		return nil
+	}
+	if next == n.value {
 		return nil
 	}
 	n.value = next
@@ -130,8 +136,13 @@ func (n *stringConstantNode) sendToLink(link uint64) {
 }
 
 func (n *stringConstantNode) sendMenuSnapshot() {
+	n.sendMenuSnapshotWithForce(false)
+}
+
+func (n *stringConstantNode) sendMenuSnapshotWithForce(force bool) {
 	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
+		Force:       force,
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
 }
@@ -145,7 +156,7 @@ func (n *stringConstantNode) sendMenuBlock() {
 
 func (n *stringConstantNode) menuBlock() formular.Block {
 	return formular.Block{
-		ID: "state", Order: 10, Generation: 1,
+		ID: "state", Order: 10, Generation: 1, Form: true,
 		Items: []formular.Item{{Type: formular.ItemField, ID: "value", Label: "Value", Field: &formular.Field{Kind: formular.FieldText, Value: n.value}}},
 	}
 }

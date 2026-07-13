@@ -16,7 +16,7 @@ type BoolConstantClass struct{}
 func (BoolConstantClass) ClassName() string        { return NodeTypeBoolConstant }
 func (BoolConstantClass) ShortDescription() string { return "Boolean constant" }
 func (BoolConstantClass) LongDescription() string {
-	return "Outputs an editable bool value on one pasta/bool right-directed port. The label and menu checkbox show and allow changing the current value."
+	return "Outputs an editable bool value on one pasta/bool right-directed port. The value changes when the menu form is applied."
 }
 func (BoolConstantClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: TypeBool, InitialPorts: []pasta.Port{rightPort(TypeBool)}}
@@ -86,25 +86,26 @@ func (n *mutableBoolConstantNode) OnEvent(event pasta.Event, linkType string, _ 
 	return nil
 }
 
-// OnFormularMsg handles checkbox updates from the formular menu
+// OnFormularMsg handles applied checkbox values from the Formular menu.
 func (n *mutableBoolConstantNode) OnFormularMsg(message any) error {
-	msg, ok := message.(formular.FieldUpdateMessage)
-	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.Field.BlockID != "state" || msg.Field.FieldID != "value" {
+	msg, ok := message.(formular.FormApplyMessage)
+	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.BlockID != "state" {
 		return nil
 	}
-	v, ok := msg.Value.(bool)
+	v, ok := parseBoolAny(msg.Values["value"])
 	if !ok {
+		n.sendMenuSnapshotWithForce(true)
 		return nil
 	}
 	if v == n.value {
-		return nil // no change, skip propagation
+		return nil
 	}
 	n.value = v
 	if err := n.updateLabel(); err != nil {
 		return err
 	}
-	n.sendMenuBlock() // update menu UI
-	n.sendAll()       // propagate new value to all connected links
+	n.sendMenuBlock()
+	n.sendAll()
 	return nil
 }
 
@@ -155,12 +156,17 @@ func (n *mutableBoolConstantNode) sendToLinkByEvent(event pasta.Event) {
 }
 
 func (n *mutableBoolConstantNode) sendMenuSnapshot() {
+	n.sendMenuSnapshotWithForce(false)
+}
+
+func (n *mutableBoolConstantNode) sendMenuSnapshotWithForce(force bool) {
 	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{
 			Type:           formular.MessageMenuSnapshot,
 			MenuID:         pasta.NodeMenuID(n.id),
 			MenuGeneration: 1,
 		},
+		Force:  force,
 		Blocks: []formular.Block{n.menuBlock()},
 	})
 }
@@ -177,10 +183,9 @@ func (n *mutableBoolConstantNode) sendMenuBlock() {
 	})
 }
 
-// menuBlock returns the checkbox field WITHOUT Readonly: true
 func (n *mutableBoolConstantNode) menuBlock() formular.Block {
 	return formular.Block{
-		ID: "state", Order: 10, Generation: 1,
+		ID: "state", Order: 10, Generation: 1, Form: true,
 		Items: []formular.Item{{
 			Type:  formular.ItemField,
 			ID:    "value",
@@ -188,7 +193,6 @@ func (n *mutableBoolConstantNode) menuBlock() formular.Block {
 			Field: &formular.Field{
 				Kind:  formular.FieldCheckbox,
 				Value: n.value,
-				// Readonly: true  <-- OMITTED to make it mutable
 			},
 		}},
 	}

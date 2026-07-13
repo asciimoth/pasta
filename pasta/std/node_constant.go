@@ -74,20 +74,25 @@ func (n *constantNode) OnEvent(event pasta.Event, linkType string, _ []string, r
 }
 
 func (n *constantNode) OnFormularMsg(message any) error {
-	msg, ok := message.(formular.FieldUpdateMessage)
-	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.Field.BlockID != "state" || msg.Field.FieldID != "value" {
+	msg, ok := message.(formular.FormApplyMessage)
+	if !ok || msg.MenuID != pasta.NodeMenuID(n.id) || msg.BlockID != "state" {
 		return nil
 	}
+
+	// Constant menus are form-backed so editing remains local to the frontend
+	// until the user applies the form.
 	next := n.value // nolint
 	if n.value.typ == TypeFloat {
-		v, ok := parseFloatAny(msg.Value)
+		v, ok := parseFloatAny(msg.Values["value"])
 		if !ok {
+			n.sendMenuSnapshotWithForce(true)
 			return nil
 		}
 		next = floatValue(v)
 	} else {
-		v, ok := parseIntAny(msg.Value)
+		v, ok := parseIntAny(msg.Values["value"])
 		if !ok {
+			n.sendMenuSnapshotWithForce(true)
 			return nil
 		}
 		next = intValue(v)
@@ -139,8 +144,13 @@ func (n *constantNode) sendToLinkByEvent(event pasta.Event) {
 }
 
 func (n *constantNode) sendMenuSnapshot() {
+	n.sendMenuSnapshotWithForce(false)
+}
+
+func (n *constantNode) sendMenuSnapshotWithForce(force bool) {
 	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
+		Force:       force,
 		Blocks:      []formular.Block{n.menuBlock()},
 	})
 }
@@ -154,7 +164,7 @@ func (n *constantNode) sendMenuBlock() {
 
 func (n *constantNode) menuBlock() formular.Block {
 	return formular.Block{
-		ID: "state", Order: 10, Generation: 1,
+		ID: "state", Order: 10, Generation: 1, Form: true,
 		Items: []formular.Item{{Type: formular.ItemField, ID: "value", Label: "Value", Field: &formular.Field{Kind: menuFieldKind(n.value.typ), Value: n.value.menuValue()}}},
 	}
 }

@@ -16,7 +16,7 @@ type ObjectConstantClass struct{}
 func (ObjectConstantClass) ClassName() string        { return NodeTypeObjectConstant }
 func (ObjectConstantClass) ShortDescription() string { return "Object constant" }
 func (ObjectConstantClass) LongDescription() string {
-	return "Outputs an editable JSON object, array, or null value on one pasta/object right-directed port."
+	return "Outputs an editable JSON object, array, or null value on one pasta/object right-directed port. The value changes when the menu form is applied."
 }
 func (ObjectConstantClass) DefaultNodeParams() pasta.NodeClassParams {
 	return pasta.NodeClassParams{PrimaryType: TypeObject, InitialPorts: []pasta.Port{rightPort(TypeObject)}}
