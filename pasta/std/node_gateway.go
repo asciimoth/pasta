@@ -120,6 +120,12 @@ func (n *gatewayNode) PreLinkAdd(port uint64, linkType, portDirection string) er
 		if portDirection != "left" {
 			return pasta.LinkTypeErr(linkType)
 		}
+		if linkType == TypeObject {
+			snapshot, ok := n.w.PortSnapshotLocked(port)
+			if ok && len(snapshot.Links) > 0 {
+				return pasta.ErrLinkDup
+			}
+		}
 		if n.dataType != "" && linkType != n.dataType && linkType != pasta.AnyType {
 			return pasta.LinkTypeErr(linkType)
 		}

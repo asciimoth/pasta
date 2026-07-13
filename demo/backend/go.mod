@@ -15,6 +15,7 @@ require (
 require (
 	github.com/asciimoth/bufpool v0.3.0 // indirect
 	github.com/asciimoth/ident v0.2.0 // indirect
+	github.com/asciimoth/persist v0.2.0 // indirect
 	github.com/asciimoth/putback v0.3.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect

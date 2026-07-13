@@ -4,6 +4,8 @@ github.com/asciimoth/configer/hujson v0.3.1 h1:+aXIekLOqm6uPjS8cwI6h/jz9inZXObks
 github.com/asciimoth/configer/hujson v0.3.1/go.mod h1:tnXfz2bBAlg6WK3ZE+Zh+nxn033tQ2K7hBFkvPKD7Yk=
 github.com/asciimoth/formular v0.3.1 h1:XNOLs0v5kpO/YrAGIwRKiHHpX2wbHdOAsa5S/owhAy8=
 github.com/asciimoth/formular v0.3.1/go.mod h1:6VBEx4KTWp18mpkQn7d3Buoojzf9II5+ZAVuc4DF8AE=
+github.com/asciimoth/persist v0.2.0 h1:yqsu1+5pystESKm8yVVSdG15kqL3Tiwl2tEYtvjcBFE=
+github.com/asciimoth/persist v0.2.0/go.mod h1:idB/ttCb+L8i51uz/7ec+HzrIAbdPQsjVbu0P8hSQBk=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=

@@ -92,6 +92,8 @@ func (v numberValue) label() string {
 
 func parseIntAny(value any) (int, bool) {
 	switch v := value.(type) {
+	case Int:
+		return int(v), true
 	case int:
 		return v, true
 	case int64:
@@ -115,6 +117,8 @@ func parseIntAny(value any) (int, bool) {
 
 func parseFloatAny(value any) (float64, bool) {
 	switch v := value.(type) {
+	case Float:
+		return float64(v), true
 	case float64:
 		return v, true
 	case float32:

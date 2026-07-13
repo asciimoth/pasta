@@ -10,6 +10,8 @@ github.com/asciimoth/gonnect v0.19.0 h1:j4huh4I3i8vG/UZCSDDPtrFea20lY7jc4Cz6JQ+y
 github.com/asciimoth/gonnect v0.19.0/go.mod h1:CohhruGEkUgKLF0ypR/RNFrdrqmJgUkKhvjMilED9Kk=
 github.com/asciimoth/ident v0.2.0 h1:G6qaTnkxTH+idV5YzJ7AvgC2nLQDE/aoV7rPCOtN07I=
 github.com/asciimoth/ident v0.2.0/go.mod h1:JNNFnfM7/hdcXVkFBBOAU/vpJM+0gucYaAYwB694bT0=
+github.com/asciimoth/persist v0.2.0 h1:yqsu1+5pystESKm8yVVSdG15kqL3Tiwl2tEYtvjcBFE=
+github.com/asciimoth/persist v0.2.0/go.mod h1:idB/ttCb+L8i51uz/7ec+HzrIAbdPQsjVbu0P8hSQBk=
 github.com/asciimoth/putback v0.3.0 h1:NKyX1K2yR/pHt9ov7BifA7qd8oMSOhsit4hMf694e30=
 github.com/asciimoth/putback v0.3.0/go.mod h1:K4u9GV2oQVToze+iKSA/e2V26lusyirYqBZuOZnw2YA=
 github.com/asciimoth/socksgo v0.2.24 h1:d156G7F7B3U30fjLsV55Ve7s7xJXafl49c+5qq9rto0=

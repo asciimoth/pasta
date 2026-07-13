@@ -6,6 +6,7 @@ require (
 	github.com/asciimoth/configer/configer v0.3.1
 	github.com/asciimoth/configer/hujson v0.3.1
 	github.com/asciimoth/formular v0.3.1
+	github.com/asciimoth/persist v0.2.0
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 )
 

@@ -234,6 +234,7 @@ func (n *stringFormatNode) recalculate(broadcast bool) {
 	}
 	n.value = b.String()
 	_ = n.updateLabel()
+	n.sendResultMenuBlock()
 	if broadcast && old != n.value {
 		n.sendAll()
 	}
@@ -365,13 +366,13 @@ func (n *stringFormatNode) updateLabel() error {
 	if n.w == nil || n.id == 0 {
 		return nil
 	}
-	return n.w.SetNodeLabelLocked(n.id, n.value)
+	return n.w.SetNodeLabelLocked(n.id, "")
 }
 
 func (n *stringFormatNode) sendMenuSnapshot() {
 	n.w.SendNodeMenuMsgLocked(n.id, formular.MenuSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageMenuSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1},
-		Blocks:      []formular.Block{n.menuBlock()},
+		Blocks:      []formular.Block{n.resultMenuBlock(), n.templateMenuBlock()},
 	})
 }
 
@@ -381,13 +382,35 @@ func (n *stringFormatNode) sendMenuBlock() {
 	}
 	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
 		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
-		Block:       n.menuBlock(),
+		Block:       n.templateMenuBlock(),
 	})
 }
 
-func (n *stringFormatNode) menuBlock() formular.Block {
+func (n *stringFormatNode) sendResultMenuBlock() {
+	if n.w == nil || n.id == 0 {
+		return
+	}
+	n.w.SendNodeMenuMsgLocked(n.id, formular.BlockSnapshotMessage{
+		MessageBase: formular.MessageBase{Type: formular.MessageBlockSnapshot, MenuID: pasta.NodeMenuID(n.id), MenuGeneration: 1, BlockGeneration: 1},
+		Block:       n.resultMenuBlock(),
+	})
+}
+
+func (n *stringFormatNode) resultMenuBlock() formular.Block {
 	return formular.Block{
-		ID: "template", Order: 10, Generation: 1,
+		ID: "result", Order: 10, Generation: 1,
+		Items: []formular.Item{{
+			Type:  formular.ItemField,
+			ID:    "value",
+			Label: "Result",
+			Field: &formular.Field{Kind: formular.FieldText, Value: n.value, Readonly: true, Multiline: true},
+		}},
+	}
+}
+
+func (n *stringFormatNode) templateMenuBlock() formular.Block {
+	return formular.Block{
+		ID: "template", Order: 20, Generation: 1,
 		Items: []formular.Item{{
 			Type:  formular.ItemField,
 			ID:    "parts",

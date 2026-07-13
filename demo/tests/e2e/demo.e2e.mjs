@@ -10,6 +10,8 @@ import { chromium } from "playwright-core";
 
 const chromiumExecutable = process.env.CHROMIUM || findExecutable("chromium", "chromium-browser", "google-chrome");
 const port = 5183;
+const initialNodeCount = 58;
+const initialLinkCount = 80;
 
 test("browser demo boots, renders graph state, and sends Formular edits to WASM", async (t) => {
   const server = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1"], {
@@ -68,15 +70,15 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   const bootValue = await boot.jsonValue();
 
   assert.equal(bootValue.status, "Go WASM backend running");
-  assert.equal(bootValue.nodes, 50);
-  assert.equal(bootValue.links, 70);
+  assert.equal(bootValue.nodes, initialNodeCount);
+  assert.equal(bootValue.links, initialLinkCount);
   assert.ok(bootValue.classes >= 20);
   assert.match(bootValue.sidekick, /Create node/);
 
   const initialConfig = await page.locator("#config-text").inputValue();
   await setConfigText(page, "{");
   await page.click("#reload-config");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 50);
+  await page.waitForFunction((count) => Object.keys(window.__pastaDemo.snapshot().nodes).length === count, initialNodeCount);
   await page.waitForTimeout(100);
 
   await setConfigText(page, `{
@@ -97,7 +99,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
 
   await setConfigText(page, initialConfig);
   await page.click("#reload-config");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 50);
+  await page.waitForFunction((count) => Object.keys(window.__pastaDemo.snapshot().nodes).length === count, initialNodeCount);
   await page.mouse.click(20, 120);
   await page.waitForFunction(() => /Create node/.test(document.querySelector("#sidekick")?.textContent || ""));
 
@@ -311,7 +313,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
   await page.keyboard.press("Escape");
 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Z" : "Control+Z");
-  await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length === 50);
+  await page.waitForFunction((count) => Object.keys(window.__pastaDemo.snapshot().nodes).length === count, initialNodeCount);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+Z" : "Control+Shift+Z");
   await page.waitForFunction(() => Object.keys(window.__pastaDemo.snapshot().nodes).length >= 29);
 
@@ -330,7 +332,7 @@ test("browser demo boots, renders graph state, and sends Formular edits to WASM"
       aID: nodeByName.A.id,
     };
   });
-  assert.equal(replacedLink.linkCount, 71);
+  assert.equal(replacedLink.linkCount, initialLinkCount + 1);
   assert.equal(replacedLink.linkedToSumInput2.length, 1);
   assert.equal(replacedLink.linkedToSumInput2[0].right_port_node, replacedLink.aID);
 

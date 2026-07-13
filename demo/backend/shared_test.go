@@ -39,10 +39,10 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 50; got != want {
+	if got, want := len(snapshot.Nodes), 58; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
-	if got, want := len(snapshot.Links), 70; got != want {
+	if got, want := len(snapshot.Links), 80; got != want {
 		t.Errorf("links = %d, want %d", got, want)
 	}
 	classesInGraph := map[string]bool{}
@@ -86,11 +86,40 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 		"SelectedText:Out -> Summary:Selected",
 		"SplitGreeting:After -> Summary:After",
 		"TextLength:output -> Summary:Length",
+		"ObjectBase:output -> ObjectPack:Base",
+		"SelectedText:Out -> ObjectPack:In Selected Tag",
+		"ObjectPack:output -> ObjectUnpack:input",
+		"ObjectUnpack:Out Name -> ObjectSummary:Name",
+		"ObjectString:output -> ObjectSummary:JSON",
 		"NetSelect:Out -> Loopback:Network",
 		"ServerB:Network -> NetSelect:In 1",
 	} {
 		if !linksByName[want] {
 			t.Errorf("missing restored link %s", want)
+		}
+	}
+	objectString := nodeIDByName(t, w, "ObjectString")
+	state := formular.NewMenuSnapshotState()
+	sub := w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		if notification.Kind == pasta.NotificationNodeMenu {
+			state.Apply(notification.Formular)
+		}
+	})
+	if !w.SubscribeNodeMenu(objectString, sub) {
+		t.Fatalf("SubscribeNodeMenu(%d) returned false", objectString)
+	}
+	objectJSON, ok := menuFieldValue(state, pasta.NodeMenuID(objectString), "state", "value").(string)
+	if !ok {
+		t.Fatalf("ObjectString menu value has type %T", menuFieldValue(state, pasta.NodeMenuID(objectString), "state", "value"))
+	}
+	for _, forbidden := range []string{`"source":"base"`, "legacy", "drop", "keep"} {
+		if strings.Contains(objectJSON, forbidden) {
+			t.Fatalf("ObjectString JSON = %q, unexpectedly contains deleted base path %q", objectJSON, forbidden)
+		}
+	}
+	for _, want := range []string{"demo-object", `"count":3`, `"source":"constant"`, `"tags":["base-tag","HELLO,PASTA"]`} {
+		if !strings.Contains(objectJSON, want) {
+			t.Fatalf("ObjectString JSON = %q, want substring %q", objectJSON, want)
 		}
 	}
 }

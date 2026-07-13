@@ -217,6 +217,7 @@ const initialConfig = `{
 		"Class": "pasta/Select",
 		"Pos":   "{\"x\":860,\"y\":840}",
 		"Links": [
+			"Out -> [ObjectPack] In Selected Tag",
 			"Out -> [Summary] Selected",
 		],
 		"Primary": "pasta/string",
@@ -226,6 +227,205 @@ const initialConfig = `{
 		"Pos":   "{\"x\":1120,\"y\":920}",
 		"Links": [
 			"output -> [Summary] Text",
+		],
+	},
+	"ObjectName": {
+		"Class": "pasta/StringConstant",
+		"Pos":   "{\"x\":1830,\"y\":511}",
+		"Links": [
+			"output -> [ObjectPack] In Name",
+		],
+		"value": "demo-object",
+	},
+	"ObjectCount": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":1829,\"y\":621}",
+		"Links": [
+			"output -> [ObjectPack] In Count",
+		],
+		"value": "3",
+	},
+	"ObjectBase": {
+		"Class": "pasta/ObjectConstant",
+		"Pos":   "{\"x\":1856,\"y\":424}",
+		"Links": [
+			"output -> [ObjectPack] Base",
+		],
+		"value": {
+			"payload": {
+				"source": "base",
+				"count": 1,
+				"legacy": true,
+				"tags": [
+					"base-tag",
+				],
+			},
+			"keep": true,
+			"drop": {
+				"reason": "removed by ObjectPack delete_paths",
+			},
+		},
+	},
+	"ObjectConstant": {
+		"Class": "pasta/ObjectConstant",
+		"Pos":   "{\"x\":1865,\"y\":724}",
+		"Links": [
+			"output -> [ObjectPack] In Raw",
+		],
+		"value": {
+			"source":  "constant",
+			"enabled": true,
+		},
+	},
+	"ObjectPack": {
+		"Class": "pasta/ObjectPacker",
+		"Pos":   "{\"x\":2143,\"y\":507}",
+		"Links": [
+			"output -> [ObjectUnpack] input",
+			"output -> [ObjectString] input",
+		],
+		"root": "map",
+		"fields": [
+			{
+				"id":   "name",
+				"name": "Name",
+				"type": "pasta/string",
+				"path": ["payload", "name"],
+			},
+			{
+				"id":   "count",
+				"name": "Count",
+				"type": "pasta/int",
+				"path": ["payload", "count"],
+			},
+			{
+				"id":   "raw",
+				"name": "Raw",
+				"type": "pasta/object",
+				"path": ["raw"],
+			},
+			{
+				"id":        "selected-tag",
+				"name":      "Selected Tag",
+				"type":      "pasta/string",
+				"path":      ["payload", "tags"],
+				"operation": "append",
+			},
+		],
+		"containers": [
+			{
+				"id":   "payload",
+				"path": ["payload"],
+				"kind": "map",
+			},
+		],
+		"delete_paths": [
+			{
+				"id":   "payload-source",
+				"path": ["payload", "source"],
+			},
+			{
+				"id":   "legacy",
+				"path": ["payload", "legacy"],
+			},
+			{
+				"id":   "drop",
+				"path": ["drop"],
+			},
+			{
+				"id":   "keep",
+				"path": ["keep"],
+			},
+		],
+	},
+	"ObjectUnpack": {
+		"Class": "pasta/ObjectUnpacker",
+		"Pos":   "{\"x\":2330,\"y\":474}",
+		"Links": [
+			"Out Count -> [ObjectSummary] Count",
+			"Out Name -> [ObjectSummary] Name",
+		],
+		"outputs": [
+			{
+				"id":      "name",
+				"name":    "Name",
+				"type":    "pasta/string",
+				"path":    ["payload", "name"],
+				"default": "missing",
+			},
+			{
+				"id":      "count",
+				"name":    "Count",
+				"type":    "pasta/int",
+				"path":    ["payload", "count"],
+				"default": 0,
+			},
+			{
+				"id":   "raw",
+				"name": "Raw",
+				"type": "pasta/object",
+				"path": ["raw"],
+			},
+		],
+	},
+	"ObjectString": {
+		"Class":      "pasta/ObjectToString",
+		"Pos":        "{\"x\":2341,\"y\":603}",
+		"pretty":     false,
+		"omit_empty": false,
+		"Links": [
+			"output -> [ObjectSummary] JSON",
+		],
+	},
+	"ObjectSummary": {
+		"Class": "pasta/StringFormat",
+		"Pos":   "{\"x\":2543,\"y\":504}",
+		"template": [
+			{
+				"id":       "text-1",
+				"template": "text",
+				"values": {
+					"text": "Object: ",
+				},
+			},
+			{
+				"id":       "object-name",
+				"template": "value",
+				"values": {
+					"name": "Name",
+					"type": "pasta/string",
+				},
+			},
+			{
+				"id":       "text-2",
+				"template": "text",
+				"values": {
+					"text": " count=",
+				},
+			},
+			{
+				"id":       "object-count",
+				"template": "value",
+				"values": {
+					"name": "Count",
+					"type": "pasta/int",
+				},
+			},
+			{
+				"id":       "text-3",
+				"template": "text",
+				"values": {
+					"text": " json=",
+				},
+			},
+			{
+				"id":       "object-json",
+				"template": "value",
+				"values": {
+					"name": "JSON",
+					"type": "pasta/string",
+				},
+			},
 		],
 	},
 	// Config on top of node blocks become popups
@@ -597,15 +797,15 @@ const initialConfig = `{
 	},
 	"Manual Trigger": {
 		"Class": "pasta/Trigger",
-		"Pos":   "{\"x\":1380,\"y\":1220}",
+		"Pos":   "{\"x\":1208,\"y\":1211}",
 	},
 	"Trigger Gateway": {
 		"Class": "pasta/Gateway",
-		"Pos":   "{\"x\":1540,\"y\":1220}",
+		"Pos":   "{\"x\":1462,\"y\":1217}",
 	},
 	"Trigger Popup": {
 		"Class": "pasta/PopUp",
-		"Pos":   "{\"x\":1700,\"y\":1220}",
+		"Pos":   "{\"x\":1662,\"y\":1153}",
 	},
 	"Popup Demo": {
 		"Class": "demo.pasta/PopupDemo",

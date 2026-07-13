@@ -24,6 +24,8 @@ const TypeInt = "pasta/int"
 
 func IntFromPayload(value any) (int, bool) {
 	switch v := value.(type) {
+	case Int:
+		return int(v), true
 	case int:
 		return v, true
 	case int64:
