@@ -39,10 +39,10 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 58; got != want {
+	if got, want := len(snapshot.Nodes), 70; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
-	if got, want := len(snapshot.Links), 80; got != want {
+	if got, want := len(snapshot.Links), 101; got != want {
 		t.Errorf("links = %d, want %d", got, want)
 	}
 	classesInGraph := map[string]bool{}

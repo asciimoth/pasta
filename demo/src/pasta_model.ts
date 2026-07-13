@@ -64,7 +64,7 @@ export type WorkspaceNotification = {
   formular?: unknown;
 };
 
-export const DEFAULT_LINK_COLOR = "#9A9";
+export const DEFAULT_LINK_COLOR = "#5b6078";
 export const DEFAULT_NODE_TITLE_COLOR = "#89b4fa";
 export const DEFAULT_NODE_TEXT_COLOR = "#f8f9ff";
 
@@ -78,6 +78,7 @@ export const STD_TYPE_COLORS: Record<string, TypeColor> = {
   "pasta/float": { color: "#bd5a20", textColor: "#ffffff" },
   "pasta/string": { color: "#087d73", textColor: "#ffffff" },
   "pasta/bool": { color: "#3b7f3e", textColor: "#ffffff" },
+  "pasta/object": { color: "#6f5a8f", textColor: "#ffffff" },
   "demo.pasta/network": { color: "#8a5cf6", textColor: "#ffffff" },
 };
 

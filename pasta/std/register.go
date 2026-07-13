@@ -13,6 +13,7 @@ func Register(w *pasta.Workspace) error {
 }
 
 func StdClasses() []pasta.NodeClass {
+	variables := newVariableClassStores()
 	return []pasta.NodeClass{
 		IntConstantClass{},
 		FloatConstantClass{},
@@ -48,5 +49,15 @@ func StdClasses() []pasta.NodeClass {
 		SelectClass{},
 		SelectOutClass{},
 		BoolConstantClass{},
+		BoolGetClass{store: variables.get(TypeBool)},
+		BoolSetClass{store: variables.get(TypeBool)},
+		IntGetClass{store: variables.get(TypeInt)},
+		IntSetClass{store: variables.get(TypeInt)},
+		FloatGetClass{store: variables.get(TypeFloat)},
+		FloatSetClass{store: variables.get(TypeFloat)},
+		StringGetClass{store: variables.get(TypeString)},
+		StringSetClass{store: variables.get(TypeString)},
+		ObjectGetClass{store: variables.get(TypeObject)},
+		ObjectSetClass{store: variables.get(TypeObject)},
 	}
 }

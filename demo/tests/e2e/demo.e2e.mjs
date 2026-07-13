@@ -10,8 +10,8 @@ import { chromium } from "playwright-core";
 
 const chromiumExecutable = process.env.CHROMIUM || findExecutable("chromium", "chromium-browser", "google-chrome");
 const port = 5183;
-const initialNodeCount = 58;
-const initialLinkCount = 80;
+const initialNodeCount = 70;
+const initialLinkCount = 101;
 
 test("browser demo boots, renders graph state, and sends Formular edits to WASM", async (t) => {
   const server = spawn("python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1"], {

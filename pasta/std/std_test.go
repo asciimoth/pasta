@@ -1099,14 +1099,7 @@ func newStdWorkspace(t *testing.T) *pasta.Workspace {
 }
 
 func allStdClasses() []pasta.NodeClass {
-	return []pasta.NodeClass{
-		IntConstantClass{}, FloatConstantClass{}, StringConstantClass{}, ObjectConstantClass{}, ObjectPackerClass{}, ObjectUnpackerClass{}, ObjectToStringClass{}, SubClass{}, DivClass{}, MulClass{}, SumClass{},
-		StringConcatClass{}, StringFormatClass{}, StringLengthClass{}, StringContainsClass{}, StringSplitClass{}, StringUpperClass{}, StringLowerClass{}, StringTrimSpaceClass{},
-		TrueConstantClass{}, FalseConstantClass{}, BoolAndClass{}, BoolNotClass{}, BoolOrClass{},
-		MoreClass{}, LessClass{}, EqualClass{}, NotEqualClass{},
-		TriggerClass{}, PopUpClass{}, GatewayClass{},
-		SelectClass{}, SelectOutClass{}, BoolConstantClass{},
-	}
+	return StdClasses()
 }
 
 func addByClass(t *testing.T, w *pasta.Workspace, class, name string) uint64 {

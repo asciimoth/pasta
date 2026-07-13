@@ -18,6 +18,7 @@ const initialConfig = `{
 			"output -> [Product] input 1",
 			"output -> [Ratio] input 2",
 			"output -> [Sum] input 1",
+			"output -> [Var Int Set] Value",
 		],
 		"value": "7",
 	},
@@ -38,6 +39,7 @@ const initialConfig = `{
 		"Pos":   "{\"x\":60,\"y\":360}",
 		"Links": [
 			"output -> [Summary] Float",
+			"output -> [Var Float Set] Value",
 		],
 		"value": "2.5",
 	},
@@ -46,6 +48,7 @@ const initialConfig = `{
 		"Pos":   "{\"x\":60,\"y\":520}",
 		"Links": [
 			"output -> [AllChecks] input 1",
+			"output -> [Var Bool Set] Value",
 		],
 		"value": true,
 	},
@@ -153,6 +156,7 @@ const initialConfig = `{
 		"Pos":   "{\"x\":60,\"y\":820}",
 		"Links": [
 			"output -> [Trimmed] input 1",
+			"output -> [Var String Set] Value",
 		],
 		"value": " hello,pasta ",
 	},
@@ -268,9 +272,10 @@ const initialConfig = `{
 	},
 	"ObjectConstant": {
 		"Class": "pasta/ObjectConstant",
-		"Pos":   "{\"x\":1865,\"y\":724}",
+		"Pos":   "{\"x\":1687,\"y\":1055}",
 		"Links": [
 			"output -> [ObjectPack] In Raw",
+			"output -> [Var Object Set] Value",
 		],
 		"value": {
 			"source":  "constant",
@@ -279,7 +284,7 @@ const initialConfig = `{
 	},
 	"ObjectPack": {
 		"Class": "pasta/ObjectPacker",
-		"Pos":   "{\"x\":2143,\"y\":507}",
+		"Pos":   "{\"x\":2115,\"y\":520}",
 		"Links": [
 			"output -> [ObjectUnpack] input",
 			"output -> [ObjectString] input",
@@ -797,7 +802,192 @@ const initialConfig = `{
 	},
 	"Manual Trigger": {
 		"Class": "pasta/Trigger",
-		"Pos":   "{\"x\":1208,\"y\":1211}",
+		"Pos":   "{\"x\":1866,\"y\":1301}",
+		"Links": [
+			"Trigger -> [Var Bool Set] Trigger",
+			"Trigger -> [Var Float Set] Trigger",
+			"Trigger -> [Var Int Set] Trigger",
+			"Trigger -> [Var Object Set] Trigger",
+			"Trigger -> [Var String Set] Trigger",
+		],
+	},
+	"Var Int Set": {
+		"Class": "pasta/IntSet",
+		"Pos":   "{\"x\":2324,\"y\":763}",
+		"Links": [
+			"Trigger -> [Var Int Get] Trigger",
+		],
+		"name":  "demo/int",
+		"value": 7,
+	},
+	"Var Int Get": {
+		"Class": "pasta/IntGet",
+		"Pos":   "{\"x\":2561,\"y\":759}",
+		"Links": [
+			"Value -> [Variable Summary] Int",
+		],
+		"name": "demo/int",
+	},
+	"Var Float Set": {
+		"Class": "pasta/FloatSet",
+		"Pos":   "{\"x\":2322,\"y\":898}",
+		"Links": [
+			"Trigger -> [Var Float Get] Trigger",
+		],
+		"name":  "demo/float",
+		"value": 2.5,
+	},
+	"Var Float Get": {
+		"Class": "pasta/FloatGet",
+		"Pos":   "{\"x\":2565,\"y\":898}",
+		"Links": [
+			"Value -> [Variable Summary] Float",
+		],
+		"name": "demo/float",
+	},
+	"Var String Set": {
+		"Class": "pasta/StringSet",
+		"Pos":   "{\"x\":2322,\"y\":1030}",
+		"Links": [
+			"Trigger -> [Var String Get] Trigger",
+		],
+		"name":  "demo/string",
+		"value": " hello,pasta ",
+	},
+	"Var String Get": {
+		"Class": "pasta/StringGet",
+		"Pos":   "{\"x\":2561,\"y\":1031}",
+		"Links": [
+			"Value -> [Variable Summary] String",
+		],
+		"name": "demo/string",
+	},
+	"Var Bool Set": {
+		"Class": "pasta/BoolSet",
+		"Pos":   "{\"x\":2324,\"y\":1162}",
+		"Links": [
+			"Trigger -> [Var Bool Get] Trigger",
+		],
+		"name":  "demo/bool",
+		"value": true,
+	},
+	"Var Bool Get": {
+		"Class": "pasta/BoolGet",
+		"Pos":   "{\"x\":2563,\"y\":1162}",
+		"Links": [
+			"Value -> [Variable Summary] Bool",
+		],
+		"name": "demo/bool",
+	},
+	"Var Object Set": {
+		"Class": "pasta/ObjectSet",
+		"Pos":   "{\"x\":2325,\"y\":1296}",
+		"Links": [
+			"Trigger -> [Var Object Get] Trigger",
+		],
+		"name": "demo/object",
+		"value": {
+			"source":  "constant",
+			"enabled": true,
+		},
+	},
+	"Var Object Get": {
+		"Class": "pasta/ObjectGet",
+		"Pos":   "{\"x\":2563,\"y\":1299}",
+		"Links": [
+			"Value -> [Variable Object String] input",
+		],
+		"name": "demo/object",
+	},
+	"Variable Object String": {
+		"Class":      "pasta/ObjectToString",
+		"Pos":        "{\"x\":2744,\"y\":1316}",
+		"pretty":     false,
+		"omit_empty": false,
+		"Links": [
+			"output -> [Variable Summary] Object JSON",
+		],
+	},
+	"Variable Summary": {
+		"Class": "pasta/StringFormat",
+		"Pos":   "{\"x\":2964,\"y\":991}",
+		"template": [
+			{
+				"id":       "text-1",
+				"template": "text",
+				"values": {
+					"text": "Variables: int=",
+				},
+			},
+			{
+				"id":       "var-int",
+				"template": "value",
+				"values": {
+					"name": "Int",
+					"type": "pasta/int",
+				},
+			},
+			{
+				"id":       "text-2",
+				"template": "text",
+				"values": {
+					"text": " float=",
+				},
+			},
+			{
+				"id":       "var-float",
+				"template": "value",
+				"values": {
+					"name": "Float",
+					"type": "pasta/float",
+				},
+			},
+			{
+				"id":       "text-3",
+				"template": "text",
+				"values": {
+					"text": " string=",
+				},
+			},
+			{
+				"id":       "var-string",
+				"template": "value",
+				"values": {
+					"name": "String",
+					"type": "pasta/string",
+				},
+			},
+			{
+				"id":       "text-4",
+				"template": "text",
+				"values": {
+					"text": " bool=",
+				},
+			},
+			{
+				"id":       "var-bool",
+				"template": "value",
+				"values": {
+					"name": "Bool",
+					"type": "pasta/bool",
+				},
+			},
+			{
+				"id":       "text-5",
+				"template": "text",
+				"values": {
+					"text": " object=",
+				},
+			},
+			{
+				"id":       "var-object",
+				"template": "value",
+				"values": {
+					"name": "Object JSON",
+					"type": "pasta/string",
+				},
+			},
+		],
 	},
 	"Trigger Gateway": {
 		"Class": "pasta/Gateway",
