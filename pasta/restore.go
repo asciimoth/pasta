@@ -117,7 +117,7 @@ func restoreOneNode(w *Workspace, cfg configer.Config, node *restoreNode) (uint6
 		class  NodeClass
 	)
 	w.Lock()
-	if c, ok := w.classes.Get(node.class); ok && c != nil {
+	if c, ok := w.classes[node.class]; ok && c != nil {
 		class = c
 		params = c.DefaultNodeParams()
 	}
@@ -364,7 +364,7 @@ func (w *Workspace) nodePortByName(node uint64, direction, name string) (uint64,
 	if w.closed {
 		return 0, false
 	}
-	record, ok := w.nodes.Get(node)
+	record, ok := w.nodes[node]
 	if !ok || record == nil {
 		return 0, false
 	}
@@ -373,7 +373,7 @@ func (w *Workspace) nodePortByName(node uint64, direction, name string) (uint64,
 		ports = record.RightPorts
 	}
 	for _, portID := range ports {
-		port, ok := w.ports.Get(portID)
+		port, ok := w.ports[portID]
 		if ok && port != nil && port.Name == name {
 			return portID, true
 		}

@@ -42,7 +42,7 @@ func (w *Workspace) AddNodeResourceLocked(id uint64, resource io.Closer) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
-	if record, present := w.nodes.Get(id); id < 1 || !present || record == nil {
+	if record, present := w.nodes[id]; id < 1 || !present || record == nil {
 		return ErrNoNode
 	}
 	return w.addResourceBindingLocked(w.nodeResources, id, resource)
@@ -64,7 +64,7 @@ func (w *Workspace) AddLinkResourceLocked(id uint64, resource io.Closer) error {
 	if w.closed {
 		return ErrWorkspaceClosed
 	}
-	if link, present := w.links.Get(id); id < 1 || !present || link == nil {
+	if link, present := w.links[id]; id < 1 || !present || link == nil {
 		return ErrNoLink
 	}
 	return w.addResourceBindingLocked(w.linkResources, id, resource)

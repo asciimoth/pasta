@@ -100,8 +100,8 @@ func (w *Workspace) AddNodeClassLocked(class NodeClass) error {
 		return ErrWorkspaceClosed
 	}
 
-	_, wasPresent := w.classes.Get(name)
-	w.classes.Set(name, class)
+	_, wasPresent := w.classes[name]
+	w.classes[name] = class
 	w.enqueueNodeClassNotification(NotificationNodeClassAdded, name, nodeClassSnapshot(class))
 	if params.Unique {
 		w.undoRecordingDisabled += 1
@@ -155,7 +155,10 @@ func (w *Workspace) RemoveNodeClassLocked(name string) error {
 		return ErrWorkspaceClosed
 	}
 
-	class, present := w.classes.Delete(name)
+	class, present := w.classes[name]
+	if present {
+		delete(w.classes, name)
+	}
 	if !present || class == nil {
 		return ErrNoNodeClass
 	}
@@ -179,7 +182,8 @@ func (w *Workspace) NodeClassLocked(name string) (NodeClass, bool) {
 	if w.closed {
 		return nil, false
 	}
-	return w.classes.Get(name)
+	class, present := w.classes[name]
+	return class, present
 }
 
 // NodeClassLongDescription returns the registered class long description.
@@ -200,7 +204,7 @@ func (w *Workspace) NodeClassLongDescriptionLocked(name string) (string, bool) {
 	if w.closed {
 		return "", false
 	}
-	class, present := w.classes.Get(name)
+	class, present := w.classes[name]
 	if !present || class == nil {
 		return "", false
 	}
@@ -236,7 +240,7 @@ func (w *Workspace) AddNodeByClassLocked(class string, name ...string) (uint64, 
 			return 0, err
 		}
 	}
-	nodeClass, present := w.classes.Get(class)
+	nodeClass, present := w.classes[class]
 	if present && nodeClass != nil {
 		params := nodeClass.DefaultNodeParams()
 		if params.Unique {

@@ -19,7 +19,7 @@ func (w *Workspace) TriggerLocked(node uint64) error {
 		return ErrWorkspaceClosed
 	}
 
-	record, present := w.nodes.Get(node)
+	record, present := w.nodes[node]
 	if !present || record == nil || record.Node == nil {
 		return ErrNoNode
 	}

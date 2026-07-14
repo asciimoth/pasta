@@ -46,7 +46,7 @@ func TestWorkspaceUndoRedoDropsUniqueClassRestoreWhenDuplicateExists(t *testing.
 	}
 
 	w.Lock()
-	firstRecord, _ := w.nodes.Get(firstID)
+	firstRecord := w.nodes[firstID]
 	removedFirst := w.undoRemovedNodeEntry(firstID, firstRecord)
 	w.Unlock()
 	w.undoRecordingDisabled += 1

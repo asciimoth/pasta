@@ -18,7 +18,6 @@ type undoRemovedNode struct {
 	Ports    []undoPort
 	Links    []undoLink
 	Position string
-	NextNode uint64
 }
 
 type undoPort struct {
@@ -225,7 +224,7 @@ func (w *Workspace) restoreNodePosition(id uint64, position string) bool {
 func (w *Workspace) captureNodeByID(id uint64) undoEntry {
 	w.Lock()
 	defer w.Unlock()
-	record, ok := w.nodes.Get(id)
+	record, ok := w.nodes[id]
 	if w.closed || !ok || record == nil {
 		return nil
 	}
@@ -255,18 +254,13 @@ func (w *Workspace) undoRemovedNodeEntry(id uint64, record *nodeRecord) undoEntr
 		Config:   cloneAnyMap(nodeObject),
 		Position: record.Position,
 	}
-	if pair := w.nodes.GetPair(id); pair != nil {
-		if next := pair.Next(); next != nil {
-			entry.NextNode = next.Key
-		}
-	}
 	for _, portID := range record.LeftPorts {
-		if port, ok := w.ports.Get(portID); ok && port != nil {
+		if port, ok := w.ports[portID]; ok && port != nil {
 			entry.Ports = append(entry.Ports, undoPort{ID: portID, Snapshot: portSnapshot(port)})
 		}
 	}
 	for _, portID := range record.RightPorts {
-		if port, ok := w.ports.Get(portID); ok && port != nil {
+		if port, ok := w.ports[portID]; ok && port != nil {
 			entry.Ports = append(entry.Ports, undoPort{ID: portID, Snapshot: portSnapshot(port)})
 		}
 	}
@@ -286,7 +280,7 @@ func (w *Workspace) undoRemovedNodeEntry(id uint64, record *nodeRecord) undoEntr
 func (w *Workspace) captureLinkByID(id uint64) undoEntry {
 	w.Lock()
 	defer w.Unlock()
-	link, ok := w.links.Get(id)
+	link, ok := w.links[id]
 	if w.closed || !ok || link == nil {
 		return nil
 	}
@@ -336,7 +330,7 @@ func (w *Workspace) restoreUndoNode(entry undoRemovedNode) bool {
 			return false
 		}
 	}
-	if c, ok := w.classes.Get(node.class); ok && c != nil {
+	if c, ok := w.classes[node.class]; ok && c != nil {
 		class = c
 	}
 	if err := w.rejectUniqueNodeDuplicateLocked(node.class, 0); err != nil {
@@ -395,11 +389,6 @@ func (w *Workspace) restoreUndoNode(entry undoRemovedNode) bool {
 	if entry.Position != "" {
 		_ = w.SetNodePosition(entry.ID, entry.Position)
 	}
-	w.Lock()
-	if entry.NextNode > 0 {
-		_ = w.nodes.MoveBefore(entry.ID, entry.NextNode)
-	}
-	w.Unlock()
 	for _, link := range entry.Links {
 		if !w.restoreUndoLink(undoRemovedLink{
 			ID:         link.ID,
@@ -419,8 +408,8 @@ func (w *Workspace) restoreUndoLink(entry undoRemovedLink) bool {
 	if w.closed || !w.idAvailableLocked(entry.ID) {
 		return false
 	}
-	left, leftOK := w.ports.Get(entry.Link.LeftPort)
-	right, rightOK := w.ports.Get(entry.Link.RightPort)
+	left, leftOK := w.ports[entry.Link.LeftPort]
+	right, rightOK := w.ports[entry.Link.RightPort]
 	if !leftOK || !rightOK || left == nil || right == nil {
 		return false
 	}
@@ -433,8 +422,8 @@ func (w *Workspace) restoreUndoLink(entry undoRemovedLink) bool {
 	if !portsSupportLinkType(left, right, entry.Link.Type) {
 		return false
 	}
-	leftNode, leftNodeOK := w.nodes.Get(entry.Link.LeftPortNode)
-	rightNode, rightNodeOK := w.nodes.Get(entry.Link.RightPortNode)
+	leftNode, leftNodeOK := w.nodes[entry.Link.LeftPortNode]
+	rightNode, rightNodeOK := w.nodes[entry.Link.RightPortNode]
 	if !leftNodeOK || !rightNodeOK || leftNode == nil || rightNode == nil {
 		return false
 	}
@@ -462,18 +451,18 @@ func (w *Workspace) restoreUndoLink(entry undoRemovedLink) bool {
 	if !w.reserveIDLocked(entry.ID) {
 		return false
 	}
-	w.links.Set(link.ID, &link)
+	w.links[link.ID] = &link
 	if !w.verifyDAG() {
-		w.links.Delete(link.ID)
+		delete(w.links, link.ID)
 		return false
 	}
 	if !link.Placeholder {
 		if err := leftNode.OnLinkAdd(link.ID, link.LeftPort, link.Type, "left"); err != nil {
-			w.links.Delete(link.ID)
+			delete(w.links, link.ID)
 			return false
 		}
 		if err := rightNode.OnLinkAdd(link.ID, link.RightPort, link.Type, "right"); err != nil {
-			w.links.Delete(link.ID)
+			delete(w.links, link.ID)
 			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left")
 			return false
 		}
@@ -488,7 +477,7 @@ func (w *Workspace) restoreUndoLink(entry undoRemovedLink) bool {
 }
 
 func linkIndex(w *Workspace, portID, linkID uint64) int {
-	port, ok := w.ports.Get(portID)
+	port, ok := w.ports[portID]
 	if !ok || port == nil {
 		return -1
 	}

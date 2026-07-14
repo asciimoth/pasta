@@ -67,7 +67,7 @@ func (w *Workspace) CopyLocked(ids []uint64) string {
 		if _, seen := selected[id]; seen {
 			continue
 		}
-		record, present := w.nodes.Get(id)
+		record, present := w.nodes[id]
 		if !present || record == nil {
 			continue
 		}
@@ -97,8 +97,7 @@ func (w *Workspace) CopyLocked(ids []uint64) string {
 		return ""
 	}
 
-	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
-		link := pair.Value
+	for id, link := range w.links {
 		if link == nil {
 			continue
 		}
@@ -109,7 +108,7 @@ func (w *Workspace) CopyLocked(ids []uint64) string {
 			continue
 		}
 		payload.Links = append(payload.Links, clipboardLink{
-			ID:            pair.Key,
+			ID:            id,
 			Type:          link.Type,
 			LeftPort:      link.LeftPort,
 			LeftPortNode:  link.LeftPortNode,
@@ -128,7 +127,7 @@ func (w *Workspace) CopyLocked(ids []uint64) string {
 func (w *Workspace) copyClipboardPorts(ids []uint64) []clipboardPort {
 	ports := make([]clipboardPort, 0, len(ids))
 	for _, id := range ids {
-		port, present := w.ports.Get(id)
+		port, present := w.ports[id]
 		if !present || port == nil {
 			continue
 		}
@@ -333,7 +332,7 @@ func (w *Workspace) clipboardPortIDMap(node clipboardNode, snapshot NodeSnapshot
 func (w *Workspace) mapClipboardPortsByNameLocked(mapped map[uint64]uint64, old []clipboardPort, current []uint64) {
 	byName := make(map[string]uint64, len(current))
 	for _, id := range current {
-		port, present := w.ports.Get(id)
+		port, present := w.ports[id]
 		if present && port != nil {
 			byName[port.Name] = id
 		}
@@ -364,7 +363,7 @@ func (w *Workspace) clipboardNodeName(class, name string) (string, bool) {
 
 func (w *Workspace) newClipboardNode(node clipboardNode, state *NodeClassState) (impl Node, handled bool, failed bool) {
 	w.Lock()
-	class, present := w.classes.Get(node.Class)
+	class, present := w.classes[node.Class]
 	w.Unlock()
 	if !present || class == nil {
 		return nil, false, false
@@ -402,11 +401,11 @@ func (w *Workspace) addClipboardLink(pa, pb uint64, typ string) uint64 {
 		return 0
 	}
 
-	portA, present := w.ports.Get(pa)
+	portA, present := w.ports[pa]
 	if !present || portA == nil {
 		return 0
 	}
-	portB, present := w.ports.Get(pb)
+	portB, present := w.ports[pb]
 	if !present || portB == nil {
 		return 0
 	}
@@ -422,11 +421,11 @@ func (w *Workspace) addClipboardLink(pa, pb uint64, typ string) uint64 {
 		return 0
 	}
 
-	leftNode, present := w.nodes.Get(left.Node)
+	leftNode, present := w.nodes[left.Node]
 	if !present || leftNode == nil {
 		return 0
 	}
-	rightNode, present := w.nodes.Get(right.Node)
+	rightNode, present := w.nodes[right.Node]
 	if !present || rightNode == nil {
 		return 0
 	}
@@ -455,19 +454,19 @@ func (w *Workspace) addClipboardLink(pa, pb uint64, typ string) uint64 {
 		RightPort:     right.ID,
 		RightPortNode: rightNode.ID,
 	}
-	w.links.Set(link.ID, &link)
+	w.links[link.ID] = &link
 	if !w.verifyDAG() {
-		w.links.Delete(link.ID)
+		delete(w.links, link.ID)
 		return 0
 	}
 	if !link.Placeholder {
 		if err := leftNode.OnLinkAdd(link.ID, left.ID, link.Type, left.Direction); err != nil {
-			w.links.Delete(link.ID)
+			delete(w.links, link.ID)
 			w.failNodeLocked(leftNode.ID, "OnLinkAdd", err, true, true)
 			return 0
 		}
 		if err := rightNode.OnLinkAdd(link.ID, right.ID, link.Type, right.Direction); err != nil {
-			w.links.Delete(link.ID)
+			delete(w.links, link.ID)
 			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
 			w.nodeEvLinkRemoved(leftNode.ID, link.ID, left.ID, link.Type, left.Direction)
 			return 0

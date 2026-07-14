@@ -36,7 +36,7 @@ func (w *Workspace) SubscribeNodeMenuLocked(node, subscriptionID uint64) bool {
 		return false
 	}
 	callback, subscribed := w.subscribers[subscriptionID]
-	record, present := w.nodes.Get(node)
+	record, present := w.nodes[node]
 	if !subscribed || !present || record == nil || callback == nil {
 		return false
 	}
@@ -113,7 +113,7 @@ func (w *Workspace) SendNodeMenuMsgLocked(node uint64, message any) {
 	if w.closed {
 		return
 	}
-	record, present := w.nodes.Get(node)
+	record, present := w.nodes[node]
 	if !present || record == nil {
 		return
 	}
@@ -154,7 +154,7 @@ func (w *Workspace) SendNodeFormularMsgLocked(node uint64, message any) {
 	if w.closed {
 		return
 	}
-	record, present := w.nodes.Get(node)
+	record, present := w.nodes[node]
 	if !present || record == nil || record.Node == nil {
 		return
 	}

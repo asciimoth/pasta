@@ -3,6 +3,7 @@ package pasta
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/asciimoth/configer/configer"
 )
@@ -18,7 +19,7 @@ const (
 //
 // The root object is keyed by node name. Workspace-owned node keys are
 // CamelCase; node implementations should use lower-case keys for node-owned
-// state saved by OnSave.
+// state saved by OnSave. Nodes are saved by ascending workspace ID.
 func (w *Workspace) SaveConfig(cfg configer.Config) error {
 	w.Lock()
 	defer w.Unlock()
@@ -38,10 +39,10 @@ func (w *Workspace) SaveConfigLocked(cfg configer.Config) error {
 		return ErrWorkspaceClosed
 	}
 
-	nodeNames := make(map[string]*nodeRecord, w.nodes.Len())
-	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
-		if pair.Value != nil {
-			nodeNames[pair.Value.Name] = pair.Value
+	nodeNames := make(map[string]*nodeRecord, len(w.nodes))
+	for _, record := range w.nodes {
+		if record != nil {
+			nodeNames[record.Name] = record
 		}
 	}
 
@@ -67,8 +68,8 @@ func (w *Workspace) SaveConfigLocked(cfg configer.Config) error {
 		}
 	}
 
-	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
-		record := pair.Value
+	for _, id := range sortedNodeIDs(w.nodes) {
+		record := w.nodes[id]
 		if record == nil {
 			continue
 		}
@@ -127,7 +128,7 @@ func saveWorkspaceNodeState(w *Workspace, cfg configer.Config, record *nodeRecor
 	}
 
 	defaultPrimary := ""
-	if class, ok := w.classes.Get(record.Class); ok && class != nil {
+	if class, ok := w.classes[record.Class]; ok && class != nil {
 		defaultPrimary = class.DefaultNodeParams().PrimaryType
 	}
 	if record.PrimaryType == defaultPrimary && !hasConfigComment(cfg, configer.Path{saveKeyPrimary}) {
@@ -156,20 +157,20 @@ func saveWorkspaceNodeState(w *Workspace, cfg configer.Config, record *nodeRecor
 func outgoingLinkSpecs(w *Workspace, record *nodeRecord) []string {
 	specs := make([]string, 0)
 	for _, portID := range record.RightPorts {
-		port, ok := w.ports.Get(portID)
+		port, ok := w.ports[portID]
 		if !ok || port == nil {
 			continue
 		}
 		for _, linkID := range port.Links {
-			link, ok := w.links.Get(linkID)
+			link, ok := w.links[linkID]
 			if !ok || link == nil || link.RightPort != port.ID {
 				continue
 			}
-			targetNode, ok := w.nodes.Get(link.LeftPortNode)
+			targetNode, ok := w.nodes[link.LeftPortNode]
 			if !ok || targetNode == nil {
 				continue
 			}
-			targetPort, ok := w.ports.Get(link.LeftPort)
+			targetPort, ok := w.ports[link.LeftPort]
 			if !ok || targetPort == nil {
 				continue
 			}
@@ -177,6 +178,17 @@ func outgoingLinkSpecs(w *Workspace, record *nodeRecord) []string {
 		}
 	}
 	return specs
+}
+
+func sortedNodeIDs(nodes map[uint64]*nodeRecord) []uint64 {
+	ids := make([]uint64, 0, len(nodes))
+	for id := range nodes {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids
 }
 
 func deleteIfExists(cfg configer.Config, path configer.Path) error {

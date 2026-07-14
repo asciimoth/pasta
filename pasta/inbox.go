@@ -37,7 +37,7 @@ func (w *Workspace) deliverInbox(message InboxMessage) {
 		return
 	}
 
-	receiver, present := w.nodes.Get(message.ReceiverNode)
+	receiver, present := w.nodes[message.ReceiverNode]
 	if !present || receiver == nil {
 		return
 	}

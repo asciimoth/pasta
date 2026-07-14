@@ -93,35 +93,35 @@ func (w *Workspace) SnapshotLocked() WorkspaceSnapshot {
 
 func (w *Workspace) snapshotLocked() WorkspaceSnapshot {
 	snapshot := WorkspaceSnapshot{
-		Classes: make(map[string]NodeClassSnapshot, w.classes.Len()),
-		Nodes:   make(map[uint64]NodeSnapshot, w.nodes.Len()),
-		Ports:   make(map[uint64]PortSnapshot, w.ports.Len()),
-		Links:   make(map[uint64]LinkSnapshot, w.links.Len()),
+		Classes: make(map[string]NodeClassSnapshot, len(w.classes)),
+		Nodes:   make(map[uint64]NodeSnapshot, len(w.nodes)),
+		Ports:   make(map[uint64]PortSnapshot, len(w.ports)),
+		Links:   make(map[uint64]LinkSnapshot, len(w.links)),
 	}
 
-	for pair := w.classes.Oldest(); pair != nil; pair = pair.Next() {
-		if pair.Value == nil {
+	for name, class := range w.classes {
+		if class == nil {
 			continue
 		}
-		snapshot.Classes[pair.Key] = nodeClassSnapshot(pair.Value)
+		snapshot.Classes[name] = nodeClassSnapshot(class)
 	}
-	for pair := w.nodes.Oldest(); pair != nil; pair = pair.Next() {
-		if pair.Value == nil {
+	for id, record := range w.nodes {
+		if record == nil {
 			continue
 		}
-		snapshot.Nodes[pair.Key] = nodeSnapshot(pair.Value)
+		snapshot.Nodes[id] = nodeSnapshot(record)
 	}
-	for pair := w.ports.Oldest(); pair != nil; pair = pair.Next() {
-		if pair.Value == nil {
+	for id, port := range w.ports {
+		if port == nil {
 			continue
 		}
-		snapshot.Ports[pair.Key] = portSnapshot(pair.Value)
+		snapshot.Ports[id] = portSnapshot(port)
 	}
-	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
-		if pair.Value == nil {
+	for id, link := range w.links {
+		if link == nil {
 			continue
 		}
-		snapshot.Links[pair.Key] = linkSnapshot(pair.Value)
+		snapshot.Links[id] = linkSnapshot(link)
 	}
 
 	return snapshot
@@ -140,7 +140,7 @@ func (w *Workspace) NodeClassSnapshot(name string) (NodeClassSnapshot, bool) {
 
 // NodeClassSnapshotLocked is NodeClassSnapshot for callers that already hold the workspace lock.
 func (w *Workspace) NodeClassSnapshotLocked(name string) (NodeClassSnapshot, bool) {
-	class, present := w.classes.Get(name)
+	class, present := w.classes[name]
 	if w.closed || !present || class == nil {
 		return NodeClassSnapshot{}, false
 	}
@@ -156,7 +156,7 @@ func (w *Workspace) NodeSnapshot(id uint64) (NodeSnapshot, bool) {
 
 // NodeSnapshotLocked is NodeSnapshot for callers that already hold the workspace lock.
 func (w *Workspace) NodeSnapshotLocked(id uint64) (NodeSnapshot, bool) {
-	record, present := w.nodes.Get(id)
+	record, present := w.nodes[id]
 	if w.closed || !present || record == nil {
 		return NodeSnapshot{}, false
 	}
@@ -172,7 +172,7 @@ func (w *Workspace) PortSnapshot(id uint64) (PortSnapshot, bool) {
 
 // PortSnapshotLocked is PortSnapshot for callers that already hold the workspace lock.
 func (w *Workspace) PortSnapshotLocked(id uint64) (PortSnapshot, bool) {
-	port, present := w.ports.Get(id)
+	port, present := w.ports[id]
 	if w.closed || !present || port == nil {
 		return PortSnapshot{}, false
 	}
@@ -188,7 +188,7 @@ func (w *Workspace) LinkSnapshot(id uint64) (LinkSnapshot, bool) {
 
 // LinkSnapshotLocked is LinkSnapshot for callers that already hold the workspace lock.
 func (w *Workspace) LinkSnapshotLocked(id uint64) (LinkSnapshot, bool) {
-	link, present := w.links.Get(id)
+	link, present := w.links[id]
 	if w.closed || !present || link == nil {
 		return LinkSnapshot{}, false
 	}

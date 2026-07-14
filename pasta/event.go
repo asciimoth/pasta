@@ -145,22 +145,22 @@ func (w *Workspace) deliverEvent(event Event) {
 		return
 	}
 
-	sender, present := w.nodes.Get(event.SenderNode)
+	sender, present := w.nodes[event.SenderNode]
 	if !present || sender == nil {
 		return
 	}
 
-	receiver, present := w.nodes.Get(event.ReceiverNode)
+	receiver, present := w.nodes[event.ReceiverNode]
 	if !present || receiver == nil {
 		return
 	}
 
-	senderPort, present := w.ports.Get(event.SenderPort)
+	senderPort, present := w.ports[event.SenderPort]
 	if !present || senderPort == nil || senderPort.Node != sender.ID {
 		return
 	}
 
-	receiverPort, present := w.ports.Get(event.ReceiverPort)
+	receiverPort, present := w.ports[event.ReceiverPort]
 	if !present || receiverPort == nil || receiverPort.Node != receiver.ID {
 		return
 	}

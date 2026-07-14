@@ -596,6 +596,7 @@ func TestWorkspaceClassWideNodeOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NodesByClass: %v", err)
 	}
+	slices.Sort(got)
 	if want := []uint64{nodeAID, nodeCID, placeholderID}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("NodesByClass = %v, want %v", got, want)
 	}

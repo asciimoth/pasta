@@ -5,7 +5,7 @@ lifecycle callbacks, persistence, notifications, resources, and bounded undo/red
 The `pasta/std/` package provides reusable node classes and type implementations.
 
 ## High-Level Model
-`Workspace` is the aggregate root. It owns ordered maps of:
+`Workspace` is the aggregate root. It owns maps of:
 
 - node records, keyed by workspace-scoped `uint64` IDs
 - ports, keyed by ID
