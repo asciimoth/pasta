@@ -326,6 +326,10 @@ func (w *Workspace) RemoveNode(id uint64) {
 
 // RemoveNodeLocked is RemoveNode for callers that already hold the workspace lock.
 func (w *Workspace) RemoveNodeLocked(id uint64) {
+	w.removeNodeLocked(id, true)
+}
+
+func (w *Workspace) removeNodeLocked(id uint64, notify bool) {
 	if id < 1 {
 		return
 	}
@@ -341,7 +345,10 @@ func (w *Workspace) RemoveNodeLocked(id uint64) {
 	if record, present = w.nodes[id]; !present || record == nil {
 		return
 	}
-	removedEntry := w.undoRemovedNodeEntry(id, record)
+	var removedEntry undoEntry
+	if w.undoRecordingDisabled == 0 {
+		removedEntry = w.undoRemovedNodeEntry(id, record)
+	}
 	delete(w.nodes, id)
 	removed := nodeSnapshot(record)
 	record.OnStop()
@@ -349,7 +356,7 @@ func (w *Workspace) RemoveNodeLocked(id uint64) {
 
 	w.undoRecordingDisabled += 1
 	for port := range record.Ports() {
-		w.RemovePortLocked(port)
+		w.removePortLocked(port, notify)
 	}
 	w.undoRecordingDisabled -= 1
 	record.LeftPorts = nil
@@ -357,8 +364,66 @@ func (w *Workspace) RemoveNodeLocked(id uint64) {
 	w.closeNodeResourcesLocked(id)
 
 	w.log.Debug("removed node", id)
-	w.enqueueNodeNotification(NotificationNodeRemoved, id, removed)
+	if notify {
+		w.enqueueNodeNotification(NotificationNodeRemoved, id, removed)
+	}
 	w.pushUndoEntry(removedEntry)
+}
+
+// RemoveNodes removes every existing node in ids and ignores missing or
+// invalid node IDs.
+//
+// Observers receive at most one batch notification for removed nodes. Attached
+// ports and links are removed as part of the same batch notification.
+func (w *Workspace) RemoveNodes(ids []uint64) error {
+	w.Lock()
+	defer w.Unlock()
+	return w.RemoveNodesLocked(ids)
+}
+
+// RemoveNodesLocked is RemoveNodes for callers that already hold the workspace lock.
+func (w *Workspace) RemoveNodesLocked(ids []uint64) error {
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	seen := make(map[uint64]struct{}, len(ids))
+	existing := make([]uint64, 0, len(ids))
+	removed := make(map[uint64]NodeSnapshot)
+	undoEntries := make([]undoEntry, 0, len(ids))
+	for _, id := range ids {
+		if id < 1 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		record, present := w.nodes[id]
+		if !present || record == nil {
+			continue
+		}
+		existing = append(existing, id)
+		removed[id] = nodeSnapshot(record)
+		if entry := w.undoRemovedNodeEntry(id, record); entry != nil {
+			undoEntries = append(undoEntries, entry)
+		}
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+
+	w.undoRecordingDisabled += 1
+	for _, id := range existing {
+		w.removeNodeLocked(id, false)
+	}
+	w.undoRecordingDisabled -= 1
+	w.pushUndoEntry(groupUndoEntries(undoEntries))
+	w.enqueueNodesNotification(NotificationNodesRemoved, removed, w.snapshotLocked())
+	return nil
 }
 
 func (w *Workspace) failNodeLocked(id uint64, callback string, cause error, notify bool, recompute bool) bool {
@@ -492,6 +557,10 @@ func (w *Workspace) RemovePort(id uint64) {
 
 // RemovePortLocked is RemovePort for callers that already hold the workspace lock.
 func (w *Workspace) RemovePortLocked(id uint64) {
+	w.removePortLocked(id, true)
+}
+
+func (w *Workspace) removePortLocked(id uint64, notify bool) {
 	if id < 1 {
 		return
 	}
@@ -514,16 +583,18 @@ func (w *Workspace) RemovePortLocked(id uint64) {
 	port.Links = make([]uint64, 0)
 	w.undoRecordingDisabled += 1
 	for _, link := range links {
-		w.RemoveLinkLocked(link)
+		w.removeLinkLocked(link, notify)
 	}
 	w.undoRecordingDisabled -= 1
 
-	w.nodeEvPortRemoved(port.Node, id, port.Direction)
+	w.nodeEvPortRemoved(port.Node, id, port.Direction, notify)
 
 	w.log.Debug("removed port", id)
-	w.enqueuePortNotification(NotificationPortRemoved, id, removed)
-	if record, present := w.nodes[port.Node]; present && record != nil {
-		w.enqueueNodeNotification(NotificationNodeUpdated, port.Node, nodeSnapshot(record))
+	if notify {
+		w.enqueuePortNotification(NotificationPortRemoved, id, removed)
+		if record, present := w.nodes[port.Node]; present && record != nil {
+			w.enqueueNodeNotification(NotificationNodeUpdated, port.Node, nodeSnapshot(record))
+		}
 	}
 }
 
@@ -536,6 +607,10 @@ func (w *Workspace) RemoveLink(id uint64) {
 
 // RemoveLinkLocked is RemoveLink for callers that already hold the workspace lock.
 func (w *Workspace) RemoveLinkLocked(id uint64) {
+	w.removeLinkLocked(id, true)
+}
+
+func (w *Workspace) removeLinkLocked(id uint64, notify bool) {
 	if id < 1 {
 		return
 	}
@@ -559,25 +634,31 @@ func (w *Workspace) RemoveLinkLocked(id uint64) {
 		RightIndex: linkIndex(w, link.RightPort, id),
 	}
 	removed := linkSnapshot(link)
-	w.enqueueLinkNotification(NotificationLinkRemoved, id, removed)
+	if notify {
+		w.enqueueLinkNotification(NotificationLinkRemoved, id, removed)
+	}
 
 	port, present := w.ports[link.LeftPort]
 	if present {
 		port.RemoveLink(id)
-		w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
+		if notify {
+			w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
+		}
 	}
 	port, present = w.ports[link.RightPort]
 	if present {
 		port.RemoveLink(id)
-		w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
+		if notify {
+			w.enqueuePortNotification(NotificationPortUpdated, port.ID, portSnapshot(port))
+		}
 	}
 
-	w.nodeEvLinkRemoved(link.LeftPortNode, id, link.LeftPort, link.Type, "left")
-	w.nodeEvLinkRemoved(link.RightPortNode, id, link.RightPort, link.Type, "right")
+	w.nodeEvLinkRemoved(link.LeftPortNode, id, link.LeftPort, link.Type, "left", notify)
+	w.nodeEvLinkRemoved(link.RightPortNode, id, link.RightPort, link.Type, "right", notify)
 	w.closeLinkResourcesLocked(id)
 
 	w.log.Debug("removed link", id)
-	w.recomputeRootPaths(true)
+	w.recomputeRootPaths(notify)
 	w.pushUndoEntry(removedEntry)
 }
 
@@ -1375,7 +1456,7 @@ func (w *Workspace) AddLinkLocked(pa, pb uint64) (uint64, string, error) {
 			delete(w.links, link.ID)
 			w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
 			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
-			w.nodeEvLinkRemoved(leftNode.ID, link.ID, Left.ID, link.Type, Left.Direction)
+			w.nodeEvLinkRemoved(leftNode.ID, link.ID, Left.ID, link.Type, Left.Direction, true)
 			w.closeLinkResourcesLocked(link.ID)
 			return 0, "", err
 		}
@@ -1606,6 +1687,59 @@ func (w *Workspace) SetNodePositionLocked(id uint64, position string) error {
 	w.pushUndoEntry(undoNodePosition{ID: id, Before: before, After: position})
 	w.enqueueNodeNotification(NotificationNodeUpdated, id, nodeSnapshot(record))
 	return nil
+}
+
+// SetNodePositions sets opaque frontend position strings for existing nodes.
+//
+// Missing, duplicate, and invalid node IDs are ignored by virtue of the input
+// map. Observers receive at most one batch notification for changed nodes.
+func (w *Workspace) SetNodePositions(positions map[uint64]string) error {
+	w.Lock()
+	defer w.Unlock()
+	return w.SetNodePositionsLocked(positions)
+}
+
+// SetNodePositionsLocked is SetNodePositions for callers that already hold the workspace lock.
+func (w *Workspace) SetNodePositionsLocked(positions map[uint64]string) error {
+	if w.closed {
+		return ErrWorkspaceClosed
+	}
+	if len(positions) == 0 {
+		return nil
+	}
+
+	updated := make(map[uint64]NodeSnapshot)
+	undoEntries := make([]undoEntry, 0, len(positions))
+	for id, position := range positions {
+		if id < 1 {
+			continue
+		}
+		record, present := w.nodes[id]
+		if !present || record == nil || record.Position == position {
+			continue
+		}
+		before := record.Position
+		record.Position = position
+		updated[id] = nodeSnapshot(record)
+		undoEntries = append(undoEntries, undoNodePosition{ID: id, Before: before, After: position})
+	}
+	if len(updated) == 0 {
+		return nil
+	}
+
+	w.pushUndoEntry(groupUndoEntries(undoEntries))
+	w.enqueueNodesNotification(NotificationNodesUpdated, updated, w.snapshotLocked())
+	return nil
+}
+
+// MoveNodes is an alias for SetNodePositions.
+func (w *Workspace) MoveNodes(positions map[uint64]string) error {
+	return w.SetNodePositions(positions)
+}
+
+// MoveNodesLocked is MoveNodes for callers that already hold the workspace lock.
+func (w *Workspace) MoveNodesLocked(positions map[uint64]string) error {
+	return w.SetNodePositionsLocked(positions)
 }
 
 // SetNodeName sets a node's unique name.
@@ -2689,10 +2823,10 @@ func (w *Workspace) deactivateNodeLinks(record *nodeRecord) {
 			continue
 		}
 		if link.LeftPortNode != record.ID {
-			w.nodeEvLinkRemoved(link.LeftPortNode, link.ID, link.LeftPort, link.Type, "left")
+			w.nodeEvLinkRemoved(link.LeftPortNode, link.ID, link.LeftPort, link.Type, "left", true)
 		}
 		if link.RightPortNode != record.ID {
-			w.nodeEvLinkRemoved(link.RightPortNode, link.ID, link.RightPort, link.Type, "right")
+			w.nodeEvLinkRemoved(link.RightPortNode, link.ID, link.RightPort, link.Type, "right", true)
 		}
 	}
 }
@@ -2748,7 +2882,7 @@ func (w *Workspace) notifyActivatedPlaceholderLinks(record *nodeRecord) map[uint
 		if err := rightNode.OnLinkAdd(link.ID, link.RightPort, link.Type, "right"); err != nil {
 			w.log.Debugf("node %d faled in OnLinkAdd", rightNode.ID)
 			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
-			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left")
+			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left", true)
 			failed[rightNode.ID] = err
 			return failed
 		}
@@ -2947,13 +3081,14 @@ func (w *Workspace) nodeEvPortRemoved(
 	nodeID uint64,
 	port uint64,
 	direction string,
+	notify bool,
 ) {
 	record, present := w.nodes[nodeID]
 	if present && record != nil {
 		record.RemovePort(port)
 		if err := record.OnPortRemoved(port, direction); err != nil {
 			w.log.Debugf("node %d faled in OnPortRemoved", nodeID)
-			w.failNodeLocked(nodeID, "OnPortRemoved", err, true, true)
+			w.failNodeLocked(nodeID, "OnPortRemoved", err, notify, true)
 		}
 	}
 }
@@ -2962,12 +3097,13 @@ func (w *Workspace) nodeEvLinkRemoved(
 	nodeID uint64,
 	link, port uint64,
 	linkType, portDirection string,
+	notify bool,
 ) {
 	record, present := w.nodes[nodeID]
 	if present && record != nil {
 		if err := record.OnLinkRemoved(link, port, linkType, portDirection); err != nil {
 			w.log.Debugf("node %d faled in OnLinkRemoved", nodeID)
-			w.failNodeLocked(nodeID, "OnLinkRemoved", err, true, true)
+			w.failNodeLocked(nodeID, "OnLinkRemoved", err, notify, true)
 		}
 	}
 }

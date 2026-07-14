@@ -468,7 +468,7 @@ func (w *Workspace) addClipboardLink(pa, pb uint64, typ string) uint64 {
 		if err := rightNode.OnLinkAdd(link.ID, right.ID, link.Type, right.Direction); err != nil {
 			delete(w.links, link.ID)
 			w.failNodeLocked(rightNode.ID, "OnLinkAdd", err, true, true)
-			w.nodeEvLinkRemoved(leftNode.ID, link.ID, left.ID, link.Type, left.Direction)
+			w.nodeEvLinkRemoved(leftNode.ID, link.ID, left.ID, link.Type, left.Direction, true)
 			return 0
 		}
 	}

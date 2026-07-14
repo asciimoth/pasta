@@ -15,6 +15,12 @@ const (
 	NotificationNodeRemoved NotificationKind = "node_removed"
 	// NotificationNodeUpdated carries the node snapshot after a mutation.
 	NotificationNodeUpdated NotificationKind = "node_updated"
+	// NotificationNodesRemoved carries the last snapshots of removed nodes and
+	// a full workspace snapshot after the batch mutation.
+	NotificationNodesRemoved NotificationKind = "nodes_removed"
+	// NotificationNodesUpdated carries node snapshots after a batch mutation and
+	// a full workspace snapshot after the batch mutation.
+	NotificationNodesUpdated NotificationKind = "nodes_updated"
 
 	// NotificationNodeClassAdded carries the registered class snapshot.
 	NotificationNodeClassAdded NotificationKind = "node_class_added"
@@ -50,8 +56,9 @@ const (
 
 // WorkspaceNotification describes one observable workspace state change.
 //
-// Snapshot is set for NotificationWorkspaceSnapshot. NodeClass, Node, Port,
-// Link, or Worker is set for matching node-class/node/port/link/worker
+// Snapshot is set for NotificationWorkspaceSnapshot and batch node
+// notifications. NodeClass, Node, Port, Link, or Worker is set for matching
+// node-class/node/port/link/worker notifications. Nodes is set for batch node
 // notifications. Formular is set for NotificationNodeMenu. Removed, stopped,
 // and failed notifications carry the last snapshot of the removed entity.
 type WorkspaceNotification struct {
@@ -62,12 +69,13 @@ type WorkspaceNotification struct {
 
 	ClassName string `json:"class_name,omitempty"`
 
-	Snapshot  *WorkspaceSnapshot `json:"snapshot,omitempty"`
-	NodeClass *NodeClassSnapshot `json:"node_class,omitempty"`
-	Node      *NodeSnapshot      `json:"node,omitempty"`
-	Port      *PortSnapshot      `json:"port,omitempty"`
-	Link      *LinkSnapshot      `json:"link,omitempty"`
-	Formular  any                `json:"formular,omitempty"`
+	Snapshot  *WorkspaceSnapshot      `json:"snapshot,omitempty"`
+	NodeClass *NodeClassSnapshot      `json:"node_class,omitempty"`
+	Node      *NodeSnapshot           `json:"node,omitempty"`
+	Nodes     map[uint64]NodeSnapshot `json:"nodes,omitempty"`
+	Port      *PortSnapshot           `json:"port,omitempty"`
+	Link      *LinkSnapshot           `json:"link,omitempty"`
+	Formular  any                     `json:"formular,omitempty"`
 
 	snapshotRequest bool
 }
@@ -196,6 +204,14 @@ func (w *Workspace) enqueueNodeNotification(kind NotificationKind, id uint64, no
 		Kind: kind,
 		ID:   id,
 		Node: &node,
+	})
+}
+
+func (w *Workspace) enqueueNodesNotification(kind NotificationKind, nodes map[uint64]NodeSnapshot, snapshot WorkspaceSnapshot) {
+	w.enqueueNotification(WorkspaceNotification{
+		Kind:     kind,
+		Nodes:    nodes,
+		Snapshot: &snapshot,
 	})
 }
 

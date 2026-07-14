@@ -136,6 +136,27 @@ func (w *Workspace) pushUndoEntry(entry undoEntry) {
 	w.redoLog = w.redoLog[:0]
 }
 
+func groupUndoEntries(entries []undoEntry) undoEntry {
+	entries = compactUndoEntries(entries)
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) == 1 {
+		return entries[0]
+	}
+	return undoGroup{Entries: entries}
+}
+
+func compactUndoEntries(entries []undoEntry) []undoEntry {
+	out := entries[:0]
+	for _, entry := range entries {
+		if entry != nil {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
 func appendLimitedUndo(log []undoEntry, entry undoEntry) []undoEntry {
 	if entry == nil {
 		return log
@@ -463,7 +484,7 @@ func (w *Workspace) restoreUndoLink(entry undoRemovedLink) bool {
 		}
 		if err := rightNode.OnLinkAdd(link.ID, link.RightPort, link.Type, "right"); err != nil {
 			delete(w.links, link.ID)
-			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left")
+			w.nodeEvLinkRemoved(leftNode.ID, link.ID, link.LeftPort, link.Type, "left", true)
 			return false
 		}
 	}

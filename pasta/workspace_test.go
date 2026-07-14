@@ -392,6 +392,136 @@ func TestWorkspaceAddRemoveNodesPortsLinksLogs(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRemoveNodesIgnoresMissingIDsAndNotifiesOnce(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeA, nodeB, left, right := addLinkedPairNodes(t, w, &workspaceNode{}, &workspaceNode{})
+	nodeC, err := w.AddNode(&workspaceNode{}, "example.com/NodeC")
+	if err != nil {
+		t.Fatalf("AddNode C: %v", err)
+	}
+	link, _, err := w.AddLink(left, right)
+	if err != nil {
+		t.Fatalf("AddLink: %v", err)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	if err := w.RemoveNodes([]uint64{0, 999, nodeA, nodeB, nodeA}); err != nil {
+		t.Fatalf("RemoveNodes: %v", err)
+	}
+	wantSnapshot := pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeC: {Class: "example.com/NodeC"},
+		},
+	}
+	assertWorkspaceSnapshot(t, w, wantSnapshot)
+	if len(notifications) != 1 {
+		t.Fatalf("notifications = %#v, want one batch notification", notifications)
+	}
+	notification := notifications[0]
+	if notification.Kind != pasta.NotificationNodesRemoved {
+		t.Fatalf("notification kind = %q, want %q", notification.Kind, pasta.NotificationNodesRemoved)
+	}
+	if notification.Snapshot == nil || !equalWorkspaceSnapshot(*notification.Snapshot, wantSnapshot) {
+		t.Fatalf("batch snapshot = %#v, want %#v", notification.Snapshot, wantSnapshot)
+	}
+	if len(notification.Nodes) != 2 {
+		t.Fatalf("removed nodes = %#v, want two removed node snapshots", notification.Nodes)
+	}
+	if got := notification.Nodes[nodeA]; len(got.LeftPorts) != 1 {
+		t.Fatalf("removed node A snapshot = %#v, want last snapshot with left port", got)
+	}
+	if got := notification.Nodes[nodeB]; len(got.RightPorts) != 1 {
+		t.Fatalf("removed node B snapshot = %#v, want last snapshot with right port", got)
+	}
+
+	notifications = nil
+	w.Undo()
+	if !w.PortsConnected(left, right) {
+		t.Fatal("batch remove undo did not restore removed link")
+	}
+	if _, ok := w.LinkSnapshot(link); !ok {
+		t.Fatalf("LinkSnapshot(%d) missing after undo", link)
+	}
+	w.Redo()
+	assertWorkspaceSnapshot(t, w, wantSnapshot)
+}
+
+func TestWorkspaceSetNodePositionsIgnoresMissingIDsAndNotifiesOnce(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	nodeA, err := w.AddNode(&workspaceNode{}, "example.com/NodeA")
+	if err != nil {
+		t.Fatalf("AddNode A: %v", err)
+	}
+	nodeB, err := w.AddNode(&workspaceNode{}, "example.com/NodeB")
+	if err != nil {
+		t.Fatalf("AddNode B: %v", err)
+	}
+	nodeC, err := w.AddNode(&workspaceNode{}, "example.com/NodeC")
+	if err != nil {
+		t.Fatalf("AddNode C: %v", err)
+	}
+
+	var notifications []pasta.WorkspaceNotification
+	w.SubscribeNotifications(func(notification pasta.WorkspaceNotification) {
+		notifications = append(notifications, notification)
+	})
+	notifications = nil
+
+	if err := w.SetNodePositions(map[uint64]string{
+		0:     "ignored",
+		999:   "ignored",
+		nodeA: "10 20",
+		nodeB: "30 40",
+		nodeC: "",
+	}); err != nil {
+		t.Fatalf("SetNodePositions: %v", err)
+	}
+	wantSnapshot := pasta.WorkspaceSnapshot{
+		Nodes: map[uint64]pasta.NodeSnapshot{
+			nodeA: {Class: "example.com/NodeA", Position: "10 20"},
+			nodeB: {Class: "example.com/NodeB", Position: "30 40"},
+			nodeC: {Class: "example.com/NodeC"},
+		},
+	}
+	assertWorkspaceSnapshot(t, w, wantSnapshot)
+	if len(notifications) != 1 {
+		t.Fatalf("notifications = %#v, want one batch notification", notifications)
+	}
+	notification := notifications[0]
+	if notification.Kind != pasta.NotificationNodesUpdated {
+		t.Fatalf("notification kind = %q, want %q", notification.Kind, pasta.NotificationNodesUpdated)
+	}
+	if notification.Snapshot == nil || !equalWorkspaceSnapshot(*notification.Snapshot, wantSnapshot) {
+		t.Fatalf("batch snapshot = %#v, want %#v", notification.Snapshot, wantSnapshot)
+	}
+	if len(notification.Nodes) != 2 {
+		t.Fatalf("updated nodes = %#v, want two updated node snapshots", notification.Nodes)
+	}
+	if notification.Nodes[nodeA].Position != "10 20" || notification.Nodes[nodeB].Position != "30 40" {
+		t.Fatalf("updated node positions = %#v", notification.Nodes)
+	}
+
+	w.Undo()
+	if got := w.Snapshot(); got.Nodes[nodeA].Position != "" || got.Nodes[nodeB].Position != "" {
+		t.Fatalf("positions after batch undo = %#v, want empty positions", got.Nodes)
+	}
+	w.Redo()
+	assertWorkspaceSnapshot(t, w, wantSnapshot)
+
+	notifications = nil
+	if err := w.MoveNodes(map[uint64]string{nodeA: "50 60"}); err != nil {
+		t.Fatalf("MoveNodes: %v", err)
+	}
+	if len(notifications) != 1 || notifications[0].Kind != pasta.NotificationNodesUpdated {
+		t.Fatalf("MoveNodes notifications = %#v, want one nodes_updated notification", notifications)
+	}
+}
+
 func TestWorkspaceRejectsInvalidNodeAndPortOperations(t *testing.T) {
 	w := pasta.NewWorkspace(&StringLoggerFactory{})
 	node := &workspaceNode{}
@@ -3112,6 +3242,12 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	if err := w.SetNodeLabel(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeLabel after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
+	if err := w.SetNodePosition(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePosition after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.SetNodePositions(map[uint64]string{nodeAID: "closed"}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("SetNodePositions after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
 	if err := w.SetNodeName(nodeAID, "closed"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetNodeName after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
@@ -3141,6 +3277,9 @@ func TestWorkspaceCloseStopsNodesNotifiesAndRejectsOperations(t *testing.T) {
 	}
 	if err := w.SetPortName(portA, "input"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("SetPortName after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
+	}
+	if err := w.RemoveNodes([]uint64{nodeAID}); !errors.Is(err, pasta.ErrWorkspaceClosed) {
+		t.Fatalf("RemoveNodes after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
 	}
 	if err := w.RemoveNodesByClass("example.com/NodeA"); !errors.Is(err, pasta.ErrWorkspaceClosed) {
 		t.Fatalf("RemoveNodesByClass after Close error = %v, want %v", err, pasta.ErrWorkspaceClosed)
