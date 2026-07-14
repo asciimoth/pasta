@@ -110,6 +110,9 @@ func (n *gatewayNode) OnStop() {
 }
 
 func (n *gatewayNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
+	if linkType == TypeLoop {
+		return pasta.LinkTypeErr(linkType)
+	}
 	switch port {
 	case n.trigger:
 		if portDirection != "left" || linkType != TypeTrigger {

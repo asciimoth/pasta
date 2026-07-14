@@ -286,6 +286,7 @@ const initialConfig = `{
 		"Class": "pasta/ObjectPacker",
 		"Pos":   "{\"x\":2115,\"y\":520}",
 		"Links": [
+			"output -> [ObjectLength] input",
 			"output -> [ObjectUnpack] input",
 			"output -> [ObjectString] input",
 		],
@@ -381,6 +382,10 @@ const initialConfig = `{
 		"Links": [
 			"output -> [ObjectSummary] JSON",
 		],
+	},
+	"ObjectLength": {
+		"Class": "pasta/Length",
+		"Pos":   "{\"x\":2341,\"y\":733}",
 	},
 	"ObjectSummary": {
 		"Class": "pasta/StringFormat",
@@ -988,6 +993,387 @@ const initialConfig = `{
 				},
 			},
 		],
+	},
+	"Loop Demo Trigger": {
+		"Class": "pasta/Trigger",
+		"Pos":   "{\"x\":3240,\"y\":760}",
+		"Links": [
+			"Trigger -> [For Outer] Trigger",
+			"Trigger -> [While I Init] Trigger",
+		],
+	},
+	"Loop Info Level": {
+		"Class": "pasta/StringConstant",
+		"Pos":   "{\"x\":3240,\"y\":900}",
+		"value": "info",
+		"Links": [
+			"output -> [For Body Popup] Lvl",
+			"output -> [For Done Popup] Lvl",
+			"output -> [While Body Popup] Lvl",
+			"output -> [While Done Popup] Lvl",
+		],
+	},
+	"For Outer Start": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1040}",
+		"value": 0,
+		"Links": [
+			"output -> [For Outer] Start index",
+		],
+	},
+	"For Outer End": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1140}",
+		"value": 3,
+		"Links": [
+			"output -> [For Outer] End index",
+		],
+	},
+	"For Outer Step": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1240}",
+		"value": 1,
+		"Links": [
+			"output -> [For Outer] Step",
+		],
+	},
+	"For Inner Start": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3560,\"y\":1040}",
+		"value": 0,
+		"Links": [
+			"output -> [For Inner] Start index",
+		],
+	},
+	"For Inner End": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3560,\"y\":1140}",
+		"value": 2,
+		"Links": [
+			"output -> [For Inner] End index",
+		],
+	},
+	"For Inner Step": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3560,\"y\":1240}",
+		"value": 1,
+		"Links": [
+			"output -> [For Inner] Step",
+		],
+	},
+	"For Outer": {
+		"Class": "pasta/ForLoop",
+		"Pos":   "{\"x\":3480,\"y\":840}",
+		"Links": [
+			"Loop -> [For Outer Iter] Loop",
+			"Body -> [For Inner] Trigger",
+			"Index -> [For Summary] Outer",
+			"Completed -> [For Done Popup] Trigger",
+		],
+	},
+	"For Outer Iter": {
+		"Class": "pasta/Iter",
+		"Pos":   "{\"x\":4260,\"y\":860}",
+	},
+	"For Inner": {
+		"Class": "pasta/ForLoop",
+		"Pos":   "{\"x\":3800,\"y\":960}",
+		"Links": [
+			"Loop -> [For Inner Iter] Loop",
+			"Body -> [For Body Popup] Trigger",
+			"Body -> [For Inner Iter] Continue",
+			"Index -> [For Summary] Inner",
+			"Completed -> [For Outer Iter] Continue",
+		],
+	},
+	"For Inner Iter": {
+		"Class": "pasta/Iter",
+		"Pos":   "{\"x\":4260,\"y\":1040}",
+	},
+	"For Summary": {
+		"Class": "pasta/StringFormat",
+		"Pos":   "{\"x\":4260,\"y\":1220}",
+		"Links": [
+			"output -> [For Body Popup] Text",
+		],
+		"template": [
+			{
+				"id":       "text-1",
+				"template": "text",
+				"values": {
+					"text": "for outer=",
+				},
+			},
+			{
+				"id":       "outer",
+				"template": "value",
+				"values": {
+					"name": "Outer",
+					"type": "pasta/int",
+				},
+			},
+			{
+				"id":       "text-2",
+				"template": "text",
+				"values": {
+					"text": " inner=",
+				},
+			},
+			{
+				"id":       "inner",
+				"template": "value",
+				"values": {
+					"name": "Inner",
+					"type": "pasta/int",
+				},
+			},
+		],
+	},
+	"For Body Popup": {
+		"Class": "pasta/PopUp",
+		"Pos":   "{\"x\":4580,\"y\":1160}",
+	},
+	"For Done Text": {
+		"Class": "pasta/StringConstant",
+		"Pos":   "{\"x\":4260,\"y\":1360}",
+		"value": "nested for loops completed",
+		"Links": [
+			"output -> [For Done Popup] Text",
+		],
+	},
+	"For Done Popup": {
+		"Class": "pasta/PopUp",
+		"Pos":   "{\"x\":4580,\"y\":1360}",
+	},
+	"While Zero": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1540}",
+		"value": 0,
+		"Links": [
+			"output -> [While I Init] Value",
+			"output -> [While J Init] Value",
+		],
+	},
+	"While One": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1660}",
+		"value": 1,
+		"Links": [
+			"output -> [While I Plus One] input 2",
+			"output -> [While J Plus One] input 2",
+		],
+	},
+	"While Outer End": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1780}",
+		"value": 3,
+		"Links": [
+			"output -> [While I Less] input 2",
+		],
+	},
+	"While Inner End": {
+		"Class": "pasta/IntConstant",
+		"Pos":   "{\"x\":3240,\"y\":1900}",
+		"value": 2,
+		"Links": [
+			"output -> [While J Less] input 2",
+		],
+	},
+	"While I Init": {
+		"Class": "pasta/IntSet",
+		"Pos":   "{\"x\":3480,\"y\":1540}",
+		"name":  "demo/while/i",
+		"value": 0,
+		"Links": [
+			"Trigger -> [While Outer] Trigger",
+		],
+	},
+	"While Outer": {
+		"Class": "pasta/WhileLoop",
+		"Pos":   "{\"x\":3800,\"y\":1540}",
+		"Links": [
+			"Loop -> [While Outer Iter] Loop",
+			"Body -> [While I Read] Trigger",
+			"Body -> [While J Init] Trigger",
+			"Completed -> [While Done Popup] Trigger",
+		],
+	},
+	"While Outer Iter": {
+		"Class": "pasta/Iter",
+		"Pos":   "{\"x\":5260,\"y\":1540}",
+	},
+	"While I Read": {
+		"Class": "pasta/IntGet",
+		"Pos":   "{\"x\":4060,\"y\":1480}",
+		"name":  "demo/while/i",
+		"Links": [
+			"Value -> [While Summary] Outer",
+		],
+	},
+	"While J Init": {
+		"Class": "pasta/IntSet",
+		"Pos":   "{\"x\":4060,\"y\":1600}",
+		"name":  "demo/while/j",
+		"value": 0,
+		"Links": [
+			"Trigger -> [While Inner] Trigger",
+		],
+	},
+	"While Inner": {
+		"Class": "pasta/WhileLoop",
+		"Pos":   "{\"x\":4320,\"y\":1660}",
+		"Links": [
+			"Loop -> [While Inner Iter] Loop",
+			"Body -> [While J Get] Trigger",
+			"Completed -> [While I Get] Trigger",
+		],
+	},
+	"While Inner Iter": {
+		"Class": "pasta/Iter",
+		"Pos":   "{\"x\":5260,\"y\":1760}",
+	},
+	"While J Get": {
+		"Class": "pasta/IntGet",
+		"Pos":   "{\"x\":4580,\"y\":1600}",
+		"name":  "demo/while/j",
+		"Links": [
+			"Trigger -> [While Body Popup] Trigger",
+			"Trigger -> [While J Set] Trigger",
+			"Value -> [While J Plus One] input 1",
+			"Value -> [While Summary] Inner",
+		],
+	},
+	"While J Plus One": {
+		"Class":   "pasta/Sum",
+		"Primary": "pasta/int",
+		"Pos":     "{\"x\":4820,\"y\":1600}",
+		"Links": [
+			"output -> [While J Set] Value",
+			"output -> [While J Less] input 1",
+		],
+	},
+	"While J Set": {
+		"Class": "pasta/IntSet",
+		"Pos":   "{\"x\":5060,\"y\":1600}",
+		"name":  "demo/while/j",
+		"value": 0,
+		"Links": [
+			"Trigger -> [While J Route] In",
+		],
+	},
+	"While J Less": {
+		"Class": "pasta/Less",
+		"Pos":   "{\"x\":5060,\"y\":1720}",
+		"Links": [
+			"output -> [While J Route] Selector",
+		],
+	},
+	"While J Route": {
+		"Class":   "pasta/SelectOut",
+		"Primary": "pasta/trigger",
+		"Pos":     "{\"x\":5300,\"y\":1660}",
+		"Links": [
+			"Out 0 -> [While Inner Iter] Break",
+			"Out 1 -> [While Inner Iter] Continue",
+		],
+	},
+	"While I Get": {
+		"Class": "pasta/IntGet",
+		"Pos":   "{\"x\":4580,\"y\":1880}",
+		"name":  "demo/while/i",
+		"Links": [
+			"Trigger -> [While I Set] Trigger",
+			"Value -> [While I Plus One] input 1",
+		],
+	},
+	"While I Plus One": {
+		"Class":   "pasta/Sum",
+		"Primary": "pasta/int",
+		"Pos":     "{\"x\":4820,\"y\":1880}",
+		"Links": [
+			"output -> [While I Set] Value",
+			"output -> [While I Less] input 1",
+		],
+	},
+	"While I Set": {
+		"Class": "pasta/IntSet",
+		"Pos":   "{\"x\":5060,\"y\":1880}",
+		"name":  "demo/while/i",
+		"value": 0,
+		"Links": [
+			"Trigger -> [While I Route] In",
+		],
+	},
+	"While I Less": {
+		"Class": "pasta/Less",
+		"Pos":   "{\"x\":5060,\"y\":2000}",
+		"Links": [
+			"output -> [While I Route] Selector",
+		],
+	},
+	"While I Route": {
+		"Class":   "pasta/SelectOut",
+		"Primary": "pasta/trigger",
+		"Pos":     "{\"x\":5300,\"y\":1940}",
+		"Links": [
+			"Out 0 -> [While Outer Iter] Break",
+			"Out 1 -> [While Outer Iter] Continue",
+		],
+	},
+	"While Summary": {
+		"Class": "pasta/StringFormat",
+		"Pos":   "{\"x\":4820,\"y\":1400}",
+		"Links": [
+			"output -> [While Body Popup] Text",
+		],
+		"template": [
+			{
+				"id":       "text-1",
+				"template": "text",
+				"values": {
+					"text": "while outer=",
+				},
+			},
+			{
+				"id":       "outer",
+				"template": "value",
+				"values": {
+					"name": "Outer",
+					"type": "pasta/int",
+				},
+			},
+			{
+				"id":       "text-2",
+				"template": "text",
+				"values": {
+					"text": " inner=",
+				},
+			},
+			{
+				"id":       "inner",
+				"template": "value",
+				"values": {
+					"name": "Inner",
+					"type": "pasta/int",
+				},
+			},
+		],
+	},
+	"While Body Popup": {
+		"Class": "pasta/PopUp",
+		"Pos":   "{\"x\":5580,\"y\":1460}",
+	},
+	"While Done Text": {
+		"Class": "pasta/StringConstant",
+		"Pos":   "{\"x\":4820,\"y\":2140}",
+		"value": "nested while loops completed",
+		"Links": [
+			"output -> [While Done Popup] Text",
+		],
+	},
+	"While Done Popup": {
+		"Class": "pasta/PopUp",
+		"Pos":   "{\"x\":5580,\"y\":2140}",
 	},
 	"Trigger Gateway": {
 		"Class": "pasta/Gateway",

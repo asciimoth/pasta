@@ -156,6 +156,7 @@ test("maps standard Pasta types to colors and leaves unknown types on the defaul
   assert.equal(typeColor("pasta/string")?.color, "#087d73");
   assert.equal(typeColor("pasta/bool")?.color, "#3b7f3e");
   assert.equal(typeColor("pasta/object")?.color, "#6f5a8f");
+  assert.equal(typeColor("pasta/loop")?.color, "#be123c");
   assert.equal(typeColor("demo.pasta/network")?.color, "#8a5cf6");
   assert.equal(typeColor("any/any"), null);
   assert.equal(linkColor("example.com/custom"), DEFAULT_LINK_COLOR);

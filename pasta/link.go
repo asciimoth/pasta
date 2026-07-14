@@ -16,6 +16,17 @@ var (
 	ErrLinkType = errors.New("unsupported link type")
 )
 
+const (
+	// LoopLinkType is the special Pasta link type used by loop controllers and
+	// iteration terminators.
+	//
+	// Loop links carry control-flow messages in both directions over one link.
+	// They are intentionally excluded from ordinary graph dependency traversal:
+	// a loop link associates one loop node with one iteration node, but it does
+	// not make the value/trigger graph cyclic.
+	LoopLinkType = "pasta/loop"
+)
+
 func LinkTypeErr(typ string) error {
 	return fmt.Errorf("%w %s", ErrLinkType, typ)
 }

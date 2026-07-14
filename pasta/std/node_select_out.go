@@ -109,6 +109,9 @@ func (n *selectOutNode) OnReady() error {
 }
 
 func (n *selectOutNode) PreLinkAdd(port uint64, linkType, portDirection string) error {
+	if linkType == TypeLoop {
+		return pasta.LinkTypeErr(linkType)
+	}
 	if portDirection == "left" && (port == n.selectorPort || linkType != TypeTrigger) {
 		snapshot, ok := n.w.PortSnapshotLocked(port)
 		if ok && len(snapshot.Links) > 0 {

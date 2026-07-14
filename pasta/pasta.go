@@ -1978,6 +1978,9 @@ func (w *Workspace) verifyDAG() bool {
 		if link == nil {
 			continue
 		}
+		if link.Type == LoopLinkType {
+			continue
+		}
 		if link.LeftPortNode == link.RightPortNode {
 			return false
 		}
@@ -2043,6 +2046,9 @@ func (w *Workspace) recomputeRootPaths(notify bool) map[uint64]error {
 	for pair := w.links.Oldest(); pair != nil; pair = pair.Next() {
 		link := pair.Value
 		if link == nil {
+			continue
+		}
+		if link.Type == LoopLinkType {
 			continue
 		}
 		if link.Placeholder {
@@ -2468,6 +2474,9 @@ func (w *Workspace) removeIncompatiblePlaceholderPortLinks(port *Port) {
 }
 
 func portsSupportLinkType(portA, portB *Port, linkType string) bool {
+	if linkType == LoopLinkType {
+		return slices.Contains(portA.Types, LoopLinkType) && slices.Contains(portB.Types, LoopLinkType)
+	}
 	if linkType == AnyType {
 		return slices.Contains(portA.Types, AnyType) || slices.Contains(portB.Types, AnyType)
 	}
@@ -2853,36 +2862,59 @@ func runPendingOps(ops []func()) {
 
 func (w *Workspace) portsSharedType(portA, portB *Port) string {
 	// Each port must always had at least one type
-	portAAny := slices.Contains(portA.Types, AnyType)
-	portBAny := slices.Contains(portB.Types, AnyType)
+	portALoop := slices.Contains(portA.Types, LoopLinkType)
+	portBLoop := slices.Contains(portB.Types, LoopLinkType)
+	if portALoop && portBLoop {
+		return LoopLinkType
+	}
+	portATypes := typesWithoutLoopLink(portA.Types)
+	portBTypes := typesWithoutLoopLink(portB.Types)
+	if len(portATypes) == 0 || len(portBTypes) == 0 {
+		return ""
+	}
+	portAAny := slices.Contains(portATypes, AnyType)
+	portBAny := slices.Contains(portBTypes, AnyType)
 	if portAAny && portBAny {
 		return AnyType
 	}
 	if portAAny {
-		if len(portB.Types) == 1 {
-			return portB.Types[0]
+		if len(portBTypes) == 1 {
+			return portBTypes[0]
 		}
 		return AnyType
 	}
 	if portBAny {
-		if len(portA.Types) == 1 {
-			return portA.Types[0]
+		if len(portATypes) == 1 {
+			return portATypes[0]
 		}
 		return AnyType
 	}
-	if len(portA.Types) > 1 {
-		if len(portB.Types) > 1 {
+	if len(portATypes) > 1 {
+		if len(portBTypes) > 1 {
 			return ""
 		}
-		if slices.Contains(portA.Types, portB.Types[0]) {
-			return portB.Types[0]
+		if slices.Contains(portATypes, portBTypes[0]) {
+			return portBTypes[0]
 		}
 	} else {
-		if slices.Contains(portB.Types, portA.Types[0]) {
-			return portA.Types[0]
+		if slices.Contains(portBTypes, portATypes[0]) {
+			return portATypes[0]
 		}
 	}
 	return ""
+}
+
+func typesWithoutLoopLink(types []string) []string {
+	if !slices.Contains(types, LoopLinkType) {
+		return types
+	}
+	filtered := make([]string, 0, len(types)-1)
+	for _, typ := range types {
+		if typ != LoopLinkType {
+			filtered = append(filtered, typ)
+		}
+	}
+	return filtered
 }
 
 func (w *Workspace) portsConnected(portA, portB *Port) bool {

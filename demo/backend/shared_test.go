@@ -39,10 +39,10 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 	}
 	defer w.Close()
 	snapshot := w.Snapshot()
-	if got, want := len(snapshot.Nodes), 70; got != want {
+	if got, want := len(snapshot.Nodes), 112; got != want {
 		t.Fatalf("nodes = %d, want %d", got, want)
 	}
-	if got, want := len(snapshot.Links), 101; got != want {
+	if got, want := len(snapshot.Links), 161; got != want {
 		t.Errorf("links = %d, want %d", got, want)
 	}
 	classesInGraph := map[string]bool{}
@@ -88,6 +88,7 @@ func TestInitialConfigRestoresWorkspace(t *testing.T) {
 		"TextLength:output -> Summary:Length",
 		"ObjectBase:output -> ObjectPack:Base",
 		"SelectedText:Out -> ObjectPack:In Selected Tag",
+		"ObjectPack:output -> ObjectLength:input",
 		"ObjectPack:output -> ObjectUnpack:input",
 		"ObjectUnpack:Out Name -> ObjectSummary:Name",
 		"ObjectString:output -> ObjectSummary:JSON",

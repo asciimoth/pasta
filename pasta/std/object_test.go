@@ -9,6 +9,7 @@ import (
 	"github.com/asciimoth/configer/configer"
 	"github.com/asciimoth/formular"
 	"github.com/asciimoth/pasta/pasta"
+	"github.com/asciimoth/persist"
 )
 
 func TestStdObjectConstantMenuSaveRestoreAndInvalidJSON(t *testing.T) {
@@ -438,6 +439,110 @@ func TestStdObjectToStringFormatsAndOmitsEmptyValues(t *testing.T) {
 	}
 }
 
+func TestStdLengthMeasuresObjectsVectorsStringsAndFallbacks(t *testing.T) {
+	w := newStdWorkspace(t)
+	object := addByClass(t, w, NodeTypeObjectConstant, "object")
+	length := addByClass(t, w, NodeTypeLength, "length")
+	sum := addByClass(t, w, NodeTypeSum, "sum")
+	one := addByClass(t, w, NodeTypeIntConstant, "one")
+	setConstant(t, w, one, 1)
+
+	objectLink := linkByPortName(t, w, object, "output", length, "input")
+	valueLink := linkByPortName(t, w, length, "output", sum, "input 1")
+	linkByPortName(t, w, one, "output", sum, "input 2")
+
+	assertLengthNode(t, w, length, sum, "0", "1")
+	assertMenuValue(t, w, length, 0, true)
+
+	setObjectConstant(t, w, object, `{"name":"Ada","score":7,"active":true}`)
+	assertLengthNode(t, w, length, sum, "3", "4")
+	assertMenuValue(t, w, length, 3, true)
+
+	setObjectConstant(t, w, object, `["a","b","c","d"]`)
+	assertLengthNode(t, w, length, sum, "4", "5")
+
+	w.EmitEvent(object, objectLink, map[string]any{"a": 1, "b": 2})
+	assertLengthNode(t, w, length, sum, "2", "3")
+
+	w.EmitEvent(object, objectLink, []any{"a", "b", "c"})
+	assertLengthNode(t, w, length, sum, "3", "4")
+
+	w.EmitEvent(object, objectLink, persist.String("hello"))
+	assertLengthNode(t, w, length, sum, "5", "6")
+
+	w.EmitEvent(object, objectLink, String("pasta"))
+	assertLengthNode(t, w, length, sum, "5", "6")
+
+	w.EmitEvent(object, objectLink, persist.Int(42))
+	assertLengthNode(t, w, length, sum, "0", "1")
+
+	w.EmitEvent(sum, valueLink, RequestValue{})
+	assertLengthNode(t, w, length, sum, "0", "1")
+
+	w.EmitEvent(object, objectLink, persist.String("abcdef"))
+	assertLengthNode(t, w, length, sum, "6", "7")
+
+	w.RemoveLink(objectLink)
+	assertLengthNode(t, w, length, sum, "0", "1")
+}
+
+func TestStdLengthPortsDuplicationRestoreAndPaste(t *testing.T) {
+	w := newStdWorkspace(t)
+	object := addByClass(t, w, NodeTypeObjectConstant, "object")
+	other := addByClass(t, w, NodeTypeObjectConstant, "other")
+	length := addByClass(t, w, NodeTypeLength, "length")
+	setObjectConstant(t, w, object, `{"a":1,"b":2}`)
+	setObjectConstant(t, w, other, `{"c":3}`)
+
+	assertLeftPortNames(t, w, length, []string{"input"})
+	assertRightPortNames(t, w, length, []string{"output"})
+	snapshot := w.Snapshot()
+	if got := snapshot.Nodes[length].PrimaryType; got != TypeInt {
+		t.Fatalf("Length primary type = %q, want %q", got, TypeInt)
+	}
+	if got := snapshot.Ports[portByName(t, snapshot, length, "left", "input")].Types; !reflect.DeepEqual(got, []string{TypeObject}) {
+		t.Fatalf("Length input types = %#v, want pasta/object", got)
+	}
+	if got := snapshot.Ports[portByName(t, snapshot, length, "right", "output")].Types; !reflect.DeepEqual(got, []string{TypeInt}) {
+		t.Fatalf("Length output types = %#v, want pasta/int", got)
+	}
+
+	linkByPortName(t, w, object, "output", length, "input")
+	assertNodeLabel(t, w, length, "2")
+	_, _, err := w.AddLink(
+		portByName(t, w.Snapshot(), other, "right", "output"),
+		portByName(t, w.Snapshot(), length, "left", "input"),
+	)
+	if !errors.Is(err, pasta.ErrLinkDup) {
+		t.Fatalf("second Length input link error = %v, want %v", err, pasta.ErrLinkDup)
+	}
+
+	cfg := configer.NewMemory(nil)
+	if err := w.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig Length graph: %v", err)
+	}
+	restored, err := pasta.WorkspaceFromConfig(allStdClasses(), cfg, testLogFactory{})
+	if err != nil {
+		t.Fatalf("WorkspaceFromConfig Length graph: %v", err)
+	}
+	restoredLength, ok := restored.NodeIDByName("length")
+	if !ok {
+		t.Fatal("restored Length node missing")
+	}
+	assertLeftPortNames(t, restored, restoredLength, []string{"input"})
+	assertRightPortNames(t, restored, restoredLength, []string{"output"})
+	assertNodeLabel(t, restored, restoredLength, "2")
+
+	pasted := w.Paste(w.Copy([]uint64{object, length}))
+	if len(pasted) != 2 {
+		t.Fatalf("Paste Length graph returned %v, want two nodes", pasted)
+	}
+	pastedLength := pastedNodeByClass(t, w, pasted, NodeTypeLength)
+	assertLeftPortNames(t, w, pastedLength, []string{"input"})
+	assertRightPortNames(t, w, pastedLength, []string{"output"})
+	assertNodeLabel(t, w, pastedLength, "2")
+}
+
 type objectPackerFieldSpec struct {
 	id        string
 	name      string
@@ -630,6 +735,12 @@ func objectStringResult(t *testing.T, w *pasta.Workspace, node uint64) string {
 	}
 	t.Fatalf("missing ObjectToString result field in %#v", snapshot)
 	return ""
+}
+
+func assertLengthNode(t *testing.T, w *pasta.Workspace, length, downstream uint64, wantLength, wantDownstream string) {
+	t.Helper()
+	assertNodeLabel(t, w, length, wantLength)
+	assertNodeLabel(t, w, downstream, wantDownstream)
 }
 
 func assertObjectStringContains(t *testing.T, w *pasta.Workspace, node uint64, wants ...string) {

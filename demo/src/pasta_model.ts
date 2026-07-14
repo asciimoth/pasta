@@ -79,6 +79,7 @@ export const STD_TYPE_COLORS: Record<string, TypeColor> = {
   "pasta/string": { color: "#087d73", textColor: "#ffffff" },
   "pasta/bool": { color: "#3b7f3e", textColor: "#ffffff" },
   "pasta/object": { color: "#6f5a8f", textColor: "#ffffff" },
+  "pasta/loop": { color: "#be123c", textColor: "#ffffff" },
   "demo.pasta/network": { color: "#8a5cf6", textColor: "#ffffff" },
 };
 
