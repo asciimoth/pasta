@@ -1673,9 +1673,8 @@ func TestWorkspaceNodeNamesAreUniqueAndObservable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode generic: %v", err)
 	}
-	if got := w.Snapshot().Nodes[nodeA].Name; got != "CalcDiv 1" {
-		t.Fatalf("generic node name = %q, want %q", got, "CalcDiv 1")
-	}
+	nodeAName := w.Snapshot().Nodes[nodeA].Name
+	assertGeneratedNodeName(t, nodeAName, "CalcDiv")
 
 	nodeB, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv", "custom []")
 	if !errors.Is(err, pasta.ErrNodeName) {
@@ -1695,7 +1694,7 @@ func TestWorkspaceNodeNamesAreUniqueAndObservable(t *testing.T) {
 	if _, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv", "custom name"); !errors.Is(err, pasta.ErrNodeNameDup) {
 		t.Fatalf("AddNode duplicate name error = %v, want %v", err, pasta.ErrNodeNameDup)
 	}
-	if err := w.SetNodeName(nodeB, "CalcDiv 1"); !errors.Is(err, pasta.ErrNodeNameDup) {
+	if err := w.SetNodeName(nodeB, nodeAName); !errors.Is(err, pasta.ErrNodeNameDup) {
 		t.Fatalf("SetNodeName duplicate error = %v, want %v", err, pasta.ErrNodeNameDup)
 	}
 	if err := w.SetNodeName(nodeB, "renamed"); err != nil {
@@ -1728,9 +1727,7 @@ func TestWorkspaceNodeNameValidationDoesNotConsumeIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode after invalid name: %v", err)
 	}
-	if got := w.Snapshot().Nodes[nodeID].Name; got != "Node 1" {
-		t.Fatalf("name after invalid add = %q, want %q", got, "Node 1")
-	}
+	assertGeneratedNodeName(t, w.Snapshot().Nodes[nodeID].Name, "Node")
 	if nodeID != 1 {
 		t.Fatalf("node id after invalid add = %d, want 1", nodeID)
 	}
@@ -1778,9 +1775,7 @@ func TestWorkspaceReplacementCanSetOrRegenerateNodeName(t *testing.T) {
 	if err := w.ReplaceNodeWithPlaceholderWithName(nodeID, nil, ""); err != nil {
 		t.Fatalf("ReplaceNodeWithPlaceholderWithName generic: %v", err)
 	}
-	if got := w.Snapshot().Nodes[nodeID].Name; got != "Node 1" {
-		t.Fatalf("generic replacement name = %q, want %q", got, "Node 1")
-	}
+	assertGeneratedNodeName(t, w.Snapshot().Nodes[nodeID].Name, "Node")
 }
 
 func TestWorkspaceReplacementNameFailuresDoNotMutate(t *testing.T) {
@@ -1883,31 +1878,38 @@ func TestWorkspacePlaceholderNameReplacementFailuresDoNotMutate(t *testing.T) {
 }
 
 func TestWorkspaceGeneratesDeterministicRandomNodeNameFallback(t *testing.T) {
+	probe := pasta.NewWorkspace(&StringLoggerFactory{})
+	collisionName := addGeneratedNodeName(t, probe, "example.com/CalcDiv")
+
 	first := pasta.NewWorkspace(&StringLoggerFactory{})
 	second := pasta.NewWorkspace(&StringLoggerFactory{})
 
-	firstName := forceGenericNameCollision(t, first)
-	secondName := forceGenericNameCollision(t, second)
+	firstName := forceRandomNameCollision(t, first, collisionName)
+	secondName := forceRandomNameCollision(t, second, collisionName)
 	if firstName != secondName {
 		t.Fatalf("fallback names = %q and %q, want deterministic per workspace", firstName, secondName)
 	}
-	if strings.HasPrefix(firstName, "CalcDiv 3") || !strings.HasPrefix(firstName, "CalcDiv ") {
-		t.Fatalf("fallback name = %q, want CalcDiv plus non-ID suffix", firstName)
+	if firstName == collisionName {
+		t.Fatalf("fallback name = %q, want generated name after occupied candidate %q", firstName, collisionName)
 	}
-	suffix := strings.TrimPrefix(firstName, "CalcDiv ")
-	if suffix == "" || !isASCIIAlpha(suffix[0]) {
-		t.Fatalf("fallback suffix = %q, want first character to be a letter", suffix)
-	}
+	assertGeneratedNodeName(t, firstName, "CalcDiv")
 }
 
-func forceGenericNameCollision(t *testing.T, w *pasta.Workspace) string {
+func addGeneratedNodeName(t *testing.T, w *pasta.Workspace, class string) string {
 	t.Helper()
 
-	if _, err := w.AddNode(&workspaceNode{}, "example.com/Other", "CalcDiv 3"); err != nil {
-		t.Fatalf("AddNode colliding name holder: %v", err)
+	nodeID, err := w.AddNode(&workspaceNode{}, class)
+	if err != nil {
+		t.Fatalf("AddNode generated name: %v", err)
 	}
-	if _, err := w.AddNode(&workspaceNode{}, "example.com/Other"); err != nil {
-		t.Fatalf("AddNode ID spacer: %v", err)
+	return w.Snapshot().Nodes[nodeID].Name
+}
+
+func forceRandomNameCollision(t *testing.T, w *pasta.Workspace, collisionName string) string {
+	t.Helper()
+
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Other", collisionName); err != nil {
+		t.Fatalf("AddNode colliding name holder: %v", err)
 	}
 	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/CalcDiv")
 	if err != nil {
@@ -1918,6 +1920,31 @@ func forceGenericNameCollision(t *testing.T, w *pasta.Workspace) string {
 
 func isASCIIAlpha(c byte) bool {
 	return ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z')
+}
+
+func isASCIIAlphaNumeric(c byte) bool {
+	return isASCIIAlpha(c) || ('0' <= c && c <= '9')
+}
+
+func assertGeneratedNodeName(t *testing.T, name, class string) {
+	t.Helper()
+
+	prefix := class + " "
+	if !strings.HasPrefix(name, prefix) {
+		t.Fatalf("generated node name = %q, want prefix %q", name, prefix)
+	}
+	suffix := strings.TrimPrefix(name, prefix)
+	if len(suffix) < 2 {
+		t.Fatalf("generated node name suffix = %q, want at least two characters", suffix)
+	}
+	if !isASCIIAlpha(suffix[0]) {
+		t.Fatalf("generated node name suffix = %q, want first character to be a letter", suffix)
+	}
+	for i := 1; i < len(suffix); i++ {
+		if !isASCIIAlphaNumeric(suffix[i]) {
+			t.Fatalf("generated node name suffix = %q, want alphanumeric characters", suffix)
+		}
+	}
 }
 
 func TestWorkspaceNodePopupSnapshotsAndMutations(t *testing.T) {

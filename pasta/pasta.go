@@ -680,7 +680,7 @@ func (w *Workspace) addNodeLockedWithIDs(node Node, class string, root bool, nam
 		id = w.nextIDLocked()
 	}
 	if name == "" {
-		name = w.generateNodeNameLocked(id, class, 0)
+		name = w.generateNodeNameLocked(class, 0)
 	}
 	log := w.logf.NodeLogger(id, class)
 	rec := nodeRecord{
@@ -825,7 +825,7 @@ func (w *Workspace) addPlaceholderNodeWithRootLocked(class string, root bool, po
 		id = w.nextIDLocked()
 	}
 	if nodeName == "" {
-		nodeName = w.generateNodeNameLocked(id, class, 0)
+		nodeName = w.generateNodeNameLocked(class, 0)
 	}
 	rec := nodeRecord{
 		ID:          id,
@@ -913,7 +913,7 @@ func (w *Workspace) replaceNodeLocked(id uint64, node Node, name string, rename 
 		return err
 	}
 	if rename {
-		prepared, err := w.prepareNodeNameLocked(id, record.Class, name, id)
+		prepared, err := w.prepareNodeNameLocked(record.Class, name, id)
 		if err != nil {
 			return err
 		}
@@ -1047,7 +1047,7 @@ func (w *Workspace) replaceNodeWithPlaceholderLocked(id uint64, ports []Port, na
 		return err
 	}
 	if rename {
-		prepared, err := w.prepareNodeNameLocked(id, record.Class, name, id)
+		prepared, err := w.prepareNodeNameLocked(record.Class, name, id)
 		if err != nil {
 			return err
 		}
@@ -2168,7 +2168,7 @@ func (w *Workspace) rejectUniqueNodeDuplicateLocked(class string, except uint64)
 	return nil
 }
 
-func (w *Workspace) prepareNodeNameLocked(id uint64, class, name string, except uint64) (string, error) {
+func (w *Workspace) prepareNodeNameLocked(class, name string, except uint64) (string, error) {
 	if name != "" {
 		if err := ValidateNodeName(name); err != nil {
 			return "", err
@@ -2178,7 +2178,7 @@ func (w *Workspace) prepareNodeNameLocked(id uint64, class, name string, except 
 		}
 		return name, nil
 	}
-	return w.generateNodeNameLocked(id, class, except), nil
+	return w.generateNodeNameLocked(class, except), nil
 }
 
 func (w *Workspace) rejectNodeNameDuplicateLocked(name string, except uint64) error {
@@ -2196,15 +2196,11 @@ func (w *Workspace) rejectNodeNameDuplicateLocked(name string, except uint64) er
 	return nil
 }
 
-func (w *Workspace) generateNodeNameLocked(id uint64, class string, except uint64) string {
+func (w *Workspace) generateNodeNameLocked(class string, except uint64) string {
 	base := shortClassName(class)
-	candidate := fmt.Sprintf("%s %d", base, id)
-	if w.nodeNameAvailableLocked(candidate, except) {
-		return candidate
-	}
 	for length := 2; ; length++ {
 		for attempt := 0; attempt < 16; attempt++ {
-			candidate = base + " " + w.randomNodeNameSuffix(length)
+			candidate := base + " " + w.randomNodeNameSuffix(length)
 			if w.nodeNameAvailableLocked(candidate, except) {
 				return candidate
 			}
@@ -2316,7 +2312,7 @@ func (w *Workspace) applyPlaceholderClassState(record *nodeRecord, state NodeCla
 			return err
 		}
 	}
-	name, err := w.prepareNodeNameLocked(record.ID, record.Class, state.Name, record.ID)
+	name, err := w.prepareNodeNameLocked(record.Class, state.Name, record.ID)
 	if err != nil {
 		return err
 	}

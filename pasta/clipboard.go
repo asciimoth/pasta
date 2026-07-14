@@ -358,7 +358,7 @@ func (w *Workspace) clipboardNodeName(class, name string) (string, bool) {
 	if name != "" && ValidateNodeName(name) == nil && w.nodeNameAvailableLocked(name, 0) {
 		return name, true
 	}
-	return w.generateNodeNameLocked(w.nextid, class, 0), true
+	return w.generateNodeNameLocked(class, 0), true
 }
 
 func (w *Workspace) newClipboardNode(node clipboardNode, state *NodeClassState) (impl Node, handled bool, failed bool) {
