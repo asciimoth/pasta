@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"reflect"
 	"slices"
 	"strings"
@@ -2023,6 +2024,68 @@ func TestWorkspaceGeneratesDeterministicRandomNodeNameFallback(t *testing.T) {
 		t.Fatalf("fallback name = %q, want generated name after occupied candidate %q", firstName, collisionName)
 	}
 	assertGeneratedNodeName(t, firstName, "CalcDiv")
+}
+
+type sequenceNodeNameRandom struct {
+	values []int
+	next   int
+}
+
+func (r *sequenceNodeNameRandom) Intn(n int) int {
+	value := r.values[r.next%len(r.values)]
+	r.next++
+	return value % n
+}
+
+func TestWorkspaceGeneratedNodeNameAvailabilityCallback(t *testing.T) {
+	w := pasta.NewWorkspace(&StringLoggerFactory{})
+	w.SetNodeNameRandomGenerator(&sequenceNodeNameRandom{values: []int{0, 1, 2, 3}})
+
+	var checked []string
+	w.SetNodeNameAvailableCallback(func(name string) bool {
+		checked = append(checked, name)
+		return name != "Node AB"
+	})
+
+	nodeID, err := w.AddNode(&workspaceNode{}, "example.com/Node")
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	if got := w.Snapshot().Nodes[nodeID].Name; got != "Node CD" {
+		t.Fatalf("generated node name = %q, want %q", got, "Node CD")
+	}
+	if want := []string{"Node AB", "Node CD"}; !slices.Equal(checked, want) {
+		t.Fatalf("checked names = %#v, want %#v", checked, want)
+	}
+
+	if _, err := w.AddNode(&workspaceNode{}, "example.com/Node", "explicit"); err != nil {
+		t.Fatalf("AddNode explicit: %v", err)
+	}
+	if want := []string{"Node AB", "Node CD"}; !slices.Equal(checked, want) {
+		t.Fatalf("checked names after explicit name = %#v, want %#v", checked, want)
+	}
+}
+
+func TestWorkspaceNodeNameRandomConfiguration(t *testing.T) {
+	const seed = int64(42)
+	seeded := pasta.NewWorkspace(&StringLoggerFactory{})
+	seeded.SetNodeNameRandomSeed(seed)
+	withGenerator := pasta.NewWorkspace(&StringLoggerFactory{})
+	withGenerator.SetNodeNameRandomGenerator(rand.New(rand.NewSource(seed)))
+
+	seededName := addGeneratedNodeName(t, seeded, "example.com/Node")
+	generatorName := addGeneratedNodeName(t, withGenerator, "example.com/Node")
+	if seededName != generatorName {
+		t.Fatalf("generated names = %q and %q, want equal names for the same seed", seededName, generatorName)
+	}
+
+	reset := pasta.NewWorkspace(&StringLoggerFactory{})
+	reset.SetNodeNameRandomGenerator(&sequenceNodeNameRandom{values: []int{0}})
+	reset.SetNodeNameRandomGenerator(nil)
+	fresh := pasta.NewWorkspace(&StringLoggerFactory{})
+	if got, want := addGeneratedNodeName(t, reset, "example.com/Node"), addGeneratedNodeName(t, fresh, "example.com/Node"); got != want {
+		t.Fatalf("name after random generator reset = %q, want default name %q", got, want)
+	}
 }
 
 func addGeneratedNodeName(t *testing.T, w *pasta.Workspace, class string) string {
