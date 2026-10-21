@@ -1,6 +1,11 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load := true
 
+check: typos tidy fmt lint vet test
+
+typos:
+  typos
+
 test-go:
 	go -C pasta test --race ./...
 	go -C demo/backend test --race ./...
@@ -25,6 +30,9 @@ tidy:
 
 lint:
   golangci-lint run ./pasta/... ./demo/backend/...
+
+fmt:
+  golangci-lint fmt ./pasta/... ./demo/backend/...
 
 demo-node-deps:
 	if [ ! -d demo/node_modules/playwright-core ] || [ ! -d demo/node_modules/typescript ]; then npm --prefix demo ci; fi

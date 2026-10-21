@@ -172,6 +172,7 @@ func (n *objectConstantNode) menuBlock() formular.Block {
 			Label: "Value",
 			Field: &formular.Field{
 				Kind:        formular.FieldText,
+				Subtype:     "json",
 				Value:       n.value.PrettyJSONString(),
 				Placeholder: `{"name":"Ada","scores":[1,2,null]}`,
 				Multiline:   true,

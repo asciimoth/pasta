@@ -254,7 +254,7 @@ func (n *objectToStringNode) menuBlock() formular.Block {
 		Items: []formular.Item{
 			{Type: formular.ItemField, ID: "pretty", Label: "Pretty print", Field: &formular.Field{Kind: formular.FieldCheckbox, Value: n.pretty}},
 			{Type: formular.ItemField, ID: "omit_empty", Label: "Omit empty/nil", Field: &formular.Field{Kind: formular.FieldCheckbox, Value: n.omitEmpty}},
-			{Type: formular.ItemField, ID: "value", Label: "Result", Field: &formular.Field{Kind: formular.FieldText, Value: n.value, Readonly: true, Multiline: true, Placeholder: `{"name":"Ada"}`}},
+			{Type: formular.ItemField, ID: "value", Label: "Result", Field: &formular.Field{Kind: formular.FieldText, Subtype: "json", Value: n.value, Readonly: true, Multiline: true, Placeholder: `{"name":"Ada"}`}},
 		},
 	}
 }

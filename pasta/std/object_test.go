@@ -674,6 +674,9 @@ func objectMenuValue(t *testing.T, state *formular.MenuSnapshotState, node uint6
 		}
 		for _, item := range block.Items {
 			if item.ID == "value" && item.Field != nil {
+				if item.Subtype != "json" {
+					t.Fatalf("object menu value subtype = %q, want json", item.Subtype)
+				}
 				text, ok := parseStringAny(item.Value)
 				if !ok {
 					t.Fatalf("object menu value has type %T", item.Value)
@@ -722,6 +725,9 @@ func objectStringResult(t *testing.T, w *pasta.Workspace, node uint64) string {
 		}
 		for _, item := range block.Items {
 			if item.ID == "value" && item.Field != nil {
+				if item.Subtype != "json" {
+					t.Fatalf("ObjectToString result subtype = %q, want json", item.Subtype)
+				}
 				value, ok := parseStringAny(item.Value)
 				if !ok {
 					t.Fatalf("ObjectToString result has type %T", item.Value)

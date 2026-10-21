@@ -78,7 +78,10 @@ type Workspace struct {
 	ports    map[uint64]*Port
 	links    map[uint64]*Link
 	classes  map[string]NodeClass
-	nameRand *rand.Rand
+	nameRand NodeNameRandomGenerator
+	// nodeNameAvailable is called only for generated names that are not in use
+	// by a node in this workspace.
+	nodeNameAvailable NodeNameAvailableCallback
 
 	resources     map[resourceKey]*resourceState
 	nodeResources map[uint64]map[resourceKey]struct{}
@@ -96,6 +99,17 @@ type Workspace struct {
 	log  Logger
 	logf LogFactory
 }
+
+// NodeNameRandomGenerator supplies random values for generated node names.
+// *rand.Rand implements this interface.
+type NodeNameRandomGenerator interface {
+	Intn(n int) int
+}
+
+// NodeNameAvailableCallback reports whether a generated node name can be used.
+// The workspace lock is held when the callback runs. The callback must not call
+// Workspace methods that lock the workspace.
+type NodeNameAvailableCallback func(name string) bool
 
 // NewWorkspace creates a ready workspace using logf for workspace and node loggers.
 func NewWorkspace(logf LogFactory) *Workspace {
@@ -125,6 +139,52 @@ func NewWorkspace(logf LogFactory) *Workspace {
 		log:  logf.WorkspaceLogger(),
 		logf: logf,
 	}
+}
+
+// SetNodeNameAvailableCallback sets the optional callback that checks generated
+// node names. A nil callback allows all names that are not in use in the
+// workspace. The callback does not check explicit names supplied by callers.
+func (w *Workspace) SetNodeNameAvailableCallback(callback NodeNameAvailableCallback) {
+	w.Lock()
+	defer w.Unlock()
+	w.SetNodeNameAvailableCallbackLocked(callback)
+}
+
+// SetNodeNameAvailableCallbackLocked is SetNodeNameAvailableCallback for
+// callers that already hold the workspace lock.
+func (w *Workspace) SetNodeNameAvailableCallbackLocked(callback NodeNameAvailableCallback) {
+	w.nodeNameAvailable = callback
+}
+
+// SetNodeNameRandomSeed replaces the node-name random generator with one that
+// uses seed.
+func (w *Workspace) SetNodeNameRandomSeed(seed int64) {
+	w.Lock()
+	defer w.Unlock()
+	w.SetNodeNameRandomSeedLocked(seed)
+}
+
+// SetNodeNameRandomSeedLocked is SetNodeNameRandomSeed for callers that already
+// hold the workspace lock.
+func (w *Workspace) SetNodeNameRandomSeedLocked(seed int64) {
+	w.nameRand = rand.New(rand.NewSource(seed))
+}
+
+// SetNodeNameRandomGenerator sets the random generator for generated node
+// names. A nil generator restores the default generator with seed 1.
+func (w *Workspace) SetNodeNameRandomGenerator(generator NodeNameRandomGenerator) {
+	w.Lock()
+	defer w.Unlock()
+	w.SetNodeNameRandomGeneratorLocked(generator)
+}
+
+// SetNodeNameRandomGeneratorLocked is SetNodeNameRandomGenerator for callers
+// that already hold the workspace lock.
+func (w *Workspace) SetNodeNameRandomGeneratorLocked(generator NodeNameRandomGenerator) {
+	if generator == nil {
+		generator = rand.New(rand.NewSource(1))
+	}
+	w.nameRand = generator
 }
 
 // NextID returns the next workspace-scoped ID.
@@ -2335,11 +2395,18 @@ func (w *Workspace) generateNodeNameLocked(class string, except uint64) string {
 	for length := 2; ; length++ {
 		for attempt := 0; attempt < 16; attempt++ {
 			candidate := base + " " + w.randomNodeNameSuffix(length)
-			if w.nodeNameAvailableLocked(candidate, except) {
+			if w.generatedNodeNameAvailableLocked(candidate, except) {
 				return candidate
 			}
 		}
 	}
+}
+
+func (w *Workspace) generatedNodeNameAvailableLocked(name string, except uint64) bool {
+	if !w.nodeNameAvailableLocked(name, except) {
+		return false
+	}
+	return w.nodeNameAvailable == nil || w.nodeNameAvailable(name)
 }
 
 func (w *Workspace) nodeNameAvailableLocked(name string, except uint64) bool {

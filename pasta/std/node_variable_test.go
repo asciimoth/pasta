@@ -172,6 +172,7 @@ func TestVariableNamespacesAreUniquePerTypeAndObjectVariablesWork(t *testing.T) 
 	setVariableSet(t, w, stringSet, "A", "seven")
 	setVariableGet(t, w, stringGet, "A")
 	setVariableSet(t, w, objectSet, "A", `{"name":"object A","count":7}`)
+	assertObjectSetValueSubtype(t, w, objectSet)
 	setVariableGet(t, w, objectGet, "A")
 	linkByPortName(t, w, intGet, "Value", sum, "input 1")
 	linkByPortName(t, w, stringGet, "Value", concat, "input 1")
@@ -186,6 +187,29 @@ func TestVariableNamespacesAreUniquePerTypeAndObjectVariablesWork(t *testing.T) 
 	assertNodeLabel(t, w, sum, "7")
 	assertNodeLabel(t, w, concat, "seven")
 	assertObjectStringContains(t, w, stringer, `"name":"object A"`, `"count":7`)
+}
+
+func assertObjectSetValueSubtype(t *testing.T, w *pasta.Workspace, node uint64) {
+	t.Helper()
+	state := subscribeStdMenus(t, w, map[string]uint64{"objectSet": node})
+	snapshot, ok := state.Snapshot(pasta.NodeMenuID(node))
+	if !ok {
+		t.Fatalf("missing ObjectSet menu for node %d", node)
+	}
+	for _, block := range snapshot.Blocks {
+		if block.ID != variableMenuBlock {
+			continue
+		}
+		for _, item := range block.Items {
+			if item.ID == "value" && item.Field != nil {
+				if item.Subtype != "json" {
+					t.Fatalf("ObjectSet value subtype = %q, want json", item.Subtype)
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("missing ObjectSet value field in %#v", snapshot)
 }
 
 func TestVariableGetRequestReplayAndAttachDetachReattach(t *testing.T) {

@@ -925,6 +925,7 @@ func variableValueToConfigValue(typ string, value any) (any, error) {
 func variableField(typ string, value any) *formular.Field {
 	field := &formular.Field{Kind: variableFieldKind(typ), Value: variableMenuValue(typ, value)}
 	if typ == TypeObject {
+		field.Subtype = "json"
 		field.Multiline = true
 		field.Placeholder = `{"name":"Ada"}`
 	}
